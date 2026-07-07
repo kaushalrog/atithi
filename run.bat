@@ -1,9 +1,7 @@
 @echo off
-rem VoxAgent launcher. Double-click for the menu, or run with an argument:
-rem     run.bat text      - text chat (main.py)
-rem     run.bat voice     - push-to-talk voice (voice_main.py)
-rem     run.bat live      - real-time call, wear headphones (live_main.py)
-rem     run.bat live-hd   - real-time call without headphones (--half-duplex)
+rem VoxAgent — double-click = the web portal opens in your browser.
+rem The server runs minimized in the background; close its window to stop.
+rem Other modes from a terminal:  run.bat text | voice | live | live-hd | web
 setlocal
 cd /d "%~dp0"
 
@@ -14,34 +12,17 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 set "MODE=%~1"
-if not "%MODE%"=="" goto run
+if "%MODE%"=="" set "MODE=web"
 
-echo.
-echo    === VoxAgent ===
-echo    1. Text chat
-echo    2. Push-to-talk voice
-echo    3. Live call  (wear headphones)
-echo    4. Live call  (no headphones / half-duplex)
-echo    5. Web page   (opens in your browser)
-echo.
-set /p MODE=Pick 1-5 [default 5]:
-if "%MODE%"=="" set "MODE=5"
-
-:run
-if "%MODE%"=="1" set "MODE=text"
-if "%MODE%"=="2" set "MODE=voice"
-if "%MODE%"=="3" set "MODE=live"
-if "%MODE%"=="4" set "MODE=live-hd"
-if "%MODE%"=="5" set "MODE=web"
-
+if "%MODE%"=="web" (
+    start "VoxAgent server" /min ".venv\Scripts\python.exe" server.py
+    exit /b
+)
 if "%MODE%"=="text"    ".venv\Scripts\python.exe" main.py & goto end
 if "%MODE%"=="voice"   ".venv\Scripts\python.exe" voice_main.py & goto end
 if "%MODE%"=="live"    ".venv\Scripts\python.exe" live_main.py & goto end
 if "%MODE%"=="live-hd" ".venv\Scripts\python.exe" live_main.py --half-duplex & goto end
-if "%MODE%"=="web"     ".venv\Scripts\python.exe" server.py & goto end
 
-echo Unknown option "%MODE%" - use text, voice, live, live-hd, or web.
-
+echo Unknown option "%MODE%" - use web, text, voice, live, or live-hd.
 :end
-rem Keep the window open when double-clicked so errors stay readable.
 pause
