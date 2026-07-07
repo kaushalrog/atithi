@@ -17,11 +17,14 @@ AI receptionist for Indian small service businesses (clinics, salons, coaching i
   llm.py normalizes Live events; live_main.py streams mic/speaker with sounddevice.
   Server-side VAD + barge-in — the same conversational architecture Stage 3 will
   run over a phone line.
-- **Stage 2.75 (DONE 2026-07-07):** Web frontend — server.py (FastAPI + uvicorn,
-  thin HTTP layer over ReceptionistAgent) + web/index.html (single self-contained
-  page: chat, browser-mic WAV recording, edge-tts spoken replies, bookings panel,
-  tool-call chips, client switcher). Port 8765. This FastAPI app is the base for
-  Stage 3 webhooks.
+- **Stage 2.75 (DONE 2026-07-07):** Business portal (the SaaS face of VoxAgent,
+  aimed at the business OWNER, not their customers) — server.py (FastAPI, port
+  8765) + web/index.html. Self-service onboarding form writes clients/<id>.yaml
+  (slots generated from chosen days/hours/gap); dashboard with stats (calls,
+  minutes talked, bookings, call→booking conversion), call history with
+  transcripts (one JSON per call in calls/<client_id>/, gitignored), bookings
+  table; and a test-call widget (browser mic + edge-tts replies) until Stage 3
+  brings real numbers. This FastAPI app is the base for Stage 3 webhooks.
 - **Stage 3 (later):** Real phone number via Vapi or Pipecat+Plivo, inbound + outbound.
   Blocked on the owner creating a telephony account (Vapi trial recommended first;
   Indian numbers need business KYC via Exotel/Plivo — defer until a real client).

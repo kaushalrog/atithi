@@ -59,19 +59,28 @@ Tool calls (slot checks, bookings) happen live inside the stream. Ctrl+C hangs u
 and auto-saves the transcript. Headphones matter in full-duplex mode: through
 laptop speakers the mic hears the agent's own voice and it interrupts itself.
 
-## Run the web page
+## Run the business portal (web)
 
 ```
 python server.py        # opens http://127.0.0.1:8765 in your browser
 ```
 
-The whole agent in a browser: chat bubbles, a mic button (records in the browser,
-transcribed by the same Gemini STT), spoken replies (edge-tts, toggleable), the
-business's services/prices, a live bookings panel, tool-call chips showing what
-the agent is doing under the hood, a business switcher (one entry per YAML in
-`clients/`), and transcript download. The backend (`server.py`) is a thin FastAPI
-layer over the same `ReceptionistAgent` — and it's the foundation Stage 3's
-telephony webhooks will build on.
+This page is for the **business owner** (the clinic/salon/institute — our client):
+
+- **Onboarding** — "＋ Add business" opens a form (services & prices, FAQs,
+  policies, open days and hours). Submitting it writes `clients/<id>.yaml`:
+  the multi-tenant principle as a web form. Appointment slots are generated
+  from the chosen days/hours/gap.
+- **Dashboard** — top-line stats (calls handled, minutes talked, bookings made,
+  call→booking conversion), full **call history** with expandable transcripts,
+  and the bookings table. Every call is one JSON file in `calls/<client_id>/`.
+- **📞 Test your agent** — a call widget (type or talk via the browser mic,
+  spoken replies via edge-tts) so owners can try their receptionist before a
+  real phone number exists (Stage 3). Test calls appear in the history like
+  any other call.
+
+The backend (`server.py`) is a thin FastAPI layer over the same
+`ReceptionistAgent` — and the foundation Stage 3's telephony webhooks build on.
 
 ## Project structure
 
@@ -87,9 +96,10 @@ vox agent/
 ├── main.py                 # thin terminal wrapper (text mode)
 ├── voice_main.py           # Stage 2: push-to-talk voice wrapper around the SAME agent
 ├── live_main.py            # Stage 2.5: real-time interruptible call (Gemini Live API)
-├── server.py               # web backend: FastAPI wrapper around the SAME agent
+├── server.py               # business-portal backend: FastAPI over the SAME agent
 ├── web/
-│   └── index.html          # the whole frontend — one self-contained page
+│   └── index.html          # the portal — onboarding, dashboard, test-call widget
+├── calls/                  # one JSON per call: duration, turns, transcript (gitignored)
 ├── tts.py                  # the ONLY file that talks to edge-tts (swap voices here)
 ├── audio_io.py             # hardware layer: mic recording + speaker playback
 ├── transcripts/            # saved conversations (created on first /transcript)
@@ -114,7 +124,7 @@ vox agent/
 | 1 | Text receptionist with auto-booking | ✅ done |
 | 2 | Mic input (Gemini STT) + voice output (edge-tts) | ✅ done |
 | 2.5 | Real-time interruptible voice call (Gemini Live API) | ✅ done |
-| 2.75 | Web frontend: chat + voice + bookings dashboard | ✅ done |
+| 2.75 | Business portal: onboarding, dashboard (calls/minutes/bookings), test-call widget | ✅ done |
 | 3 | Real phone number (Vapi or Pipecat+Plivo), inbound + outbound | later |
 | 4 | Multilingual voices (Telugu/Hindi via Sarvam), outbound campaigns | later |
 | 5 | Dashboard: transcripts, extracted leads, bookings | later |
