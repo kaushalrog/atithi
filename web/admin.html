@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoxAgent — Admin Console</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><defs><linearGradient id=%22g%22 x1=%220%22 y1=%220%22 x2=%221%22 y2=%221%22><stop stop-color=%22%23f5b458%22/><stop offset=%221%22 stop-color=%22%23e879a0%22/></linearGradient></defs><rect width=%22100%22 height=%22100%22 rx=%2224%22 fill=%22url(%23g)%22/><path d=%22M50 24l9 18 20 3-14.5 14 3.5 20L50 69.5 32 79l3.5-20L21 45l20-3z%22 fill=%22white%22/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0a1120; --panel: rgba(255,255,255,.035); --panel-solid: #101a2d;
+    --border: rgba(148,163,184,.13); --border-strong: rgba(148,163,184,.25);
+    --ink: #e8eef8; --muted: #8b99ad;
+    --acc: #f5b458; --acc2: #e879a0;
+    --grad: linear-gradient(135deg, #f5b458, #e879a0);
+    --teal: #2dd4bf; --radius: 18px;
+    font-size: 15px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; color: var(--ink);
+    font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+    background:
+      radial-gradient(900px 500px at 85% -10%, rgba(232,121,160,.10), transparent 60%),
+      radial-gradient(700px 500px at -10% 110%, rgba(245,180,88,.08), transparent 60%),
+      var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, .num, .brandname { font-family: "Sora", "Inter", sans-serif; }
+  ::-webkit-scrollbar { width: 10px; }
+  ::-webkit-scrollbar-thumb { background: rgba(148,163,184,.2); border-radius: 8px; }
+
+  .topbar { display: flex; align-items: center; gap: 14px; padding: 16px 30px;
+            border-bottom: 1px solid var(--border); background: rgba(10,17,32,.7);
+            backdrop-filter: blur(14px); position: sticky; top: 0; z-index: 10; }
+  .mark { width: 40px; height: 40px; border-radius: 12px; background: var(--grad);
+          display: flex; align-items: center; justify-content: center; font-size: 1.15rem;
+          box-shadow: 0 6px 20px rgba(232,121,160,.3); }
+  .brandname { font-weight: 800; font-size: 1.12rem; }
+  .brandtag { font-size: .68rem; color: var(--muted); letter-spacing: 1.6px; margin-top: 2px; }
+  .spacer { flex: 1; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; border: none; border-radius: 11px;
+         padding: 10px 17px; font: inherit; font-size: .92rem; font-weight: 600; cursor: pointer;
+         background: rgba(255,255,255,.06); color: var(--ink); border: 1px solid var(--border);
+         transition: background .15s; text-decoration: none; }
+  .btn:hover { background: rgba(255,255,255,.1); }
+  .btn.primary { background: var(--grad); color: #2b1204; border: none;
+                 box-shadow: 0 6px 18px rgba(232,121,160,.3); }
+
+  main { max-width: 1120px; margin: 0 auto; padding: 26px 28px 70px; animation: rise .3s ease; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+  .hidden { display: none !important; }
+
+  /* login gate */
+  .gate { max-width: 400px; margin: 12vh auto 0; text-align: center; }
+  .gate .mark { width: 62px; height: 62px; margin: 0 auto 18px; font-size: 1.7rem; border-radius: 18px; }
+  .gate h1 { margin: 0 0 8px; }
+  .gate p { color: var(--muted); margin: 0 0 22px; line-height: 1.6; }
+  .gate input { width: 100%; background: rgba(255,255,255,.05); color: var(--ink);
+                border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px;
+                font: inherit; font-size: 1rem; outline: none; text-align: center; margin-bottom: 12px; }
+  .gate input:focus { border-color: rgba(245,180,88,.5); box-shadow: 0 0 0 3px rgba(245,180,88,.12); }
+  .gate .err { color: #f47171; font-size: .88rem; min-height: 1.3em; margin-top: 10px; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 16px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+          padding: 18px; transition: transform .15s, border-color .2s; }
+  .stat:hover { transform: translateY(-2px); border-color: var(--border-strong); }
+  .stat .num { font-size: 1.9rem; font-weight: 800; line-height: 1;
+               background: linear-gradient(135deg, #ffd9a0, #f5a8c4); -webkit-background-clip: text;
+               background-clip: text; color: transparent; }
+  .stat .lbl { color: var(--muted); font-size: .81rem; margin-top: 7px; font-weight: 500; }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+          padding: 20px 22px; margin-bottom: 16px; }
+  .card h3 { margin: 0 0 14px; font-size: .76rem; text-transform: uppercase; letter-spacing: 1.4px;
+             color: var(--muted); font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: .89rem; }
+  th { text-align: left; color: var(--muted); font-weight: 600; font-size: .75rem;
+       text-transform: uppercase; letter-spacing: .8px; padding: 2px 12px 10px 0; white-space: nowrap; }
+  td { padding: 10px 12px 10px 0; border-top: 1px solid var(--border); vertical-align: middle; }
+  td.name { font-weight: 650; }
+  td.dim, .dim { color: var(--muted); }
+  .pill { border-radius: 20px; padding: 3px 12px; font-size: .73rem; font-weight: 600; white-space: nowrap;
+          background: rgba(148,163,184,.12); color: var(--muted); border: 1px solid var(--border); }
+  .pill.booked { background: rgba(52,211,153,.12); color: #6ee7b7; border-color: rgba(52,211,153,.3); }
+  .pill.lead { background: rgba(245,180,88,.12); color: var(--acc); border-color: rgba(245,180,88,.3); }
+  .portal-link { color: var(--teal); text-decoration: none; font-weight: 600; font-size: .85rem; }
+  .portal-link:hover { text-decoration: underline; }
+  .empty { color: var(--muted); font-size: .9rem; padding: 12px 4px; line-height: 1.6; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="mark">👑</div>
+  <div><div class="brandname">VoxAgent Admin</div><div class="brandtag">PLATFORM CONSOLE</div></div>
+  <div class="spacer"></div>
+  <a class="btn" href="/" target="_blank">Open client portal ↗</a>
+  <button class="btn hidden" id="logoutBtn">Log out</button>
+</div>
+
+<!-- password gate -->
+<div class="gate" id="gate">
+  <div class="mark">👑</div>
+  <h1>Admin access</h1>
+  <p>This console shows every business on your platform.<br>Enter the admin password from your <code>.env</code>.</p>
+  <input type="password" id="pw" placeholder="Admin password" autocomplete="current-password">
+  <button class="btn primary" id="loginBtn" style="width:100%; justify-content:center; padding:13px;">Unlock console</button>
+  <div class="err" id="gateErr"></div>
+</div>
+
+<!-- console -->
+<main class="hidden" id="console">
+  <div class="stats">
+    <div class="stat"><div class="num" id="tClients">–</div><div class="lbl">Businesses onboarded</div></div>
+    <div class="stat"><div class="num" id="tCalls">–</div><div class="lbl">Total calls handled</div></div>
+    <div class="stat"><div class="num" id="tMinutes">–</div><div class="lbl">Total minutes talked</div></div>
+    <div class="stat"><div class="num" id="tBookings">–</div><div class="lbl">Total bookings</div></div>
+    <div class="stat"><div class="num" id="tLeads">–</div><div class="lbl">Total leads</div></div>
+  </div>
+
+  <div class="card">
+    <h3>Your clients</h3>
+    <div id="clientsBox"></div>
+  </div>
+
+  <div class="card">
+    <h3>Latest calls across the platform</h3>
+    <div id="recentBox"></div>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const KEY = "voxagent_admin_key";
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+function fmtWhen(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) + ", " +
+         d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+}
+
+async function login() {
+  $("gateErr").textContent = "";
+  const password = $("pw").value;
+  const res = await fetch("/api/admin/login", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  if (!res.ok) {
+    $("gateErr").textContent = (await res.json().catch(() => ({}))).detail || "Login failed";
+    return;
+  }
+  sessionStorage.setItem(KEY, password);
+  await showConsole();
+}
+
+async function showConsole() {
+  const res = await fetch("/api/admin/overview", {
+    headers: { "X-Admin-Key": sessionStorage.getItem(KEY) || "" },
+  });
+  if (!res.ok) { sessionStorage.removeItem(KEY); return; }
+  const data = await res.json();
+  $("gate").classList.add("hidden");
+  $("console").classList.remove("hidden");
+  $("logoutBtn").classList.remove("hidden");
+
+  $("tClients").textContent = data.totals.clients;
+  $("tCalls").textContent = data.totals.calls;
+  $("tMinutes").textContent = data.totals.minutes;
+  $("tBookings").textContent = data.totals.bookings;
+  $("tLeads").textContent = data.totals.leads;
+
+  const cb = $("clientsBox"); cb.innerHTML = "";
+  if (!data.clients.length) {
+    cb.appendChild(el("div", "empty", "No businesses yet — onboard the first one from the client portal."));
+  } else {
+    const t = el("table");
+    const tr = el("tr");
+    ["Business", "Calls", "Minutes", "Bookings", "Leads", "Last activity", ""].forEach(h => tr.appendChild(el("th", "", h)));
+    t.appendChild(tr);
+    for (const c of data.clients) {
+      const row = el("tr");
+      const name = el("td", "name", c.business_name);
+      const idLine = el("div", "dim", c.client_id); idLine.style.fontSize = ".76rem"; idLine.style.fontWeight = "400";
+      name.appendChild(idLine);
+      row.appendChild(name);
+      [c.calls, c.minutes, c.bookings, c.leads].forEach(v => row.appendChild(el("td", "", String(v))));
+      row.appendChild(el("td", "dim", fmtWhen(c.last_activity)));
+      const link = el("td");
+      const a = el("a", "portal-link", "View portal →"); a.href = "/"; a.target = "_blank";
+      link.appendChild(a); row.appendChild(link);
+      t.appendChild(row);
+    }
+    cb.appendChild(t);
+  }
+
+  const rb = $("recentBox"); rb.innerHTML = "";
+  if (!data.recent_calls.length) {
+    rb.appendChild(el("div", "empty", "No calls yet anywhere on the platform."));
+  } else {
+    const t = el("table");
+    const tr = el("tr");
+    ["When", "Business", "Channel", "Duration", "Outcome"].forEach(h => tr.appendChild(el("th", "", h)));
+    t.appendChild(tr);
+    for (const c of data.recent_calls) {
+      const row = el("tr");
+      row.appendChild(el("td", "dim", fmtWhen(c.started)));
+      row.appendChild(el("td", "name", c.business_name));
+      row.appendChild(el("td", "dim", c.channel));
+      row.appendChild(el("td", "dim", Math.floor(c.seconds / 60) + "m " + String(c.seconds % 60).padStart(2, "0") + "s"));
+      const outcome = el("td");
+      outcome.appendChild(el("span", "pill " + (c.booked ? "booked" : c.lead ? "lead" : ""),
+        c.booked ? "booked" : c.lead ? "lead" : "enquiry"));
+      row.appendChild(outcome);
+      t.appendChild(row);
+    }
+    rb.appendChild(t);
+  }
+}
+
+$("loginBtn").onclick = login;
+$("pw").addEventListener("keydown", e => { if (e.key === "Enter") login(); });
+$("logoutBtn").onclick = () => { sessionStorage.removeItem(KEY); location.reload(); };
+
+if (sessionStorage.getItem(KEY)) showConsole();
+</script>
+</body>
+</html>

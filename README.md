@@ -89,6 +89,18 @@ This page is for the **business owner** (the clinic/salon/institute — our clie
 The backend (`server.py`) is a thin FastAPI layer over the same
 `ReceptionistAgent` — and the foundation Stage 3's telephony webhooks build on.
 
+## The admin console (`/admin`)
+
+The platform owner's view — same backend, separate page at
+**http://127.0.0.1:8765/admin**, protected by `ADMIN_PASSWORD` from `.env`:
+every business on the platform with per-client calls/minutes/bookings/leads,
+platform totals, and the latest calls across all clients. The client portal is
+what a business owner sees; the admin console is what YOU see.
+
+Note on access today: the client portal has no per-client logins yet, so
+locally it shows all businesses in its dropdown. Real client accounts (each
+owner sees only their own business) arrive with public deployment.
+
 ## Architecture
 
 ```
@@ -128,7 +140,8 @@ vox agent/
 ├── live_main.py            # Stage 2.5: real-time interruptible call (Gemini Live API)
 ├── server.py               # business-portal backend: FastAPI over the SAME agent
 ├── web/
-│   └── index.html          # the portal — onboarding, dashboard, test-call widget
+│   ├── index.html          # client portal — onboarding, dashboard, test-call widget
+│   └── admin.html          # platform owner's console (/admin, password-protected)
 ├── calls/                  # one JSON per call: duration, turns, transcript (gitignored)
 ├── tts.py                  # the ONLY file that talks to edge-tts (swap voices here)
 ├── audio_io.py             # hardware layer: mic recording + speaker playback
