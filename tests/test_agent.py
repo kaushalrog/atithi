@@ -50,12 +50,12 @@ def test_tool_exception_is_reported_not_raised(tmp_storage, fake_llm):
     assert "error" in agent.history[2]["result"]
 
 
-def test_check_availability_windows(tmp_storage, fake_llm):
+def test_check_availability_returns_all_slots_unfiltered(tmp_storage, fake_llm):
+    # No server-side time filtering: an eval showed a window mismatch ("evening"
+    # meaning 4 PM to the model but 5 PM to us) hides real slots from customers.
     agent = make_agent(fake_llm, [])
-    morning = agent._check_availability(DATE, "morning")["available_slots"]
-    evening = agent._check_availability(DATE, "evening")["available_slots"]
-    assert morning == ["09:30", "10:00"]
-    assert evening == ["18:00", "19:30"]
+    result = agent._check_availability(DATE)
+    assert result["available_slots"] == ["09:30", "10:00", "16:00", "18:00", "19:30"]
     unknown = agent._check_availability("2030-01-01")
     assert unknown["available_slots"] == [] and "note" in unknown
 

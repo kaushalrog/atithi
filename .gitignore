@@ -6,6 +6,7 @@ credentials.json
 *.csv
 transcripts/
 calls/
+evals/results/
 
 # Python
 __pycache__/
