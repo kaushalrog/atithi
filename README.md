@@ -7,7 +7,13 @@ logs every conversation. It's being built in stages; **this is Stage 1**: a
 text-based receptionist you chat with in the terminal, with real auto-booking
 into Google Sheets (or a local CSV fallback).
 
-## Run Stage 1
+## Quick start
+
+Double-click **`run.bat`** (or run `run.bat text|voice|live|live-hd`). On first run it
+creates the virtualenv and installs everything automatically. You still need `.env`
+with your `GEMINI_API_KEY` (see SETUP.md).
+
+## Run Stage 1 manually
 
 ```
 cd "vox agent"
@@ -57,6 +63,7 @@ laptop speakers the mic hears the agent's own voice and it interrupts itself.
 
 ```
 vox agent/
+├── run.bat                 # double-click launcher (sets up .venv on first run)
 ├── clients/
 │   └── demo_clinic.yaml    # ALL business knowledge for one client (multi-tenant)
 ├── prompts/
