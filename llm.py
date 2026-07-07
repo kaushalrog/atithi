@@ -31,6 +31,28 @@ from google.genai import errors, types
 load_dotenv()
 
 MODEL = "gemini-2.5-flash"
+# "-latest" alias: tracks the newest 2.5 native-audio model so we don't chase
+# preview names as Google retires them (the 07-2025 half-cascade one is already gone).
+LIVE_MODEL = "gemini-2.5-flash-native-audio-latest"
+
+
+def _tools_to_gemini(tools):
+    """Convert our plain JSON-schema tool dicts to Gemini's format.
+    Shared by the turn-based (GeminiLLM) and streaming (GeminiLive) classes."""
+    if not tools:
+        return None
+    return [
+        types.Tool(
+            function_declarations=[
+                types.FunctionDeclaration(
+                    name=t["name"],
+                    description=t["description"],
+                    parameters=t["parameters"],
+                )
+                for t in tools
+            ]
+        )
+    ]
 
 
 class GeminiLLM:
@@ -49,7 +71,7 @@ class GeminiLLM:
         system_prompt, contents = self._to_gemini_messages(messages)
         config = types.GenerateContentConfig(
             system_instruction=system_prompt,
-            tools=self._to_gemini_tools(tools),
+            tools=_tools_to_gemini(tools),
             # A receptionist reply doesn't need chain-of-thought; turning
             # thinking off makes replies faster and saves free-tier quota.
             thinking_config=types.ThinkingConfig(thinking_budget=0),
@@ -124,22 +146,6 @@ class GeminiLLM:
                     contents.append(types.Content(role="user", parts=[part]))
         return system_prompt, contents
 
-    def _to_gemini_tools(self, tools):
-        if not tools:
-            return None
-        return [
-            types.Tool(
-                function_declarations=[
-                    types.FunctionDeclaration(
-                        name=t["name"],
-                        description=t["description"],
-                        parameters=t["parameters"],
-                    )
-                    for t in tools
-                ]
-            )
-        ]
-
     # ---- the actual API call, with retries ----------------------------------
 
     def _call_with_retry(self, contents, config, attempts=3):
@@ -179,3 +185,119 @@ class GeminiLLM:
                     }
                 )
         return out
+
+
+class GeminiLive:
+    """Stage 2.5: a streaming voice session over the Gemini Live API.
+
+    Turn-based chat (GeminiLLM.send) waits for you to finish typing; the Live
+    API instead holds an open websocket — you stream microphone audio UP while
+    agent speech streams DOWN, and the server detects when you start/stop
+    talking (so you can interrupt it mid-sentence, like a real phone call).
+
+    Same isolation rule as GeminiLLM: all Gemini wire-format details stay in
+    this class. Callers see only simple normalized event dicts from events():
+
+        {"type": "audio", "data": b"..."}       24 kHz PCM — play it
+        {"type": "user_text", "text": "..."}    transcript fragment of the caller
+        {"type": "agent_text", "text": "..."}   transcript fragment of the agent
+        {"type": "tool_calls", "calls": [...]}  run them, then send_tool_results()
+        {"type": "interrupted"}                 caller barged in — stop playback NOW
+        {"type": "turn_complete"}               agent finished its turn
+    """
+
+    # Mic audio must be 16 kHz mono 16-bit PCM; the agent's voice comes back at 24 kHz.
+    INPUT_MIME = "audio/pcm;rate=16000"
+
+    def __init__(self, model: str = LIVE_MODEL):
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "GEMINI_API_KEY is not set. Copy .env.example to .env and add your "
+                "key (see SETUP.md for how to get one)."
+            )
+        self.client = genai.Client(api_key=api_key)
+        self.model = model
+        self._cm = None
+        self._session = None
+
+    async def connect(self, system_prompt: str, tools: list[dict] | None = None):
+        config = types.LiveConnectConfig(
+            response_modalities=["AUDIO"],
+            system_instruction=system_prompt,
+            tools=_tools_to_gemini(tools),
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Kore")
+                )
+            ),
+            # Ask the server to also send TEXT transcripts of both sides, so we
+            # can log the conversation exactly like the text modes do.
+            input_audio_transcription=types.AudioTranscriptionConfig(),
+            output_audio_transcription=types.AudioTranscriptionConfig(),
+        )
+        self._cm = self.client.aio.live.connect(model=self.model, config=config)
+        self._session = await self._cm.__aenter__()
+
+    async def close(self):
+        if self._cm is not None:
+            await self._cm.__aexit__(None, None, None)
+            self._cm = self._session = None
+
+    async def send_audio(self, pcm16_chunk: bytes):
+        await self._session.send_realtime_input(
+            audio=types.Blob(data=pcm16_chunk, mime_type=self.INPUT_MIME)
+        )
+
+    async def send_text(self, text: str):
+        """Type instead of talk — useful for testing without a microphone.
+
+        Uses send_realtime_input (not send_client_content): native-audio models
+        generate replies from the REALTIME stream; client_content text is only
+        added as silent context and never triggers a spoken answer.
+        """
+        await self._session.send_realtime_input(text=text)
+
+    async def send_tool_results(self, results: list[dict]):
+        """results: [{"id": ..., "name": ..., "result": {...}}, ...]"""
+        await self._session.send_tool_response(
+            function_responses=[
+                types.FunctionResponse(
+                    id=r["id"], name=r["name"], response={"result": r["result"]}
+                )
+                for r in results
+            ]
+        )
+
+    async def events(self):
+        """Yield normalized events until the session ends.
+
+        receive() gives one agent turn per iteration, so we loop it forever;
+        the websocket closing (session time limit, network drop) ends the loop.
+        """
+        while True:
+            async for msg in self._session.receive():
+                sc = msg.server_content
+                if sc is not None:
+                    # Pull audio out of the model turn ourselves (msg.data does the
+                    # same but logs warnings about the text/thought parts we skip).
+                    if sc.model_turn:
+                        for part in sc.model_turn.parts or []:
+                            if part.inline_data and part.inline_data.data:
+                                yield {"type": "audio", "data": part.inline_data.data}
+                    if sc.interrupted:
+                        yield {"type": "interrupted"}
+                    if sc.input_transcription and sc.input_transcription.text:
+                        yield {"type": "user_text", "text": sc.input_transcription.text}
+                    if sc.output_transcription and sc.output_transcription.text:
+                        yield {"type": "agent_text", "text": sc.output_transcription.text}
+                    if sc.turn_complete:
+                        yield {"type": "turn_complete"}
+                if msg.tool_call:
+                    yield {
+                        "type": "tool_calls",
+                        "calls": [
+                            {"id": fc.id, "name": fc.name, "args": dict(fc.args or {})}
+                            for fc in msg.tool_call.function_calls
+                        ],
+                    }

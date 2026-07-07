@@ -12,7 +12,14 @@ AI receptionist for Indian small service businesses (clinics, salons, coaching i
   understanding (in llm.py; Deepgram/Sarvam arrive with streaming in Stage 3).
   TTS = edge-tts (free Microsoft neural Indian voices, no key) behind tts.py —
   same one-file swap pattern as llm.py. Hardware I/O isolated in audio_io.py.
+- **Stage 2.5 (DONE 2026-07-07):** Real-time interruptible voice call via the Gemini
+  Live API (`gemini-2.5-flash-native-audio-latest`, free tier). GeminiLive class in
+  llm.py normalizes Live events; live_main.py streams mic/speaker with sounddevice.
+  Server-side VAD + barge-in — the same conversational architecture Stage 3 will
+  run over a phone line.
 - **Stage 3 (later):** Real phone number via Vapi or Pipecat+Plivo, inbound + outbound.
+  Blocked on the owner creating a telephony account (Vapi trial recommended first;
+  Indian numbers need business KYC via Exotel/Plivo — defer until a real client).
 - **Stage 4 (later):** Multilingual voices (Telugu/Hindi via Sarvam), parallel outbound campaigns.
 - **Stage 5 (later):** Dashboard for transcripts, extracted lead details, and bookings.
 

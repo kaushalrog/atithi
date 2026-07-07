@@ -39,6 +39,20 @@ mic (`audio_io.py`) → Gemini STT (`llm.py`) → the same `ReceptionistAgent` �
 edge-tts (`tts.py`) → speaker. STT/TTS are each isolated behind one small file,
 exactly like the LLM, so Deepgram/Sarvam later means swapping one file each.
 
+## Run Stage 2.5 (live call — no Enter key, interruptible)
+
+```
+python live_main.py                 # 🎧 wear headphones
+python live_main.py --half-duplex   # no headphones (mic mutes while agent talks)
+```
+
+This is a real-time call over the Gemini Live API: just talk, the server's voice
+activity detection figures out when you start and stop, and you can interrupt the
+agent mid-sentence (barge-in) — exactly how the Stage 3 phone line will behave.
+Tool calls (slot checks, bookings) happen live inside the stream. Ctrl+C hangs up
+and auto-saves the transcript. Headphones matter in full-duplex mode: through
+laptop speakers the mic hears the agent's own voice and it interrupts itself.
+
 ## Project structure
 
 ```
@@ -50,7 +64,8 @@ vox agent/
 ├── llm.py                  # the ONLY file that talks to Gemini: chat + STT (swap providers here)
 ├── agent.py                # channel-independent agent core + tools
 ├── main.py                 # thin terminal wrapper (text mode)
-├── voice_main.py           # Stage 2: voice wrapper around the SAME agent
+├── voice_main.py           # Stage 2: push-to-talk voice wrapper around the SAME agent
+├── live_main.py            # Stage 2.5: real-time interruptible call (Gemini Live API)
 ├── tts.py                  # the ONLY file that talks to edge-tts (swap voices here)
 ├── audio_io.py             # hardware layer: mic recording + speaker playback
 ├── transcripts/            # saved conversations (created on first /transcript)
@@ -74,6 +89,7 @@ vox agent/
 |-------|------|--------|
 | 1 | Text receptionist with auto-booking | ✅ done |
 | 2 | Mic input (Gemini STT) + voice output (edge-tts) | ✅ done |
+| 2.5 | Real-time interruptible voice call (Gemini Live API) | ✅ done |
 | 3 | Real phone number (Vapi or Pipecat+Plivo), inbound + outbound | later |
 | 4 | Multilingual voices (Telugu/Hindi via Sarvam), outbound campaigns | later |
 | 5 | Dashboard: transcripts, extracted leads, bookings | later |
