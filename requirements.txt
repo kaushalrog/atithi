@@ -8,3 +8,8 @@ python-dotenv>=1.0.0
 edge-tts>=7.0.0      # free Microsoft neural TTS, no API key (Indian voices)
 sounddevice>=0.5.0   # microphone recording
 pygame>=2.6.0        # mp3 playback (only reliable no-ffmpeg option on Windows)
+
+# Web frontend (also the base for Stage 3 telephony webhooks)
+fastapi>=0.115.0
+uvicorn>=0.30.0
+python-multipart>=0.0.9   # multipart uploads (browser mic audio)

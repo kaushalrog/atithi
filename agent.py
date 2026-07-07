@@ -16,6 +16,7 @@ mid-conversation, so they live in the prompt.
 import csv
 import datetime as dt
 import os
+import sys
 from pathlib import Path
 
 import yaml
@@ -24,6 +25,13 @@ from dotenv import load_dotenv
 from llm import GeminiLLM
 
 load_dotenv()
+
+# Windows consoles often use the cp1252 codepage, which can't print emoji or ₹.
+# Without this, the booking-confirmation print() would CRASH the whole tool-use
+# loop mid-booking (found the hard way). "replace" swaps unprintable characters
+# for '?' instead of raising.
+if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(errors="replace")
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -159,7 +167,13 @@ class ReceptionistAgent:
                     }
                 )
                 for call in response["tool_calls"]:
-                    result = self._execute_tool(call["name"], call["args"])
+                    # A tool bug must never kill the conversation: report the
+                    # failure to the model instead, so it can apologize and
+                    # offer a front-desk callback.
+                    try:
+                        result = self._execute_tool(call["name"], call["args"])
+                    except Exception as e:
+                        result = {"error": f"{type(e).__name__}: {e}"}
                     self.history.append(
                         {"role": "tool", "name": call["name"], "result": result}
                     )
