@@ -9,9 +9,12 @@ into Google Sheets (or a local CSV fallback).
 
 ## Quick start
 
-Double-click **`run.bat`** (or run `run.bat text|voice|live|live-hd`). On first run it
-creates the virtualenv and installs everything automatically. You still need `.env`
-with your `GEMINI_API_KEY` (see SETUP.md).
+Double-click **`run.bat`** — the portal opens in your browser, with the server
+running minimized in the background (close its taskbar window to stop). On first
+run it creates the virtualenv and installs everything automatically. You still
+need `.env` with your `GEMINI_API_KEY` (see SETUP.md).
+
+Other modes from a terminal: `run.bat text | voice | live | live-hd`.
 
 ## Run Stage 1 manually
 
