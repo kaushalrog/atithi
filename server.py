@@ -15,6 +15,7 @@ Run:  python server.py            (opens http://127.0.0.1:8765)
 
 import argparse
 import datetime as dt
+import os
 import re
 import tempfile
 import threading
@@ -23,7 +24,7 @@ import webbrowser
 from pathlib import Path
 
 import yaml
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
@@ -68,6 +69,10 @@ class ChatRequest(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str
+
+
+class AdminLoginRequest(BaseModel):
+    password: str
 
 
 class ServiceItem(BaseModel):
@@ -148,11 +153,82 @@ def generate_slots(days: list[str], ranges: list[list[str]], gap_min: int) -> di
     return slots
 
 
+# ---------- admin (the platform owner's console) --------------------------------
+#
+# WHY same backend, different page: the admin console is just another thin
+# client of the same data (principle 3 again). A second server would double
+# the deployment work for zero benefit at this stage. Access control is a
+# shared secret from .env sent as an X-Admin-Key header — simple, and the
+# shape is right: when real client logins arrive, this becomes a role check.
+
+def require_admin(x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
+    admin_password = os.getenv("ADMIN_PASSWORD", "")
+    if not admin_password:
+        raise HTTPException(status_code=503, detail="Set ADMIN_PASSWORD in .env to use the admin console")
+    if x_admin_key != admin_password:
+        raise HTTPException(status_code=401, detail="Wrong admin password")
+
+
+@app.post("/api/admin/login")
+def admin_login(req: AdminLoginRequest):
+    require_admin(x_admin_key=req.password)
+    return {"ok": True}
+
+
+@app.get("/api/admin/overview", dependencies=[Depends(require_admin)])
+def admin_overview():
+    """Everything the platform owner needs in one response: totals across all
+    clients, a health row per business, and the latest calls platform-wide."""
+    clients, all_calls = [], []
+    totals = {"clients": 0, "calls": 0, "minutes": 0.0, "bookings": 0, "leads": 0}
+    for path in sorted((BASE_DIR / "clients").glob("*.yaml")):
+        with open(path, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        client_id = path.stem
+        calls = storage.read_call_logs(client_id)
+        minutes = round(sum(c["seconds"] for c in calls) / 60, 1)
+        n_bookings = len(storage.read_bookings(client_id))
+        n_leads = len(storage.read_leads(client_id))
+        clients.append({
+            "client_id": client_id,
+            "business_name": cfg.get("business_name", client_id),
+            "phone": cfg.get("phone", ""),
+            "calls": len(calls),
+            "minutes": minutes,
+            "bookings": n_bookings,
+            "leads": n_leads,
+            "last_activity": calls[0]["started"] if calls else None,
+        })
+        for c in calls:
+            all_calls.append({**c, "business_name": cfg.get("business_name", client_id)})
+        totals["clients"] += 1
+        totals["calls"] += len(calls)
+        totals["minutes"] = round(totals["minutes"] + minutes, 1)
+        totals["bookings"] += n_bookings
+        totals["leads"] += n_leads
+    all_calls.sort(key=lambda c: c["started"], reverse=True)
+    recent = [{
+        "business_name": c["business_name"],
+        "started": c["started"],
+        "channel": c["channel"],
+        "seconds": c["seconds"],
+        "turns": c["turns"],
+        "booked": "book_appointment" in c["transcript"],
+        "lead": "save_lead" in c["transcript"],
+    } for c in all_calls[:12]]
+    return {"totals": totals, "clients": clients, "recent_calls": recent}
+
+
 # ---------- pages & business management ----------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
 def index():
     return (BASE_DIR / "web" / "index.html").read_text(encoding="utf-8")
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page():
+    return (BASE_DIR / "web" / "admin.html").read_text(encoding="utf-8")
 
 
 @app.get("/api/clients")
