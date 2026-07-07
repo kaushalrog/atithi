@@ -73,7 +73,15 @@ google-auth for Google Sheets, PyYAML, python-dotenv. Stage 2 added (owner deleg
 the choice): edge-tts (free neural TTS, no key), sounddevice (mic), pygame (mp3
 playback). Nothing else unless justified to the owner first.
 
-## Owner
+## Owner & intent
 
-Sai, B.Tech AI student. Explain WHY for every architectural decision as you build —
-teach, don't just generate. Ask before adding anything not in the spec.
+Sai, founder. **VoxAgent is a real startup, not a class project.** Build to
+production standards and prioritize in this order:
+1. Reliability — the agent must never embarrass a client in front of their
+   customer (evals in `evals/` are the quality gate; run them before demos).
+2. Demo-to-sale path — features that help win a paying pilot beat features
+   that are merely interesting.
+3. Unit economics — know what a conversation costs before pricing anything.
+
+Sai is also still learning: explain WHY for every architectural decision —
+teach while building. Ask before adding anything outside the agreed direction.

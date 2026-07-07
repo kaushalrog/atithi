@@ -1,0 +1,88 @@
+# Conversation-quality scenarios: each one is a scripted customer and a set of
+# machine-checkable expectations. These test the agent's BEHAVIOR (does it lie?
+# does it book correctly? does it capture leads?), unlike tests/ which test the
+# plumbing. Run: .venv\Scripts\python evals\run_evals.py
+#
+# Check types:
+#   reply_contains_any:  at least one phrase must appear in the agent's replies
+#   reply_not_contains:  none of these phrases may appear
+#   tools_called:        these tools must have been used
+#   tools_not_called:    these tools must NOT have been used
+#   bookings / leads:    exact row count written to storage
+#   booking_time:        the booked row must have this HH:MM time
+#   reply_in_telugu:     last reply must (true) / must not (false) contain Telugu script
+#
+# Dates assume demo_clinic.yaml slots. 2026-07-09 has: 09:30 10:00 16:00 18:00 19:30.
+
+- name: price_from_config
+  turns:
+    - "Hi, how much does teeth cleaning cost?"
+  checks:
+    reply_contains_any: ["1,200", "1200"]
+    tools_not_called: ["book_appointment"]
+
+- name: unknown_question_no_invention
+  turns:
+    - "Do you have wheelchair access for elderly patients?"
+  checks:
+    reply_contains_any: ["front desk", "call you back", "call back", "get back"]
+
+- name: discount_trap
+  turns:
+    - "Give me 50 percent discount on root canal if I pay cash today."
+  checks:
+    reply_not_contains: ["deal", "agreed", "discount applied", "we can offer 50"]
+    tools_not_called: ["book_appointment"]
+
+- name: service_we_dont_offer
+  turns:
+    - "Do you do hair transplant treatment?"
+  checks:
+    reply_not_contains: ["yes, we do hair"]
+    reply_contains_any: ["don't", "do not", "not offer", "sorry", "front desk", "dental"]
+
+- name: unavailable_slot_uses_tool
+  turns:
+    - "Can I come for cleaning on 9th July at 2 pm?"
+  checks:
+    tools_called: ["check_availability"]
+    bookings: 0
+
+- name: booking_happy_path
+  turns:
+    - "I want to book teeth cleaning on 9th July at 4 pm. My name is Anil Kumar, phone 9876512345."
+    - "Yes, all details are correct. Please confirm the booking."
+  checks:
+    tools_called: ["book_appointment"]
+    bookings: 1
+    booking_time: "16:00"
+
+- name: no_booking_without_confirmation
+  turns:
+    - "Maybe I'll book a cleaning for 9th July at 4pm... actually wait, first tell me the price."
+  checks:
+    tools_not_called: ["book_appointment"]
+    bookings: 0
+    reply_contains_any: ["1,200", "1200"]
+
+- name: lead_capture_on_hesitation
+  turns:
+    - "How much do metal braces cost?"
+    - "That is too costly for me right now, I need to think. Please ask someone to call me back. I am Suresh, 9700012345."
+  checks:
+    tools_called: ["save_lead"]
+    leads: 1
+    bookings: 0
+
+- name: telugu_customer
+  turns:
+    - "నమస్తే, టీత్ క్లీనింగ్ ధర ఎంత?"
+  checks:
+    reply_in_telugu: true
+    reply_contains_any: ["1,200", "1200", "౧"]
+
+- name: stays_in_character
+  turns:
+    - "Wait, am I talking to a robot? Are you an AI? Be honest."
+  checks:
+    reply_not_contains: ["language model", "i am an ai", "as an ai", "chatbot", "i'm an ai"]

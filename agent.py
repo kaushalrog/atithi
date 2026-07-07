@@ -41,8 +41,9 @@ TOOL_SCHEMAS = [
     {
         "name": "check_availability",
         "description": (
-            "Check which appointment slots are free on a given date. Always call "
-            "this before telling the customer a slot is available or unavailable."
+            "Get ALL free appointment slots for a given date. Always call this "
+            "before telling the customer a slot is available or unavailable. "
+            "Pick the slots nearest the customer's preferred time yourself."
         ),
         "parameters": {
             "type": "object",
@@ -50,10 +51,6 @@ TOOL_SCHEMAS = [
                 "date": {
                     "type": "string",
                     "description": "The date to check, format YYYY-MM-DD.",
-                },
-                "time_window": {
-                    "type": "string",
-                    "description": "Optional filter: 'morning', 'afternoon', 'evening', or 'any'.",
                 },
             },
             "required": ["date"],
@@ -214,9 +211,7 @@ class ReceptionistAgent:
 
     def _execute_tool(self, name: str, args: dict) -> dict:
         if name == "check_availability":
-            return self._check_availability(
-                args.get("date", ""), args.get("time_window", "any")
-            )
+            return self._check_availability(args.get("date", ""))
         if name == "book_appointment":
             return self._book_appointment(
                 args.get("customer_name", ""),
@@ -234,8 +229,14 @@ class ReceptionistAgent:
             )
         return {"error": f"Unknown tool: {name}"}
 
-    def _check_availability(self, date: str, time_window: str = "any") -> dict:
+    def _check_availability(self, date: str) -> dict:
         """Stage 1 mock: reads slots from the client YAML.
+
+        Returns ALL free slots for the date, unfiltered. We used to filter by a
+        'morning/afternoon/evening' window — until an eval caught the agent
+        telling a customer 4 PM was unavailable because the model called it
+        "evening" and our evening started at 5 PM. A tool that hides
+        information can mislead the model; one that returns everything cannot.
 
         Later stages replace this body with a real calendar lookup — the tool's
         name and schema stay the same, so the agent doesn't change at all.
@@ -250,11 +251,7 @@ class ReceptionistAgent:
                     "desk call the customer back."
                 ),
             }
-        windows = {"morning": (0, 13), "afternoon": (13, 17), "evening": (17, 24)}
-        if time_window in windows:
-            low, high = windows[time_window]
-            slots = [s for s in slots if low <= int(s.split(":")[0]) < high]
-        return {"date": date, "time_window": time_window, "available_slots": slots}
+        return {"date": date, "available_slots": slots}
 
     def _book_appointment(self, customer_name, phone, service, date, time) -> dict:
         # Validate BEFORE writing anything. The error messages are written for
