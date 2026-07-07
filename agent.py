@@ -1,30 +1,31 @@
 """agent.py — the channel-independent agent core.
 
 WHY (architecture principle 3): this class knows nothing about terminals,
-microphones, or phone lines. It takes a text message in and returns a text
-reply. Stage 1 wraps it in a terminal loop (main.py); Stage 2/3 will wrap the
-SAME class in a websocket audio pipeline. If the core stays channel-free, the
-voice upgrade never touches this file's logic.
+microphones, browsers, or phone lines. It takes a text message in and returns a
+text reply. Four channels already wrap it (terminal, push-to-talk, live call,
+web portal) and none of them required changing this file.
 
 WHY tools instead of prompt text (principle 4): slot availability changes in
 real time. If we pasted slots into the system prompt, the model would happily
 quote stale data. A tool call is executed at the moment of asking, so the
 answer is always current. Static facts (prices, address, FAQ) don't change
 mid-conversation, so they live in the prompt.
+
+Tool design rule learned the hard way: tools VALIDATE their inputs and return
+errors instead of trusting the model. book_appointment refuses times that
+aren't actually free and phone numbers that are too short — the model reads
+the error and corrects itself. Self-healing beats hoping.
 """
 
-import csv
 import datetime as dt
-import os
+import re
 import sys
 from pathlib import Path
 
 import yaml
-from dotenv import load_dotenv
 
+import storage
 from llm import GeminiLLM
-
-load_dotenv()
 
 # Windows consoles often use the cp1252 codepage, which can't print emoji or ₹.
 # Without this, the booking-confirmation print() would CRASH the whole tool-use
@@ -34,10 +35,6 @@ if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(errors="replace")
 
 BASE_DIR = Path(__file__).resolve().parent
-
-BOOKING_HEADER = [
-    "timestamp", "client_id", "name", "phone", "service", "date", "time", "status",
-]
 
 # Tool schemas in plain JSON schema — provider-neutral (llm.py converts them).
 TOOL_SCHEMAS = [
@@ -66,13 +63,14 @@ TOOL_SCHEMAS = [
         "name": "book_appointment",
         "description": (
             "Book a confirmed appointment. Call this ONLY after the customer has "
-            "confirmed their name, phone, service, date and time."
+            "confirmed their name, phone, service, date and time. The time must "
+            "be one returned by check_availability."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "customer_name": {"type": "string", "description": "Customer's full name."},
-                "phone": {"type": "string", "description": "Customer's phone number."},
+                "phone": {"type": "string", "description": "Customer's phone number (10+ digits)."},
                 "service": {"type": "string", "description": "The service being booked."},
                 "date": {"type": "string", "description": "Appointment date, YYYY-MM-DD."},
                 "time": {"type": "string", "description": "Appointment time, 24-hour HH:MM."},
@@ -80,7 +78,31 @@ TOOL_SCHEMAS = [
             "required": ["customer_name", "phone", "service", "date", "time"],
         },
     },
+    {
+        "name": "save_lead",
+        "description": (
+            "Save the caller's contact details as a follow-up lead when they show "
+            "interest but do NOT complete a booking — they want to think about it, "
+            "ask for a callback, or the conversation is ending without a booking. "
+            "Only use details the customer actually gave; never invent them."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Customer's name, if given."},
+                "phone": {"type": "string", "description": "Customer's phone number (10+ digits)."},
+                "interest": {"type": "string", "description": "What they asked about or wanted."},
+                "note": {"type": "string", "description": "Anything useful for the follow-up call."},
+            },
+            "required": ["phone", "interest"],
+        },
+    },
 ]
+
+
+def _phone_ok(phone: str) -> bool:
+    """A usable Indian phone number has at least 10 digits (12 with +91)."""
+    return len(re.sub(r"\D", "", phone or "")) >= 10
 
 
 class ReceptionistAgent:
@@ -110,26 +132,22 @@ class ReceptionistAgent:
     def _apply_existing_bookings(self):
         """Remove already-booked slots so they are never offered twice.
 
-        Stage 1 reads past bookings from bookings.csv only (bookings that went
-        straight to Google Sheets aren't replayed yet — a real calendar backend
-        replaces this whole mechanism in a later stage).
+        Reads past bookings from local storage (Sheet-only bookings aren't
+        replayed yet — a real calendar backend replaces this mechanism later).
         """
-        path = BASE_DIR / "bookings.csv"
-        if not path.exists():
-            return
-        with open(path, newline="", encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                if row.get("client_id") == self.client_id and row.get("status") == "confirmed":
-                    day = self.config["slots"].get(row.get("date", ""))
-                    if day and row.get("time") in day:
-                        day.remove(row["time"])
+        for row in storage.read_bookings(self.client_id):
+            if row.get("status") != "confirmed":
+                continue
+            day = self.config["slots"].get(row.get("date", ""))
+            if day and row.get("time") in day:
+                day.remove(row["time"])
 
     def _render_system_prompt(self) -> str:
         template = (BASE_DIR / "prompts" / "receptionist.txt").read_text(encoding="utf-8")
         cfg = self.config
         services = "\n".join(f"- {s['name']}: {s['price']}" for s in cfg["services"])
-        faq = "\n".join(f"Q: {f['q']}\nA: {f['a']}" for f in cfg["faq"])
-        policies = "\n".join(f"- {p}" for p in cfg["policies"])
+        faq = "\n".join(f"Q: {f['q']}\nA: {f['a']}" for f in cfg["faq"]) or "(none provided)"
+        policies = "\n".join(f"- {p}" for p in cfg["policies"]) or "(none provided)"
         today = dt.date.today()
         return template.format(
             business_name=cfg["business_name"],
@@ -207,6 +225,13 @@ class ReceptionistAgent:
                 args.get("date", ""),
                 args.get("time", ""),
             )
+        if name == "save_lead":
+            return self._save_lead(
+                args.get("name", ""),
+                args.get("phone", ""),
+                args.get("interest", ""),
+                args.get("note", ""),
+            )
         return {"error": f"Unknown tool: {name}"}
 
     def _check_availability(self, date: str, time_window: str = "any") -> dict:
@@ -232,18 +257,32 @@ class ReceptionistAgent:
         return {"date": date, "time_window": time_window, "available_slots": slots}
 
     def _book_appointment(self, customer_name, phone, service, date, time) -> dict:
+        # Validate BEFORE writing anything. The error messages are written for
+        # the model: it reads them and fixes its own mistake in the next turn.
+        available = self.config["slots"].get(date) or []
+        if time not in available:
+            return {
+                "status": "failed",
+                "error": (
+                    f"{time} on {date} is not an available slot. Offer the "
+                    "customer one of the available slots instead."
+                ),
+                "available_slots": available,
+            }
+        if not _phone_ok(phone):
+            return {
+                "status": "failed",
+                "error": "The phone number looks incomplete. Ask the customer "
+                         "to confirm a 10-digit mobile number before booking.",
+            }
+
         row = [
             dt.datetime.now().isoformat(timespec="seconds"),
             self.client_id, customer_name, phone, service, date, time, "confirmed",
         ]
-        saved_to = self._save_to_google_sheet(row)
-        if saved_to is None:
-            self._save_to_csv(row)
-            saved_to = "bookings.csv (local fallback)"
+        saved_to = storage.save_booking(row)
         # Consume the slot so the same time can't be double-booked.
-        day = self.config["slots"].get(date)
-        if day and time in day:
-            day.remove(time)
+        self.config["slots"][date].remove(time)
         print(
             f"\n  ✅ BOOKING CONFIRMED — {customer_name} | {phone} | {service} "
             f"| {date} {time}\n     saved to: {saved_to}\n"
@@ -258,50 +297,22 @@ class ReceptionistAgent:
             "saved_to": saved_to,
         }
 
-    def _save_to_google_sheet(self, row) -> str | None:
-        """Returns 'Google Sheet' on success, None if we should fall back to CSV.
-
-        WHY the fallback: a live demo must never die because of a missing
-        credentials file or a flaky network. The booking is the product — losing
-        it is the only unacceptable failure.
-        """
-        creds_path = os.getenv("GOOGLE_SHEETS_CREDENTIALS_PATH", "")
-        sheet_id = os.getenv("SHEET_ID", "")
-        if not creds_path or not sheet_id:
-            print("  [warning] Google Sheets not configured (.env) — using bookings.csv.")
-            return None
-        if not Path(creds_path).is_absolute():
-            creds_path = str(BASE_DIR / creds_path)
-        if not os.path.exists(creds_path):
-            print(f"  [warning] {creds_path} not found — using bookings.csv.")
-            return None
-        try:
-            import gspread  # imported here so the demo runs even without gspread installed
-
-            gc = gspread.service_account(filename=creds_path)
-            worksheet = gc.open_by_key(sheet_id).sheet1
-            if not worksheet.get_values("A1:H1"):
-                worksheet.append_row(BOOKING_HEADER)
-            worksheet.append_row(row)
-            return "Google Sheet"
-        except Exception as e:
-            print(f"  [warning] Google Sheets failed ({e}) — using bookings.csv.")
-            return None
-
-    def _save_to_csv(self, row):
-        path = BASE_DIR / "bookings.csv"
-        is_new = not path.exists()
-        with open(path, "a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            if is_new:
-                writer.writerow(BOOKING_HEADER)
-            writer.writerow(row)
+    def _save_lead(self, name, phone, interest, note) -> dict:
+        if not _phone_ok(phone):
+            return {
+                "status": "failed",
+                "error": "The phone number looks incomplete. Ask the customer "
+                         "for a 10-digit mobile number so the front desk can call back.",
+            }
+        storage.save_lead(self.client_id, name, phone, interest, note)
+        print(f"\n  📇 LEAD SAVED — {name or '(no name)'} | {phone} | {interest}\n")
+        return {"status": "saved", "name": name, "phone": phone, "interest": interest}
 
     # ---- transcript ---------------------------------------------------------------
 
     def transcript_text(self) -> str:
-        """Human-readable transcript, including tool activity (useful for debugging
-        and, in Stage 5, for the dashboard)."""
+        """Human-readable transcript, including tool activity (the dashboard's
+        call history renders this)."""
         lines = []
         for msg in self.history:
             if msg["role"] == "user":

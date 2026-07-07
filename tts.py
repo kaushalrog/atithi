@@ -24,11 +24,16 @@ def detect_language(text: str) -> str:
     """Pick a voice by which script the reply is written in.
 
     Cheap but effective: count characters in the Devanagari, Telugu, and Tamil
-    Unicode ranges. Tanglish/Hinglish is roman script, so it lands on the en-IN
-    voice — which reads it with an Indian accent anyway. No ML needed.
+    Unicode ranges. A script wins only when it makes up a real share of the
+    letters — one Hindi word inside an English sentence must NOT flip the whole
+    reply to the Hindi voice. Tanglish/Hinglish is roman script, so it lands on
+    the en-IN voice — which reads it with an Indian accent anyway. No ML needed.
     """
     counts = {"hi": 0, "te": 0, "ta": 0}
+    letters = 0
     for ch in text:
+        if ch.isalpha():
+            letters += 1
         code = ord(ch)
         if 0x0900 <= code <= 0x097F:
             counts["hi"] += 1
@@ -37,7 +42,9 @@ def detect_language(text: str) -> str:
         elif 0x0B80 <= code <= 0x0BFF:
             counts["ta"] += 1
     best = max(counts, key=counts.get)
-    return best if counts[best] >= 3 else "en"
+    if counts[best] >= 3 and counts[best] >= 0.3 * max(letters, 1):
+        return best
+    return "en"
 
 
 class EdgeTTS:

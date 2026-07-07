@@ -23,9 +23,11 @@ Press Ctrl+C to hang up; the transcript is saved automatically.
 
 import argparse
 import asyncio
+from datetime import datetime
 
 import sounddevice as sd
 
+import storage
 from agent import TOOL_SCHEMAS, ReceptionistAgent
 from llm import GeminiLive
 from main import save_transcript
@@ -37,6 +39,7 @@ MIC_CHUNK = 800        # 50 ms of mic audio per network packet
 
 async def run(client_id: str, half_duplex: bool):
     agent = ReceptionistAgent(client_id)
+    started = datetime.now()
     live = GeminiLive()
     await live.connect(agent.system_prompt, TOOL_SCHEMAS)
 
@@ -110,6 +113,7 @@ async def run(client_id: str, half_duplex: bool):
         await live.close()
         if agent.history:
             print(f"\n(transcript saved to {save_transcript(agent)})")
+            storage.log_call_from_agent(agent, "live", started)
 
 
 def main():

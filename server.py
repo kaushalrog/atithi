@@ -4,20 +4,17 @@ This is the page a BUSINESS OWNER uses (the clinic, salon, institute):
   1. Onboard: fill a form with their business details -> we write
      clients/<client_id>.yaml (the multi-tenant principle as a web form).
   2. The AI receptionist handles conversations for them.
-  3. They watch results: bookings, full call history with transcripts, and
-     top-line stats (number of calls, minutes talked, conversion).
+  3. They watch results: bookings, leads, full call history with transcripts,
+     and top-line stats (calls, minutes talked, conversion).
 
-Still a thin layer (principle 3): endpoints translate HTTP <-> ReceptionistAgent.
-Every call is logged as one JSON file in calls/<client_id>/<call_id>.json —
-simple, visible on disk, and good enough until real scale demands a database.
+Still a thin layer (principle 3): endpoints translate HTTP <-> ReceptionistAgent
+calls, and all persistence lives in storage.py. Zero business logic here.
 
 Run:  python server.py            (opens http://127.0.0.1:8765)
 """
 
 import argparse
-import csv
 import datetime as dt
-import json
 import re
 import tempfile
 import threading
@@ -30,18 +27,20 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
+import storage
 from agent import ReceptionistAgent
 from tts import EdgeTTS
 
 BASE_DIR = Path(__file__).resolve().parent
-CALLS_DIR = BASE_DIR / "calls"
 
 app = FastAPI(title="VoxAgent")
 tts = EdgeTTS()
 
-# One test-call session = one agent + one call-log entry (in memory; the call
-# log JSON on disk is the durable record).
+# One test-call session = one agent + one call-log entry. In memory only; the
+# call log JSON on disk is the durable record. Idle sessions are purged so a
+# long-running server doesn't accumulate dead agents.
 sessions: dict[str, dict] = {}
+SESSION_IDLE_LIMIT = dt.timedelta(hours=2)
 
 MIME_FIX = {"audio/mpeg": "audio/mp3", "audio/x-wav": "audio/wav",
             "application/octet-stream": "audio/wav"}
@@ -95,45 +94,6 @@ class BusinessRequest(BaseModel):
     slot_gap_min: int = 30
 
 
-# ---------- call logging -------------------------------------------------------
-
-def update_call_log(session: dict):
-    """(Re)write this call's JSON after every turn. The file IS the call record:
-    dashboard stats and history are computed by reading these files back."""
-    agent: ReceptionistAgent = session["agent"]
-    turns = sum(1 for m in agent.history if m["role"] == "user")
-    if turns == 0:
-        return  # opening the widget without talking is not a call
-    now = dt.datetime.now()
-    folder = CALLS_DIR / session["client_id"]
-    folder.mkdir(parents=True, exist_ok=True)
-    record = {
-        "call_id": session["call_id"],
-        "client_id": session["client_id"],
-        "channel": session["channel"],
-        "started": session["started"].isoformat(timespec="seconds"),
-        "ended": now.isoformat(timespec="seconds"),
-        "seconds": int((now - session["started"]).total_seconds()),
-        "turns": turns,
-        "transcript": agent.transcript_text(),
-    }
-    with open(folder / f"{session['call_id']}.json", "w", encoding="utf-8") as f:
-        json.dump(record, f, ensure_ascii=False, indent=1)
-
-
-def read_call_logs(client_id: str) -> list[dict]:
-    folder = CALLS_DIR / client_id
-    if not folder.exists():
-        return []
-    records = []
-    for path in folder.glob("*.json"):
-        try:
-            records.append(json.loads(path.read_text(encoding="utf-8")))
-        except (json.JSONDecodeError, OSError):
-            continue  # one corrupt file must not break the dashboard
-    return sorted(records, key=lambda r: r["started"], reverse=True)
-
-
 # ---------- helpers ------------------------------------------------------------
 
 def get_session(session_id: str) -> dict:
@@ -143,7 +103,15 @@ def get_session(session_id: str) -> dict:
     return session
 
 
+def purge_idle_sessions():
+    now = dt.datetime.now()
+    for sid in [s for s, v in sessions.items()
+                if now - v["last_activity"] > SESSION_IDLE_LIMIT]:
+        del sessions[sid]
+
+
 def run_turn(session: dict, message: str) -> dict:
+    """One customer turn; also reports which tools fired so the UI can show them."""
     agent = session["agent"]
     before = len(agent.history)
     reply = agent.chat(message)
@@ -152,14 +120,16 @@ def run_turn(session: dict, message: str) -> dict:
         if msg["role"] == "assistant" and msg.get("tool_calls"):
             for call in msg["tool_calls"]:
                 tools.append({"name": call["name"], "args": call["args"]})
-    update_call_log(session)
+    session["last_activity"] = dt.datetime.now()
+    storage.log_call_from_agent(agent, "web-test", session["started"],
+                                call_id=session["call_id"])
     return {"reply": reply, "tools": tools}
 
 
 def generate_slots(days: list[str], ranges: list[list[str]], gap_min: int) -> dict:
     """Turn 'open Mon-Sat, 10-1 and 4-8, every 30 min' into concrete slots for
-    the next 7 days. Stage 1 slots are static demo data — a real calendar
-    replaces this at a later stage, behind the same check_availability tool."""
+    the next 7 days. Static demo data — a real calendar replaces this at a
+    later stage, behind the same check_availability tool."""
     slots = {}
     today = dt.date.today()
     for i in range(7):
@@ -228,17 +198,19 @@ def create_business(req: BusinessRequest):
 
 @app.post("/api/session")
 def create_session(req: SessionRequest):
+    purge_idle_sessions()
     try:
         agent = ReceptionistAgent(req.client_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"No client '{req.client_id}'")
     session_id = uuid.uuid4().hex
+    now = dt.datetime.now()
     sessions[session_id] = {
         "agent": agent,
         "client_id": req.client_id,
-        "call_id": dt.datetime.now().strftime("%Y%m%d_%H%M%S_") + session_id[:6],
-        "channel": "web-test",
-        "started": dt.datetime.now(),
+        "call_id": now.strftime("%Y%m%d_%H%M%S_") + session_id[:6],
+        "started": now,
+        "last_activity": now,
     }
     return {"session_id": session_id, "business_name": agent.config["business_name"]}
 
@@ -250,6 +222,7 @@ def chat(req: ChatRequest):
 
 @app.post("/api/voice")
 def voice(session_id: str = Form(...), audio: UploadFile = File(...)):
+    """Browser-recorded audio in -> transcript + agent reply out."""
     session = get_session(session_id)
     mime = MIME_FIX.get(audio.content_type, audio.content_type) or "audio/wav"
     heard = session["agent"].llm.transcribe(audio.file.read(), mime_type=mime)
@@ -260,6 +233,7 @@ def voice(session_id: str = Form(...), audio: UploadFile = File(...)):
 
 @app.post("/api/tts")
 def speak(req: TTSRequest):
+    """Reply text in -> mp3 speech out (voice auto-picked by script, see tts.py)."""
     clean = re.sub(r"[*_#`]", "", req.text)
     out_path = Path(tempfile.gettempdir()) / f"voxagent_web_{uuid.uuid4().hex}.mp3"
     try:
@@ -269,11 +243,11 @@ def speak(req: TTSRequest):
         out_path.unlink(missing_ok=True)
 
 
-# ---------- the dashboard data --------------------------------------------------
+# ---------- dashboard data -------------------------------------------------------
 
 @app.get("/api/stats")
 def stats(client_id: str):
-    calls = read_call_logs(client_id)
+    calls = storage.read_call_logs(client_id)
     n_calls = len(calls)
     # Conversion = share of calls that produced a booking. Each call's transcript
     # records its tool calls, so a booking made during the call is visible there.
@@ -281,24 +255,25 @@ def stats(client_id: str):
     return {
         "calls": n_calls,
         "minutes": round(sum(c["seconds"] for c in calls) / 60, 1),
-        "bookings": len(bookings(client_id)),
+        "bookings": len(storage.read_bookings(client_id)),
+        "leads": len(storage.read_leads(client_id)),
         "conversion": round(100 * booked_calls / n_calls) if n_calls else 0,
     }
 
 
 @app.get("/api/calls")
 def calls(client_id: str):
-    return read_call_logs(client_id)
+    return storage.read_call_logs(client_id)
 
 
 @app.get("/api/bookings")
 def bookings(client_id: str):
-    path = BASE_DIR / "bookings.csv"
-    if not path.exists():
-        return []
-    with open(path, newline="", encoding="utf-8") as f:
-        rows = [r for r in csv.DictReader(f) if r.get("client_id") == client_id]
-    return list(reversed(rows))
+    return list(reversed(storage.read_bookings(client_id)))  # newest first
+
+
+@app.get("/api/leads")
+def leads(client_id: str):
+    return list(reversed(storage.read_leads(client_id)))
 
 
 @app.get("/api/transcript/{session_id}")
