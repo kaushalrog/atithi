@@ -1,0 +1,10 @@
+google-genai>=1.0.0
+gspread>=6.0.0
+google-auth>=2.0.0
+PyYAML>=6.0
+python-dotenv>=1.0.0
+
+# Stage 2 (voice)
+edge-tts>=7.0.0      # free Microsoft neural TTS, no API key (Indian voices)
+sounddevice>=0.5.0   # microphone recording
+pygame>=2.6.0        # mp3 playback (only reliable no-ffmpeg option on Windows)

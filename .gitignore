@@ -1,0 +1,12 @@
+# Secrets — never commit these
+.env
+credentials.json
+
+# Booking data & transcripts (customer PII stays local)
+*.csv
+transcripts/
+
+# Python
+__pycache__/
+.venv/
+*.pyc
