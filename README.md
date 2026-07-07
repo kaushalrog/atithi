@@ -72,8 +72,12 @@ This page is for the **business owner** (the clinic/salon/institute — our clie
   the multi-tenant principle as a web form. Appointment slots are generated
   from the chosen days/hours/gap.
 - **Dashboard** — top-line stats (calls handled, minutes talked, bookings made,
-  call→booking conversion), full **call history** with expandable transcripts,
-  and the bookings table. Every call is one JSON file in `calls/<client_id>/`.
+  leads captured, call→booking conversion), a 7-day activity chart, full
+  **call history** with chat-styled transcripts, the bookings table, and a
+  **Leads** view: callers who showed interest but didn't book are saved by the
+  agent (name, phone, what they wanted) for the owner to follow up. Every call
+  from every channel — terminal, voice, live, web — is one JSON file in
+  `calls/<client_id>/`.
 - **📞 Test your agent** — a call widget (type or talk via the browser mic,
   spoken replies via edge-tts) so owners can try their receptionist before a
   real phone number exists (Stage 3). Test calls appear in the history like
@@ -81,6 +85,27 @@ This page is for the **business owner** (the clinic/salon/institute — our clie
 
 The backend (`server.py`) is a thin FastAPI layer over the same
 `ReceptionistAgent` — and the foundation Stage 3's telephony webhooks build on.
+
+## Architecture
+
+```
+ channels (thin wrappers)          core                 providers (one-file swaps)
+ ┌─ main.py       terminal ─┐
+ ├─ voice_main.py push-talk ─┼──►  agent.py  ──chat──►  llm.py   (Gemini: chat, STT, Live)
+ ├─ live_main.py  live call ─┤     (the brain) ──speak─► tts.py  (edge-tts Indian voices)
+ └─ server.py+web portal ────┘         │
+                                   storage.py ──► Google Sheet / bookings.csv
+                                   (all disk I/O)   leads.csv / calls/*.json
+```
+
+Rules that keep this clean: channels never contain business logic; the agent
+never touches disk or provider SDKs directly; every conversation from every
+channel lands in the same call log. `tests/` proves the seams work — the agent
+runs against a scripted FakeLLM with no API key and no network:
+
+```
+python -m pytest tests -q     # 21 tests, ~2 seconds
+```
 
 ## Project structure
 
@@ -91,8 +116,10 @@ vox agent/
 │   └── demo_clinic.yaml    # ALL business knowledge for one client (multi-tenant)
 ├── prompts/
 │   └── receptionist.txt    # one prompt template with {slots} filled per client
-├── llm.py                  # the ONLY file that talks to Gemini: chat + STT (swap providers here)
-├── agent.py                # channel-independent agent core + tools
+├── llm.py                  # the ONLY file that talks to Gemini: chat + STT + Live
+├── agent.py                # channel-independent agent core + 3 tools
+├── storage.py              # ALL persistence: bookings, leads, call logs
+├── tests/                  # pytest suite — runs with no API key (FakeLLM)
 ├── main.py                 # thin terminal wrapper (text mode)
 ├── voice_main.py           # Stage 2: push-to-talk voice wrapper around the SAME agent
 ├── live_main.py            # Stage 2.5: real-time interruptible call (Gemini Live API)

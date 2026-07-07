@@ -17,6 +17,7 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
+import storage
 from agent import ReceptionistAgent
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -40,6 +41,7 @@ def main():
     args = parser.parse_args()
 
     agent = ReceptionistAgent(args.client)
+    started = datetime.now()
     business = agent.config["business_name"]
     print(f"\n=== VoxAgent — you are chatting with the receptionist of {business} ===")
     print("Commands: /reset  /transcript  /quit\n")
@@ -68,9 +70,11 @@ def main():
         reply = agent.chat(user)
         print(f"\nAgent: {reply}\n")
 
-    # Every conversation is a lead — save it automatically (Stage 5 will read these).
+    # Every conversation matters: save the transcript AND log the call so it
+    # appears in the portal's call history like any other channel.
     if agent.history:
         print(f"(transcript saved to {save_transcript(agent)})")
+        storage.log_call_from_agent(agent, "terminal", started)
 
 
 if __name__ == "__main__":

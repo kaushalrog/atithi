@@ -13,3 +13,6 @@ pygame>=2.6.0        # mp3 playback (only reliable no-ffmpeg option on Windows)
 fastapi>=0.115.0
 uvicorn>=0.30.0
 python-multipart>=0.0.9   # multipart uploads (browser mic audio)
+
+# Development
+pytest>=8.0.0             # run the test suite: python -m pytest tests -q

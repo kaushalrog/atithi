@@ -17,8 +17,10 @@ or just type a message. /reset, /transcript and /quit work as before.
 
 import argparse
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
+import storage
 from agent import ReceptionistAgent
 from audio_io import play_mp3, record_until_enter
 from main import save_transcript
@@ -38,6 +40,7 @@ def main():
     args = parser.parse_args()
 
     agent = ReceptionistAgent(args.client)
+    started = datetime.now()
     tts = EdgeTTS()
     business = agent.config["business_name"]
     print(f"\n=== VoxAgent VOICE — receptionist of {business} ===")
@@ -87,6 +90,7 @@ def main():
 
     if agent.history:
         print(f"(transcript saved to {save_transcript(agent)})")
+        storage.log_call_from_agent(agent, "voice", started)
 
 
 if __name__ == "__main__":

@@ -7,73 +7,119 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
 <style>
   :root {
-    --bg: #f4f6f8; --panel: #fff; --ink: #1c2733; --muted: #6b7a89;
+    --bg: #f2f5f7; --panel: #fff; --ink: #1c2733; --muted: #69788a;
     --accent: #0e7c7b; --accent-dark: #0a5c5b; --accent-soft: #e3f2f1;
-    --border: #e2e8ee; --danger: #d94f4f; --radius: 14px;
+    --border: #e3e9ee; --danger: #d94f4f; --radius: 16px;
     font-size: 15px;
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body { margin: 0; background: var(--bg); color: var(--ink);
-         font-family: "Segoe UI", system-ui, sans-serif; min-height: 100vh; }
+         font-family: "Segoe UI", system-ui, sans-serif; display: flex; }
 
-  header { background: linear-gradient(90deg, #0a5c5b, #0e7c7b 55%, #17998f); color: #fff;
-           padding: 13px 24px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-  .logo { font-size: 1.25rem; font-weight: 700; }
-  .logo span { opacity: .75; font-weight: 400; font-size: 1rem; }
-  header .spacer { flex: 1; }
-  header select { background: rgba(255,255,255,.14); color: #fff; border: 1px solid rgba(255,255,255,.35);
-                  border-radius: 8px; padding: 7px 10px; font-size: .92rem; max-width: 230px; }
-  header select option { color: var(--ink); }
+  /* ================= sidebar ================= */
+  .side { width: 225px; flex-shrink: 0; background: linear-gradient(180deg, #072f2e, #0b4241);
+          color: #bfd9d7; display: flex; flex-direction: column; min-height: 100vh; }
+  .side .logo { padding: 22px 20px 18px; font-size: 1.22rem; font-weight: 750; color: #fff; }
+  .side .logo small { display: block; font-size: .72rem; font-weight: 400; opacity: .65; margin-top: 3px; letter-spacing: .4px; }
+  .nav { display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; }
+  .nav button { display: flex; align-items: center; gap: 11px; width: 100%; text-align: left;
+                background: none; border: none; color: inherit; font-size: .95rem; cursor: pointer;
+                padding: 11px 13px; border-radius: 10px; border-left: 3px solid transparent; }
+  .nav button:hover { background: rgba(255,255,255,.06); }
+  .nav button.active { background: rgba(255,255,255,.1); color: #fff; border-left-color: #2fd4c2; }
+  .side .grow { flex: 1; }
+  .side .bottom { padding: 14px; }
+  .side .bottom button { width: 100%; background: rgba(255,255,255,.1); color: #fff;
+                         border: 1px dashed rgba(255,255,255,.35); border-radius: 10px;
+                         padding: 11px; font-size: .92rem; cursor: pointer; }
+  .side .bottom button:hover { background: rgba(255,255,255,.18); }
+  .side .stage { padding: 0 20px 16px; font-size: .72rem; opacity: .5; }
 
+  /* ================= content shell ================= */
+  .shell { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .topbar { background: var(--panel); border-bottom: 1px solid var(--border); padding: 13px 26px;
+            display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .topbar h1 { margin: 0; font-size: 1.15rem; }
+  .topbar .spacer { flex: 1; }
+  .topbar select { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px;
+                   font-size: .93rem; background: #fff; max-width: 240px; }
   .btn { border: none; border-radius: 10px; padding: 9px 16px; font-size: .95rem; cursor: pointer;
          background: var(--accent); color: #fff; transition: background .15s, opacity .15s; }
   .btn:hover { background: var(--accent-dark); }
   .btn:disabled { opacity: .45; cursor: default; }
-  .btn.light { background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.4); }
-  .btn.light:hover { background: rgba(255,255,255,.28); }
   .btn.ghost { background: #eef2f5; color: var(--ink); }
   .btn.ghost:hover { background: #e2e9ee; }
-  .btn.big { font-size: 1.05rem; padding: 12px 22px; }
+  .btn.big { font-size: 1.03rem; padding: 12px 22px; }
 
-  main { max-width: 1150px; margin: 0 auto; padding: 20px 24px 50px; }
+  main { flex: 1; overflow-y: auto; padding: 22px 26px 60px; }
+  .view { max-width: 1080px; margin: 0 auto; }
   .hidden { display: none !important; }
 
-  /* ---- dashboard ---- */
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 18px; }
-  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-          padding: 16px 18px; box-shadow: 0 2px 10px rgba(20,40,60,.05); }
-  .stat .num { font-size: 1.9rem; font-weight: 750; color: var(--accent-dark); line-height: 1.1; }
-  .stat .lbl { color: var(--muted); font-size: .84rem; margin-top: 4px; }
-
-  .cols { display: grid; grid-template-columns: 1.6fr 1fr; gap: 16px; align-items: start; }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-          padding: 16px 18px; box-shadow: 0 2px 10px rgba(20,40,60,.05); }
-  .card h3 { margin: 0 0 12px; font-size: .82rem; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
-  .empty { color: var(--muted); font-size: .9rem; padding: 8px 0; }
+          padding: 18px 20px; box-shadow: 0 2px 12px rgba(20,40,60,.05); }
+  .card h3 { margin: 0 0 12px; font-size: .8rem; text-transform: uppercase; letter-spacing: .9px; color: var(--muted);
+             display: flex; align-items: center; gap: 8px; }
+  .card h3 .more { margin-left: auto; font-size: .8rem; text-transform: none; letter-spacing: 0;
+                   color: var(--accent-dark); cursor: pointer; background: none; border: none; }
+  .empty { color: var(--muted); font-size: .9rem; padding: 10px 0; line-height: 1.5; }
 
-  .call { border: 1px solid var(--border); border-radius: 10px; margin-bottom: 9px; overflow: hidden; }
-  .call summary { display: flex; gap: 12px; align-items: center; padding: 10px 13px; cursor: pointer;
-                  list-style: none; font-size: .9rem; flex-wrap: wrap; }
+  /* ================= dashboard ================= */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 13px; margin-bottom: 15px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+          padding: 15px 17px; box-shadow: 0 2px 12px rgba(20,40,60,.05); position: relative; overflow: hidden; }
+  .stat .ico { position: absolute; right: 10px; top: 10px; font-size: 1.25rem; opacity: .5; }
+  .stat .num { font-size: 1.85rem; font-weight: 760; color: var(--accent-dark); line-height: 1.1; }
+  .stat .lbl { color: var(--muted); font-size: .82rem; margin-top: 4px; }
+
+  .chart { display: flex; gap: 10px; align-items: flex-end; height: 130px; padding-top: 8px; }
+  .chart .col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 5px; height: 100%; }
+  .chart .val { font-size: .74rem; color: var(--muted); }
+  .chart .bar { width: 68%; background: linear-gradient(180deg, #1aa598, #0e7c7b); border-radius: 7px 7px 2px 2px;
+                min-height: 3px; transition: height .4s ease; }
+  .chart .day { font-size: .74rem; color: var(--muted); }
+  .chart .col.today .day { color: var(--accent-dark); font-weight: 700; }
+
+  .grid2 { display: grid; grid-template-columns: 1.5fr 1fr; gap: 15px; align-items: start; margin-top: 15px; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } .side { width: 74px; }
+    .side .logo, .side .stage, .nav button span.txt, .side .bottom { display: none; } }
+
+  /* ================= calls ================= */
+  .call { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 10px; overflow: hidden; background: #fff; }
+  .call summary { display: flex; gap: 12px; align-items: center; padding: 12px 15px; cursor: pointer;
+                  list-style: none; font-size: .92rem; flex-wrap: wrap; }
   .call summary::-webkit-details-marker { display: none; }
   .call summary:hover { background: #f7fafb; }
   .badge { background: var(--accent-soft); color: var(--accent-dark); border-radius: 20px;
-           padding: 2px 10px; font-size: .75rem; white-space: nowrap; }
-  .call .when { font-weight: 600; }
+           padding: 2px 11px; font-size: .74rem; white-space: nowrap; }
+  .badge.gray { background: #eef1f4; color: var(--muted); }
+  .call .when { font-weight: 640; }
   .call .meta { color: var(--muted); font-size: .82rem; margin-left: auto; white-space: nowrap; }
-  .call pre { margin: 0; padding: 12px 14px; background: #f8fafb; border-top: 1px solid var(--border);
-              white-space: pre-wrap; font-family: inherit; font-size: .87rem; line-height: 1.55; max-height: 320px; overflow-y: auto; }
+  .tx { padding: 14px 16px; background: #f7fafb; border-top: 1px solid var(--border);
+        display: flex; flex-direction: column; gap: 8px; max-height: 380px; overflow-y: auto; }
+  .txrow { display: flex; gap: 10px; font-size: .9rem; line-height: 1.5; }
+  .txrow .who { flex-shrink: 0; width: 76px; font-size: .74rem; font-weight: 700; text-transform: uppercase;
+                letter-spacing: .5px; padding-top: 3px; }
+  .txrow.cust .who { color: #9a6b1f; }
+  .txrow.agent .who { color: var(--accent-dark); }
+  .txrow .t { white-space: pre-wrap; background: #fff; border: 1px solid var(--border);
+              border-radius: 10px; padding: 7px 11px; flex: 1; }
+  .txrow.cust .t { background: #fdf7ec; border-color: #f0e2c6; }
+  .txchip { font-size: .74rem; color: var(--muted); background: #eef2f5; border: 1px dashed #cfd9e2;
+            border-radius: 8px; padding: 3px 10px; font-family: Consolas, monospace; align-self: flex-start;
+            margin-left: 86px; max-width: 90%; overflow-wrap: anywhere; }
 
-  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
-  th { text-align: left; color: var(--muted); font-weight: 600; padding: 2px 8px 8px 0; }
-  td { padding: 6px 8px 6px 0; border-top: 1px solid #f0f3f6; }
+  table { width: 100%; border-collapse: collapse; font-size: .87rem; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: 2px 10px 9px 0; white-space: nowrap; }
+  td { padding: 8px 10px 8px 0; border-top: 1px solid #f0f3f6; vertical-align: top; }
 
-  /* ---- onboarding ---- */
-  .onboard { max-width: 780px; margin: 0 auto; }
-  .onboard h2 { margin: 6px 0 2px; }
-  .onboard .sub { color: var(--muted); margin-bottom: 18px; }
+  /* ================= onboarding ================= */
+  .onboard { max-width: 760px; margin: 0 auto; }
+  .onboard h2 { margin: 4px 0 4px; }
+  .onboard .sub { color: var(--muted); margin-bottom: 18px; line-height: 1.5; }
   fieldset { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel);
              padding: 16px 18px; margin: 0 0 16px; }
-  legend { font-weight: 650; padding: 0 8px; font-size: .95rem; }
+  legend { font-weight: 660; padding: 0 8px; font-size: .95rem; }
   label.f { display: block; font-size: .84rem; color: var(--muted); margin: 10px 0 4px; }
   input[type=text], input[type=time], textarea, select.plain {
     width: 100%; border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px;
@@ -91,25 +137,31 @@
   .addline:hover { border-color: var(--accent); color: var(--accent-dark); }
   .days { display: flex; gap: 7px; flex-wrap: wrap; }
   .days label { border: 1px solid var(--border); border-radius: 8px; padding: 6px 11px; cursor: pointer;
-                font-size: .88rem; user-select: none; }
+                font-size: .88rem; user-select: none; background: #fff; }
   .days input { display: none; }
   .days label:has(input:checked) { background: var(--accent); color: #fff; border-color: var(--accent); }
   .times { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: .88rem; color: var(--muted); }
-  .times input[type=time] { width: 110px; }
+  .times input[type=time] { width: 112px; }
   .formmsg { margin: 10px 0; font-size: .92rem; min-height: 1.2em; }
   .formmsg.err { color: var(--danger); }
-  .formmsg.ok { color: var(--accent-dark); }
 
-  /* ---- test-call modal ---- */
-  .overlay { position: fixed; inset: 0; background: rgba(15,30,40,.45); display: flex;
-             align-items: center; justify-content: center; z-index: 50; }
-  .modal { background: var(--panel); border-radius: 16px; width: min(520px, 94vw); height: min(680px, 92vh);
-           display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 18px 60px rgba(10,30,40,.35); }
-  .modal-head { background: var(--accent-dark); color: #fff; padding: 12px 16px; display: flex; align-items: center; gap: 10px; }
-  .modal-head .title { font-weight: 650; }
-  .modal-head .sub { font-size: .8rem; opacity: .8; }
-  .modal-head .x { margin-left: auto; background: none; border: none; color: #fff; font-size: 1.3rem; cursor: pointer; }
-  #chat { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 9px; background: #f7fafb; }
+  /* ================= test-call modal ================= */
+  .overlay { position: fixed; inset: 0; background: rgba(8,25,32,.5); display: flex;
+             align-items: center; justify-content: center; z-index: 50; backdrop-filter: blur(2px); }
+  .modal { background: var(--panel); border-radius: 18px; width: min(520px, 94vw); height: min(690px, 92vh);
+           display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 22px 70px rgba(5,25,35,.45); }
+  .modal-head { background: linear-gradient(90deg, #0a5c5b, #0e7c7b); color: #fff; padding: 13px 17px;
+                display: flex; align-items: center; gap: 12px; }
+  .avatar { width: 38px; height: 38px; border-radius: 50%; background: rgba(255,255,255,.18);
+            display: flex; align-items: center; justify-content: center; font-size: 1.15rem; }
+  .modal-head .title { font-weight: 660; line-height: 1.25; }
+  .modal-head .sub { font-size: .76rem; opacity: .85; display: flex; align-items: center; gap: 5px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #6ef0b6; animation: dotpulse 1.6s infinite; }
+  @keyframes dotpulse { 50% { opacity: .4; } }
+  .modal-head .x { margin-left: auto; background: rgba(255,255,255,.12); border: none; color: #fff;
+                   font-size: 1rem; cursor: pointer; border-radius: 8px; padding: 7px 12px; }
+  .modal-head .x:hover { background: rgba(255,255,255,.25); }
+  #chat { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 9px; background: #f6f9fa; }
   .bubble { max-width: 80%; padding: 9px 13px; border-radius: 15px; line-height: 1.45;
             white-space: pre-wrap; word-wrap: break-word; animation: pop .18s ease-out; font-size: .95rem; }
   @keyframes pop { from { opacity: 0; transform: translateY(5px); } }
@@ -117,7 +169,8 @@
   .bubble.agent { align-self: flex-start; background: #fff; border: 1px solid var(--border); border-bottom-left-radius: 4px; }
   .bubble.note { align-self: center; background: var(--accent-soft); color: var(--accent-dark); font-size: .82rem; border-radius: 10px; }
   .tool-chip { align-self: flex-start; font-size: .75rem; color: var(--muted); background: #eef2f5;
-               border: 1px dashed #cfd9e2; border-radius: 8px; padding: 3px 9px; font-family: Consolas, monospace; }
+               border: 1px dashed #cfd9e2; border-radius: 8px; padding: 3px 9px; font-family: Consolas, monospace;
+               max-width: 92%; overflow-wrap: anywhere; }
   .typing { align-self: flex-start; padding: 11px 15px; }
   .typing i { display: inline-block; width: 6px; height: 6px; margin: 0 2px; border-radius: 50%;
               background: #b8c4cf; animation: blink 1.2s infinite; }
@@ -130,112 +183,150 @@
   @keyframes pulse { 50% { box-shadow: 0 0 0 7px rgba(217,79,79,.25); } }
   label.toggle { display: flex; align-items: center; gap: 5px; font-size: .8rem; color: var(--muted); white-space: nowrap; cursor: pointer; }
 
-  @media (max-width: 860px) { .cols { grid-template-columns: 1fr; } .pair { grid-template-columns: 1fr; } }
+  .toast { position: fixed; bottom: 26px; right: 26px; background: #123a38; color: #eafffb;
+           padding: 13px 18px; border-radius: 12px; font-size: .93rem; box-shadow: 0 10px 30px rgba(5,25,35,.35);
+           opacity: 0; transform: translateY(12px); transition: all .3s ease; z-index: 99; }
+  .toast.show { opacity: 1; transform: none; }
 </style>
 </head>
 <body>
 
-<header>
-  <div class="logo">🎙️ VoxAgent <span>— Your AI Receptionist</span></div>
-  <div class="spacer"></div>
-  <select id="clientSelect" title="Your business"></select>
-  <button class="btn light" id="addBizBtn">＋ Add business</button>
-  <button class="btn light" id="testBtn">📞 Test your agent</button>
-</header>
+<aside class="side">
+  <div class="logo">🎙️ VoxAgent<small>AI RECEPTIONIST PLATFORM</small></div>
+  <nav class="nav">
+    <button data-view="dashboard" class="active">📊 <span class="txt">Dashboard</span></button>
+    <button data-view="calls">📞 <span class="txt">Calls</span></button>
+    <button data-view="bookings">📒 <span class="txt">Bookings</span></button>
+    <button data-view="leads">🎯 <span class="txt">Leads</span></button>
+  </nav>
+  <div class="grow"></div>
+  <div class="bottom"><button id="addBizBtn">＋ Add business</button></div>
+  <div class="stage">Stage 2.75 · local</div>
+</aside>
 
-<main>
-  <!-- ================= DASHBOARD ================= -->
-  <section id="dashboard">
-    <div class="stats">
-      <div class="stat"><div class="num" id="statCalls">0</div><div class="lbl">Calls handled</div></div>
-      <div class="stat"><div class="num" id="statMinutes">0</div><div class="lbl">Minutes talked</div></div>
-      <div class="stat"><div class="num" id="statBookings">0</div><div class="lbl">Bookings made</div></div>
-      <div class="stat"><div class="num" id="statConv">0%</div><div class="lbl">Calls → bookings</div></div>
-    </div>
-    <div class="cols">
-      <div class="card">
-        <h3>Call history</h3>
-        <div id="callsBox"><div class="empty">No calls yet — click “📞 Test your agent” to make the first one.</div></div>
+<div class="shell">
+  <div class="topbar">
+    <h1 id="viewTitle">Dashboard</h1>
+    <div class="spacer"></div>
+    <select id="clientSelect" title="Your business"></select>
+    <button class="btn" id="testBtn">📞 Test your agent</button>
+  </div>
+
+  <main>
+    <!-- ============ DASHBOARD ============ -->
+    <section class="view" id="view-dashboard">
+      <div class="stats">
+        <div class="stat"><span class="ico">📞</span><div class="num" id="statCalls">–</div><div class="lbl">Calls handled</div></div>
+        <div class="stat"><span class="ico">🕒</span><div class="num" id="statMinutes">–</div><div class="lbl">Minutes talked</div></div>
+        <div class="stat"><span class="ico">📒</span><div class="num" id="statBookings">–</div><div class="lbl">Bookings made</div></div>
+        <div class="stat"><span class="ico">🎯</span><div class="num" id="statLeads">–</div><div class="lbl">Leads captured</div></div>
+        <div class="stat"><span class="ico">📈</span><div class="num" id="statConv">–</div><div class="lbl">Calls → bookings</div></div>
       </div>
       <div class="card">
-        <h3>Bookings</h3>
-        <div id="bookingsBox"><div class="empty">No bookings yet.</div></div>
+        <h3>Activity — last 7 days</h3>
+        <div class="chart" id="chartBox"></div>
       </div>
-    </div>
-  </section>
-
-  <!-- ================= ONBOARDING ================= -->
-  <section id="onboard" class="onboard hidden">
-    <h2>Set up your AI receptionist</h2>
-    <div class="sub">Tell us about your business — your agent answers ONLY from what you enter here, and starts taking bookings immediately.</div>
-
-    <fieldset>
-      <legend>Business</legend>
-      <div class="pair">
-        <div><label class="f">Business name *</label><input type="text" id="bizName" placeholder="e.g. Lakshmi Beauty Salon"></div>
-        <div><label class="f">Phone</label><input type="text" id="bizPhone" placeholder="+91 …"></div>
+      <div class="grid2">
+        <div class="card">
+          <h3>Recent calls <button class="more" data-view="calls">view all →</button></h3>
+          <div id="recentCalls"></div>
+        </div>
+        <div class="card">
+          <h3>Recent bookings <button class="more" data-view="bookings">view all →</button></h3>
+          <div id="recentBookings"></div>
+        </div>
       </div>
-      <label class="f">Address</label>
-      <input type="text" id="bizAddress" placeholder="Street, area, city, pincode">
-      <label class="f">Timings (shown to customers)</label>
-      <input type="text" id="bizTimings" placeholder="e.g. Mon–Sat: 10:00 AM – 8:00 PM, Sunday closed">
-    </fieldset>
+    </section>
 
-    <fieldset>
-      <legend>Services &amp; prices *</legend>
-      <div id="serviceRows"></div>
-      <button type="button" class="addline" id="addService">＋ add another service</button>
-    </fieldset>
+    <!-- ============ CALLS ============ -->
+    <section class="view hidden" id="view-calls">
+      <div class="card"><h3>All calls</h3><div id="callsBox"></div></div>
+    </section>
 
-    <fieldset>
-      <legend>Frequently asked questions</legend>
-      <div id="faqRows"></div>
-      <button type="button" class="addline" id="addFaq">＋ add another question</button>
-    </fieldset>
+    <!-- ============ BOOKINGS ============ -->
+    <section class="view hidden" id="view-bookings">
+      <div class="card"><h3>All bookings</h3><div id="bookingsBox"></div></div>
+    </section>
 
-    <fieldset>
-      <legend>Policies</legend>
-      <label class="f">One per line (booking fees, cancellation rules, late policy…)</label>
-      <textarea id="bizPolicies" rows="3" placeholder="e.g. Booking fee of ₹100 is non-refundable"></textarea>
-      <label class="f">When the agent doesn't know an answer</label>
-      <textarea id="bizFallback" rows="2"></textarea>
-    </fieldset>
+    <!-- ============ LEADS ============ -->
+    <section class="view hidden" id="view-leads">
+      <div class="card"><h3>Leads to follow up</h3><div id="leadsBox"></div></div>
+    </section>
 
-    <fieldset>
-      <legend>Appointment slots</legend>
-      <label class="f">Days open for appointments</label>
-      <div class="days" id="dayBoxes"></div>
-      <label class="f">Appointment hours</label>
-      <div class="times">
-        <input type="time" id="r1start" value="10:00"> to <input type="time" id="r1end" value="13:00">
-        &nbsp;and&nbsp;
-        <input type="time" id="r2start" value="16:00"> to <input type="time" id="r2end" value="20:00">
-        <span>(leave the second range empty if not needed)</span>
-      </div>
-      <label class="f">One slot every</label>
-      <select class="plain" id="slotGap" style="max-width:140px">
-        <option value="15">15 minutes</option>
-        <option value="30" selected>30 minutes</option>
-        <option value="45">45 minutes</option>
-        <option value="60">60 minutes</option>
-      </select>
-    </fieldset>
+    <!-- ============ ONBOARDING ============ -->
+    <section class="view onboard hidden" id="view-onboard">
+      <h2>Set up your AI receptionist</h2>
+      <div class="sub">Tell us about your business — your agent answers ONLY from what you enter here, and starts taking calls and bookings immediately.</div>
 
-    <div class="formmsg" id="formMsg"></div>
-    <button class="btn big" id="createBtn">Create my AI receptionist →</button>
-    <button class="btn ghost big" id="cancelOnboard" style="margin-left:8px">Cancel</button>
-  </section>
-</main>
+      <fieldset>
+        <legend>Business</legend>
+        <div class="pair">
+          <div><label class="f">Business name *</label><input type="text" id="bizName" placeholder="e.g. Lakshmi Beauty Salon"></div>
+          <div><label class="f">Phone</label><input type="text" id="bizPhone" placeholder="+91 …"></div>
+        </div>
+        <label class="f">Address</label>
+        <input type="text" id="bizAddress" placeholder="Street, area, city, pincode">
+        <label class="f">Timings (shown to customers)</label>
+        <input type="text" id="bizTimings" placeholder="e.g. Mon–Sat: 10:00 AM – 8:00 PM, Sunday closed">
+      </fieldset>
 
-<!-- ================= TEST-CALL WIDGET ================= -->
+      <fieldset>
+        <legend>Services &amp; prices *</legend>
+        <div id="serviceRows"></div>
+        <button type="button" class="addline" id="addService">＋ add another service</button>
+      </fieldset>
+
+      <fieldset>
+        <legend>Frequently asked questions</legend>
+        <div id="faqRows"></div>
+        <button type="button" class="addline" id="addFaq">＋ add another question</button>
+      </fieldset>
+
+      <fieldset>
+        <legend>Policies</legend>
+        <label class="f">One per line (booking fees, cancellation rules, late policy…)</label>
+        <textarea id="bizPolicies" rows="3" placeholder="e.g. Booking fee of ₹100 is non-refundable"></textarea>
+        <label class="f">When the agent doesn't know an answer</label>
+        <textarea id="bizFallback" rows="2"></textarea>
+      </fieldset>
+
+      <fieldset>
+        <legend>Appointment slots</legend>
+        <label class="f">Days open for appointments</label>
+        <div class="days" id="dayBoxes"></div>
+        <label class="f">Appointment hours</label>
+        <div class="times">
+          <input type="time" id="r1start" value="10:00"> to <input type="time" id="r1end" value="13:00">
+          &nbsp;and&nbsp;
+          <input type="time" id="r2start" value="16:00"> to <input type="time" id="r2end" value="20:00">
+          <span>(leave the second range empty if not needed)</span>
+        </div>
+        <label class="f">One slot every</label>
+        <select class="plain" id="slotGap" style="max-width:140px">
+          <option value="15">15 minutes</option>
+          <option value="30" selected>30 minutes</option>
+          <option value="45">45 minutes</option>
+          <option value="60">60 minutes</option>
+        </select>
+      </fieldset>
+
+      <div class="formmsg" id="formMsg"></div>
+      <button class="btn big" id="createBtn">Create my AI receptionist →</button>
+      <button class="btn ghost big" id="cancelOnboard" style="margin-left:8px">Cancel</button>
+    </section>
+  </main>
+</div>
+
+<!-- ============ TEST-CALL WIDGET ============ -->
 <div class="overlay hidden" id="testOverlay">
   <div class="modal">
     <div class="modal-head">
+      <div class="avatar">🎙️</div>
       <div>
         <div class="title" id="modalBiz">Test call</div>
-        <div class="sub">You are the customer — your agent answers. Talk 🎙 or type.</div>
+        <div class="sub"><span class="dot"></span> AI receptionist · you are the customer</div>
       </div>
-      <button class="x" id="closeTest" title="End test call">✕</button>
+      <button class="x" id="closeTest">End call</button>
     </div>
     <div id="chat"></div>
     <div class="composer">
@@ -253,6 +344,7 @@ const $ = id => document.getElementById(id);
 let CLIENT = null;
 let SID = null;
 let busy = false;
+let DATA = { stats: null, calls: [], bookings: [], leads: [] };
 
 async function api(path, body) {
   const opts = body === undefined ? {} : {
@@ -262,8 +354,32 @@ async function api(path, body) {
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
   return res.json();
 }
+function toast(msg) {
+  const t = document.createElement("div"); t.className = "toast"; t.textContent = msg;
+  document.body.appendChild(t);
+  requestAnimationFrame(() => t.classList.add("show"));
+  setTimeout(() => { t.classList.remove("show"); setTimeout(() => t.remove(), 350); }, 2800);
+}
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
 
-/* ============ dashboard ============ */
+/* ============ view router ============ */
+const TITLES = { dashboard: "Dashboard", calls: "Calls", bookings: "Bookings",
+                 leads: "Leads", onboard: "Add a business" };
+function showView(name) {
+  for (const sec of document.querySelectorAll(".view")) sec.classList.add("hidden");
+  $("view-" + name).classList.remove("hidden");
+  $("viewTitle").textContent = TITLES[name];
+  for (const b of document.querySelectorAll(".nav button"))
+    b.classList.toggle("active", b.dataset.view === name);
+}
+document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => showView(b.dataset.view));
+
+/* ============ data loading + rendering ============ */
 function fmtWhen(iso) {
   const d = new Date(iso);
   return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) + ", " +
@@ -271,60 +387,132 @@ function fmtWhen(iso) {
 }
 function fmtDur(s) { return Math.floor(s / 60) + "m " + String(s % 60).padStart(2, "0") + "s"; }
 
-async function loadDashboard() {
+async function loadAll() {
   if (!CLIENT) return;
-  const [stats, calls, bookings] = await Promise.all([
-    api("/api/stats?client_id=" + CLIENT),
-    api("/api/calls?client_id=" + CLIENT),
-    api("/api/bookings?client_id=" + CLIENT),
+  const q = "?client_id=" + CLIENT;
+  [DATA.stats, DATA.calls, DATA.bookings, DATA.leads] = await Promise.all([
+    api("/api/stats" + q), api("/api/calls" + q), api("/api/bookings" + q), api("/api/leads" + q),
   ]);
-  $("statCalls").textContent = stats.calls;
-  $("statMinutes").textContent = stats.minutes;
-  $("statBookings").textContent = stats.bookings;
-  $("statConv").textContent = stats.conversion + "%";
+  renderAll();
+}
+function renderAll() {
+  const s = DATA.stats;
+  $("statCalls").textContent = s.calls;
+  $("statMinutes").textContent = s.minutes;
+  $("statBookings").textContent = s.bookings;
+  $("statLeads").textContent = s.leads;
+  $("statConv").textContent = s.conversion + "%";
+  renderChart(DATA.calls);
+  renderCalls($("recentCalls"), DATA.calls.slice(0, 4));
+  renderCalls($("callsBox"), DATA.calls);
+  renderBookings($("recentBookings"), DATA.bookings.slice(0, 5), true);
+  renderBookings($("bookingsBox"), DATA.bookings, false);
+  renderLeads($("leadsBox"), DATA.leads);
+}
 
-  const cb = $("callsBox");
+function renderChart(calls) {
+  const box = $("chartBox"); box.innerHTML = "";
+  const days = [];
+  for (let i = 6; i >= 0; i--) { const d = new Date(); d.setDate(d.getDate() - i); days.push(d); }
+  const counts = days.map(d => calls.filter(c => new Date(c.started).toDateString() === d.toDateString()).length);
+  const max = Math.max(1, ...counts);
+  days.forEach((d, i) => {
+    const col = el("div", "col" + (i === 6 ? " today" : ""));
+    col.title = counts[i] + " call" + (counts[i] === 1 ? "" : "s");
+    col.appendChild(el("div", "val", counts[i] || ""));
+    const bar = el("div", "bar");
+    bar.style.height = (counts[i] / max * 92) + "%";
+    col.appendChild(bar);
+    col.appendChild(el("div", "day", i === 6 ? "Today" : d.toLocaleDateString("en-IN", { weekday: "short" })));
+    box.appendChild(col);
+  });
+}
+
+function renderCalls(box, calls) {
+  box.innerHTML = "";
   if (!calls.length) {
-    cb.innerHTML = '<div class="empty">No calls yet — click “📞 Test your agent” to make the first one.</div>';
-  } else {
-    cb.innerHTML = "";
-    for (const c of calls) {
-      const det = document.createElement("details"); det.className = "call";
-      const sum = document.createElement("summary");
-      sum.innerHTML = '<span class="when"></span><span class="badge"></span><span class="meta"></span>';
-      sum.querySelector(".when").textContent = fmtWhen(c.started);
-      sum.querySelector(".badge").textContent = c.channel;
-      sum.querySelector(".meta").textContent = fmtDur(c.seconds) + " · " + c.turns + " turns";
-      const pre = document.createElement("pre"); pre.textContent = c.transcript.trim();
-      det.append(sum, pre); cb.appendChild(det);
-    }
+    box.appendChild(el("div", "empty", "No calls yet — click “📞 Test your agent” to make the first one."));
+    return;
   }
-
-  const bb = $("bookingsBox");
-  if (!bookings.length) {
-    bb.innerHTML = '<div class="empty">No bookings yet.</div>';
-  } else {
-    const t = document.createElement("table");
-    t.innerHTML = "<tr><th>Name</th><th>Phone</th><th>Service</th><th>When</th></tr>";
-    for (const r of bookings) {
-      const tr = document.createElement("tr");
-      for (const val of [r.name, r.phone, r.service, r.date + " " + r.time]) {
-        const td = document.createElement("td"); td.textContent = val; tr.appendChild(td);
-      }
-      t.appendChild(tr);
-    }
-    bb.innerHTML = ""; bb.appendChild(t);
+  for (const c of calls) {
+    const det = el("details", "call");
+    const sum = el("summary");
+    sum.appendChild(el("span", "when", fmtWhen(c.started)));
+    sum.appendChild(el("span", "badge", c.channel));
+    if (c.transcript.includes("book_appointment")) sum.appendChild(el("span", "badge", "📒 booked"));
+    else if (c.transcript.includes("save_lead")) sum.appendChild(el("span", "badge gray", "🎯 lead"));
+    sum.appendChild(el("span", "meta", fmtDur(c.seconds) + " · " + c.turns + " turns"));
+    det.appendChild(sum);
+    det.appendChild(renderTranscript(c.transcript));
+    box.appendChild(det);
   }
 }
 
-/* ============ clients / views ============ */
+function renderTranscript(text) {
+  const box = el("div", "tx");
+  let last = null;
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith("Customer:")) last = txRow(box, "cust", line.slice(9).trim());
+    else if (line.startsWith("Agent:")) last = txRow(box, "agent", line.slice(6).trim());
+    else if (line.startsWith("[tool")) { box.appendChild(el("div", "txchip", "🔧 " + line)); last = null; }
+    else if (last) last.querySelector(".t").textContent += "\n" + line;
+  }
+  return box;
+}
+function txRow(box, who, text) {
+  const row = el("div", "txrow " + who);
+  row.appendChild(el("span", "who", who === "cust" ? "Customer" : "Agent"));
+  row.appendChild(el("span", "t", text));
+  box.appendChild(row);
+  return row;
+}
+
+function renderBookings(box, rows, compact) {
+  box.innerHTML = "";
+  if (!rows.length) { box.appendChild(el("div", "empty", "No bookings yet.")); return; }
+  const t = el("table");
+  const head = compact ? ["Name", "Service", "When"]
+                       : ["Name", "Phone", "Service", "When", "Status"];
+  const tr = el("tr"); head.forEach(h => tr.appendChild(el("th", "", h))); t.appendChild(tr);
+  for (const r of rows) {
+    const row = el("tr");
+    const cells = compact ? [r.name, r.service, r.date + " " + r.time]
+                          : [r.name, r.phone, r.service, r.date + " " + r.time, r.status];
+    cells.forEach(v => row.appendChild(el("td", "", v)));
+    t.appendChild(row);
+  }
+  box.appendChild(t);
+}
+
+function renderLeads(box, rows) {
+  box.innerHTML = "";
+  if (!rows.length) {
+    box.appendChild(el("div", "empty",
+      "No leads yet. When a caller shows interest but doesn't book — wants to think, asks for a callback — " +
+      "your agent saves their name, number and what they wanted here, so you can follow up and win them back."));
+    return;
+  }
+  const t = el("table");
+  const tr = el("tr"); ["When", "Name", "Phone", "Interested in", "Note"].forEach(h => tr.appendChild(el("th", "", h))); t.appendChild(tr);
+  for (const r of rows) {
+    const row = el("tr");
+    [fmtWhen(r.timestamp), r.name || "—", r.phone, r.interest, r.note || "—"]
+      .forEach(v => row.appendChild(el("td", "", v)));
+    t.appendChild(row);
+  }
+  box.appendChild(t);
+}
+
+/* ============ clients ============ */
 async function loadClients(selectId) {
   const clients = await api("/api/clients");
   const sel = $("clientSelect");
   sel.innerHTML = "";
   for (const c of clients) {
-    const o = document.createElement("option");
-    o.value = c.client_id; o.textContent = c.business_name;
+    const o = el("option", "", c.business_name);
+    o.value = c.client_id;
     sel.appendChild(o);
   }
   if (clients.length) {
@@ -333,16 +521,12 @@ async function loadClients(selectId) {
   }
   return clients.length;
 }
-function showView(name) {
-  $("dashboard").classList.toggle("hidden", name !== "dashboard");
-  $("onboard").classList.toggle("hidden", name !== "onboard");
-}
 
 /* ============ onboarding form ============ */
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 function buildDayBoxes() {
   for (const d of DAYS) {
-    const lab = document.createElement("label");
+    const lab = el("label");
     const inp = document.createElement("input");
     inp.type = "checkbox"; inp.value = d; inp.checked = d !== "Sun";
     lab.append(inp, document.createTextNode(d));
@@ -350,18 +534,16 @@ function buildDayBoxes() {
   }
 }
 function addRow(holder, cls, fields) {
-  const row = document.createElement("div"); row.className = cls;
-  const inputs = fields.map(ph => {
-    const i = document.createElement("input"); i.type = "text"; i.placeholder = ph; return i;
+  const row = el("div", cls);
+  fields.forEach(ph => {
+    const i = document.createElement("input"); i.type = "text"; i.placeholder = ph; row.appendChild(i);
   });
-  const del = document.createElement("button"); del.type = "button"; del.className = "del"; del.textContent = "✕";
-  del.onclick = () => row.remove();
-  row.append(...inputs, del);
+  const del = el("button", "del", "✕"); del.type = "button"; del.onclick = () => row.remove();
+  row.appendChild(del);
   $(holder).appendChild(row);
 }
 const addServiceRow = () => addRow("serviceRows", "rowline", ["Service name", "Price (e.g. ₹500)"]);
 const addFaqRow = () => addRow("faqRows", "rowline2", ["Question customers ask", "The answer"]);
-
 function collectRows(holder) {
   return [...$(holder).children].map(r => [...r.querySelectorAll("input")].map(i => i.value.trim()));
 }
@@ -392,8 +574,9 @@ async function createBusiness() {
     const created = await api("/api/business", payload);
     await loadClients(created.client_id);
     showView("dashboard");
-    await loadDashboard();
-    openTest();  // let the owner meet their new receptionist right away
+    await loadAll();
+    toast("🎉 " + created.business_name + " is live — meet your receptionist!");
+    openTest();
   } catch (e) {
     msg.className = "formmsg err"; msg.textContent = "⚠ " + e.message;
   } finally {
@@ -403,19 +586,15 @@ async function createBusiness() {
 
 /* ============ test-call widget ============ */
 function addBubble(kind, text) {
-  const div = document.createElement("div");
-  div.className = "bubble " + kind; div.textContent = text;
+  const div = el("div", "bubble " + kind, text);
   $("chat").appendChild(div); $("chat").scrollTop = $("chat").scrollHeight;
   return div;
 }
 function addToolChip(tool) {
-  const div = document.createElement("div"); div.className = "tool-chip";
-  div.textContent = "🔧 " + tool.name + "(" + JSON.stringify(tool.args) + ")";
-  $("chat").appendChild(div);
+  $("chat").appendChild(el("div", "tool-chip", "🔧 " + tool.name + "(" + JSON.stringify(tool.args) + ")"));
 }
 function showTyping() {
-  const div = document.createElement("div");
-  div.className = "typing bubble agent"; div.id = "typing";
+  const div = el("div", "typing bubble agent"); div.id = "typing";
   div.innerHTML = "<i></i><i></i><i></i>";
   $("chat").appendChild(div); $("chat").scrollTop = $("chat").scrollHeight;
 }
@@ -428,7 +607,7 @@ async function openTest() {
   try {
     const s = await api("/api/session", { client_id: CLIENT });
     SID = s.session_id;
-    addBubble("note", "Test call started — this conversation will appear in your call history.");
+    addBubble("note", "Test call started — it will appear in your call history.");
     $("msgInput").focus();
   } catch (e) {
     addBubble("note", "⚠ " + e.message);
@@ -438,7 +617,7 @@ async function closeTest() {
   if (recorder) await toggleMic().catch(() => {});
   $("testOverlay").classList.add("hidden");
   SID = null;
-  loadDashboard();  // the call + any bookings show up immediately
+  loadAll();
 }
 
 async function handleResponse(r) {
@@ -448,6 +627,7 @@ async function handleResponse(r) {
     addBubble("agent", r.reply);
     if ($("voiceToggle").checked) speak(r.reply);
   }
+  loadAll();  // stats/history/leads update live behind the modal
 }
 async function runTurn(call) {
   busy = true; $("sendBtn").disabled = true; showTyping();
@@ -539,11 +719,11 @@ async function toggleMic() {
 }
 
 /* ============ wiring ============ */
-$("clientSelect").onchange = () => { CLIENT = $("clientSelect").value; loadDashboard(); };
+$("clientSelect").onchange = () => { CLIENT = $("clientSelect").value; loadAll(); };
 $("addBizBtn").onclick = () => showView("onboard");
 $("cancelOnboard").onclick = () => showView("dashboard");
 $("createBtn").onclick = createBusiness;
-$("testBtn").onclick = () => { if (CLIENT) { showView("dashboard"); openTest(); } };
+$("testBtn").onclick = () => { if (CLIENT) openTest(); };
 $("closeTest").onclick = closeTest;
 $("sendBtn").onclick = sendText;
 $("msgInput").addEventListener("keydown", e => { if (e.key === "Enter") sendText(); });
@@ -557,9 +737,9 @@ $("micBtn").onclick = toggleMic;
   $("addFaq").onclick = addFaqRow;
   $("bizFallback").value = "If unsure about anything, say the front desk will call back with exact details — never guess or invent prices.";
   const n = await loadClients();
-  if (n) { showView("dashboard"); loadDashboard(); }
+  if (n) { showView("dashboard"); await loadAll(); }
   else { showView("onboard"); }
-  setInterval(() => { if (!$("dashboard").classList.contains("hidden")) loadDashboard(); }, 15000);
+  setInterval(() => { if (!$("view-dashboard").classList.contains("hidden") && !SID) loadAll(); }, 20000);
 })();
 </script>
 </body>

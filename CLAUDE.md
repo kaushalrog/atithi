@@ -52,6 +52,20 @@ AI receptionist for Indian small service businesses (clinics, salons, coaching i
    so we can swap providers later by rewriting one file. The rest of the codebase must
    never import google-genai directly.
 
+## Architecture map
+
+- Channels (thin): main.py (terminal), voice_main.py (push-to-talk),
+  live_main.py (Gemini Live call), server.py + web/index.html (portal).
+- Core: agent.py — ReceptionistAgent, 3 tools (check_availability,
+  book_appointment, save_lead). Tools validate inputs and return errors the
+  model can act on (bad slot -> offers alternatives; short phone -> re-confirm).
+- Providers (one-file swaps): llm.py (ALL Gemini code: chat, STT, Live),
+  tts.py (ALL edge-tts code).
+- Persistence: storage.py (ALL disk I/O: bookings Sheet/CSV, leads.csv,
+  calls/<client_id>/*.json). Nothing else touches paths.
+- Tests: tests/ — pytest, no network/key needed (FakeLLM proves the llm seam).
+  Run `python -m pytest tests -q` after changes to core files.
+
 ## Tech stack
 
 Python 3.11+, google-genai SDK (model: `gemini-2.5-flash`, free tier), gspread +
