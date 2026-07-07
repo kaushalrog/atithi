@@ -31,6 +31,11 @@ from google.genai import errors, types
 load_dotenv()
 
 MODEL = "gemini-2.5-flash"
+
+
+class QuotaExhausted(Exception):
+    """The API key's DAILY free-tier quota is used up (resets at midnight
+    Pacific time). Retrying is pointless — upgrade to the paid tier or wait."""
 # "-latest" alias: tracks the newest 2.5 native-audio model so we don't chase
 # preview names as Google retires them (the 07-2025 half-cascade one is already gone).
 LIVE_MODEL = "gemini-2.5-flash-native-audio-latest"
@@ -155,7 +160,11 @@ class GeminiLLM:
                     model=self.model, contents=contents, config=config
                 )
             except errors.APIError as e:
-                # Free tier rate limit (429) or a transient server error (5xx):
+                # A DAILY quota that's used up won't recover in seconds — fail
+                # fast so callers can stop cleanly instead of burning minutes.
+                if e.code == 429 and "PerDay" in str(e):
+                    raise QuotaExhausted(str(e)) from e
+                # Per-minute rate limit (429) or a transient server error (5xx):
                 # wait a moment and try again instead of crashing the conversation.
                 retriable = e.code in (429, 500, 503)
                 if retriable and attempt < attempts - 1:
