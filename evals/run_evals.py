@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT))
 
 import storage  # noqa: E402
 from agent import ReceptionistAgent  # noqa: E402
+from llm import QuotaExhausted  # noqa: E402
 
 TELUGU = re.compile(r"[ఀ-౿]")
 
@@ -93,6 +94,11 @@ def evaluate(checks: dict, replies: list[str], tools_used: list[str], agent) -> 
 
 def main():
     scenarios = yaml.safe_load((ROOT / "evals" / "scenarios.yaml").read_text(encoding="utf-8"))
+    # Targeted rerun (saves scarce free-tier quota):
+    #   python evals\run_evals.py booking_happy_path telugu_customer
+    if len(sys.argv) > 1:
+        wanted = set(sys.argv[1:])
+        scenarios = [s for s in scenarios if s["name"] in wanted]
     workdir = Path(tempfile.mkdtemp(prefix="voxagent_evals_"))
     report = {"ran_at": dt.datetime.now().isoformat(timespec="seconds"), "scenarios": []}
     passed_scenarios = 0
@@ -101,6 +107,11 @@ def main():
     for scenario in scenarios:
         try:
             results, replies = run_scenario(scenario, workdir)
+        except QuotaExhausted:
+            print("ABORTED: the API key's DAILY free-tier quota is exhausted.")
+            print("Upgrade to the paid tier (ai.google.dev -> billing) or rerun tomorrow;")
+            print("finished scenarios above are still valid.")
+            break
         except Exception as e:
             results = [{"check": "scenario_crashed", "ok": False, "detail": f"{type(e).__name__}: {e}"}]
             replies = []
