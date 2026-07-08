@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 140" role="img" aria-label="VoxAgent logo">
+  <defs>
+    <linearGradient id="vx-g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14b8a6"/>
+      <stop offset="1" stop-color="#0ea5e9"/>
+    </linearGradient>
+    <linearGradient id="vx-t" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2dd4bf"/>
+      <stop offset="1" stop-color="#38bdf8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- mark: mic inside a rounded square, with sound waves -->
+  <rect x="10" y="10" width="120" height="120" rx="30" fill="url(#vx-g)"/>
+  <rect x="58" y="34" width="24" height="46" rx="12" fill="#ffffff"/>
+  <path d="M46 66a24 24 0 0 0 48 0" fill="none" stroke="#ffffff" stroke-width="9" stroke-linecap="round"/>
+  <line x1="70" y1="92" x2="70" y2="104" stroke="#ffffff" stroke-width="9" stroke-linecap="round"/>
+  <line x1="56" y1="104" x2="84" y2="104" stroke="#ffffff" stroke-width="9" stroke-linecap="round"/>
+  <path d="M104 52a26 26 0 0 1 0 36" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" opacity=".85"/>
+  <path d="M114 42a40 40 0 0 1 0 56" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" opacity=".5"/>
+
+  <!-- wordmark -->
+  <text x="158" y="88" font-family="Sora, Inter, 'Segoe UI', sans-serif" font-size="58"
+        font-weight="800" letter-spacing="-1" fill="url(#vx-t)">Vox<tspan fill="#e8eef8">Agent</tspan></text>
+  <text x="161" y="114" font-family="Inter, 'Segoe UI', sans-serif" font-size="15"
+        letter-spacing="5.5" fill="#8b99ad">AI RECEPTIONIST PLATFORM</text>
+</svg>

@@ -14,5 +14,10 @@ fastapi>=0.115.0
 uvicorn>=0.30.0
 python-multipart>=0.0.9   # multipart uploads (browser mic audio)
 
+# Phone system (Stage 3)
+twilio>=9.0.0             # webhook signature validation + outbound calls
+audioop-lts>=0.2.1        # phone-audio codecs (stdlib audioop removed in Py3.13)
+
 # Development
 pytest>=8.0.0             # run the test suite: python -m pytest tests -q
+httpx>=0.27.0             # FastAPI TestClient
