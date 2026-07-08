@@ -153,7 +153,7 @@ class GeminiLLM:
 
     # ---- the actual API call, with retries ----------------------------------
 
-    def _call_with_retry(self, contents, config, attempts=3):
+    def _call_with_retry(self, contents, config, attempts=4):
         for attempt in range(attempts):
             try:
                 return self.client.models.generate_content(
@@ -166,9 +166,11 @@ class GeminiLLM:
                     raise QuotaExhausted(str(e)) from e
                 # Per-minute rate limit (429) or a transient server error (5xx):
                 # wait a moment and try again instead of crashing the conversation.
+                # This key's free tier allows only 5 requests/min, so three
+                # waits of 20s guarantee we reach a fresh rate-limit minute.
                 retriable = e.code in (429, 500, 503)
                 if retriable and attempt < attempts - 1:
-                    wait = 15 if e.code == 429 else 2 * (attempt + 1)
+                    wait = 20 if e.code == 429 else 2 * (attempt + 1)
                     print(f"  [llm] API error {e.code}, retrying in {wait}s...")
                     time.sleep(wait)
                     continue
