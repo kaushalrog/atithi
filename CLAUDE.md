@@ -25,9 +25,13 @@ AI receptionist for Indian small service businesses (clinics, salons, coaching i
   transcripts (one JSON per call in calls/<client_id>/, gitignored), bookings
   table; and a test-call widget (browser mic + edge-tts replies) until Stage 3
   brings real numbers. This FastAPI app is the base for Stage 3 webhooks.
-- **Stage 3 (later):** Real phone number via Vapi or Pipecat+Plivo, inbound + outbound.
-  Blocked on the owner creating a telephony account (Vapi trial recommended first;
-  Indian numbers need business KYC via Exotel/Plivo — defer until a real client).
+- **Stage 3 (CODE-COMPLETE 2026-07-07):** Real phone calls via Twilio Media
+  Streams — telephony.py holds ALL Twilio code (inbound webhook -> TwiML
+  <Connect><Stream>, websocket audio bridge with mulaw 8k <-> PCM 16k/24k
+  conversion via audioop-lts, outbound calls from /admin, signature
+  validation, per-client number mapping via `twilio_number` in the YAML).
+  Waiting ONLY on the owner: Twilio account/number/keys + PUBLIC_BASE_URL in
+  .env (SETUP.md Part 3). Owner explicitly owns: telephony purchase + clients.
 - **Stage 4 (later):** Multilingual voices (Telugu/Hindi via Sarvam), parallel outbound campaigns.
 - **Stage 5 (later):** Dashboard for transcripts, extracted lead details, and bookings.
 

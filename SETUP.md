@@ -98,3 +98,78 @@ SHEET_ID=paste_the_sheet_id_here
 Done. Next booking lands in the sheet. If anything about Sheets fails, VoxAgent
 prints a warning and writes to `bookings.csv` instead — the conversation never
 breaks.
+
+---
+
+## Part 3: The phone system — Twilio (your part, ~30 minutes)
+
+Everything in the code is ready; you only add money and keys. When you finish
+this section, calling your Twilio number rings straight into the AI
+receptionist, and the admin console's "Call now" button starts working.
+
+### Step 1 — Twilio account and number
+
+1. Go to **https://www.twilio.com** → Sign up (free trial gives ~$15 credit).
+2. Verify your email and your own mobile number when asked.
+3. In the console click **Phone Numbers → Buy a number**. A **US number
+   (+1…)** costs ~$1.15/month and works instantly — start with that.
+   (Indian +91 numbers exist on Twilio but need regulatory documents from a
+   registered business — do that later, when you have a paying client.)
+4. Buy the number. Note it down.
+
+### Step 2 — copy your keys into .env
+
+On the Twilio Console home page you'll see **Account SID** and **Auth Token**.
+Put them in `.env`:
+
+```
+TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWILIO_AUTH_TOKEN=your_auth_token
+TWILIO_NUMBER=+1xxxxxxxxxx
+```
+
+### Step 3 — make your laptop reachable from the internet
+
+Twilio must be able to reach your server. Easiest way while testing — ngrok:
+
+1. Download from **https://ngrok.com/download**, sign up (free), and run the
+   `ngrok config add-authtoken ...` command they show you once.
+2. Start VoxAgent (`run.bat`), then in another terminal:
+   ```
+   ngrok http 8765
+   ```
+3. ngrok prints a line like `https://ab12cd34.ngrok-free.app` — copy it into `.env`:
+   ```
+   PUBLIC_BASE_URL=https://ab12cd34.ngrok-free.app
+   ```
+4. Restart VoxAgent so it reads the new `.env`.
+
+(The free ngrok URL changes every restart — update `.env` when it does. For a
+permanent URL later: an ngrok paid domain, or host the server on a cloud VM.)
+
+### Step 4 — point the number at VoxAgent
+
+1. Twilio console → **Phone Numbers → Manage → Active numbers** → click your number.
+2. Under **Voice Configuration → A call comes in**, choose **Webhook** and paste:
+   ```
+   https://YOUR-NGROK-URL/twilio/voice
+   ```
+   Method: **HTTP POST**. Save.
+
+### Step 5 — call it!
+
+Ring your Twilio number from your phone. The AI receptionist answers, books,
+and everything appears on the dashboard as channel "phone". Outbound: open
+`/admin` → "Place an outbound call".
+
+**Which business answers?** Add the number to that client's YAML:
+```yaml
+twilio_number: "+1xxxxxxxxxx"
+```
+Numbers not mapped to any business go to `DEFAULT_CLIENT` from `.env`.
+One number per business — each new client gets their own Twilio number
+(~$1.15/month each).
+
+**Trial-account limits:** until you upgrade the Twilio account, it can only
+call/receive from phone numbers you have verified in the console, and plays a
+short trial notice before connecting. Upgrading (adding a card) removes both.

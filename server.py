@@ -29,12 +29,14 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
 import storage
+import telephony
 from agent import ReceptionistAgent
 from tts import EdgeTTS
 
 BASE_DIR = Path(__file__).resolve().parent
 
 app = FastAPI(title="VoxAgent")
+app.include_router(telephony.router)  # /twilio/voice + /twilio/stream (phone calls)
 tts = EdgeTTS()
 
 # One test-call session = one agent + one call-log entry. In memory only; the
@@ -73,6 +75,11 @@ class TTSRequest(BaseModel):
 
 class AdminLoginRequest(BaseModel):
     password: str
+
+
+class OutboundCallRequest(BaseModel):
+    client_id: str
+    to: str
 
 
 class ServiceItem(BaseModel):
@@ -216,7 +223,20 @@ def admin_overview():
         "booked": "book_appointment" in c["transcript"],
         "lead": "save_lead" in c["transcript"],
     } for c in all_calls[:12]]
-    return {"totals": totals, "clients": clients, "recent_calls": recent}
+    return {"totals": totals, "clients": clients, "recent_calls": recent,
+            "twilio_configured": telephony.is_configured()}
+
+
+@app.post("/api/admin/call", dependencies=[Depends(require_admin)])
+def admin_outbound_call(req: OutboundCallRequest):
+    """Ring a customer's number; the agent takes the call when they answer."""
+    try:
+        sid = telephony.start_outbound_call(req.client_id, req.to)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Twilio error: {e}")
+    return {"ok": True, "call_sid": sid}
 
 
 # ---------- pages & business management ----------------------------------------
@@ -229,6 +249,14 @@ def index():
 @app.get("/admin", response_class=HTMLResponse)
 def admin_page():
     return (BASE_DIR / "web" / "admin.html").read_text(encoding="utf-8")
+
+
+@app.get("/logo.svg")
+def logo():
+    return Response(
+        content=(BASE_DIR / "web" / "logo.svg").read_bytes(),
+        media_type="image/svg+xml",
+    )
 
 
 @app.get("/api/clients")
@@ -352,6 +380,18 @@ def leads(client_id: str):
     return list(reversed(storage.read_leads(client_id)))
 
 
+@app.get("/api/phone_status")
+def phone_status(client_id: str):
+    """Is the phone line live for this business? Shown on the client dashboard."""
+    path = BASE_DIR / "clients" / f"{client_id}.yaml"
+    number = None
+    if path.exists():
+        with open(path, encoding="utf-8") as f:
+            number = yaml.safe_load(f).get("twilio_number")
+    number = number or telephony.twilio_config()["number"] or None
+    return {"connected": telephony.is_configured() and bool(number), "number": number}
+
+
 @app.get("/api/transcript/{session_id}")
 def transcript(session_id: str):
     agent = get_session(session_id)["agent"]
@@ -366,6 +406,8 @@ def main():
 
     parser = argparse.ArgumentParser(description="VoxAgent business portal")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="use 0.0.0.0 when hosting publicly / behind ngrok")
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
 
@@ -373,7 +415,7 @@ def main():
     if not args.no_browser:
         threading.Timer(1.5, webbrowser.open, args=(url,)).start()
     print(f"VoxAgent portal: {url}")
-    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 
 if __name__ == "__main__":

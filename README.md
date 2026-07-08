@@ -1,3 +1,5 @@
+<p align="center"><img src="web/logo.svg" width="380" alt="VoxAgent"></p>
+
 # VoxAgent
 
 An AI receptionist for Indian small service businesses — clinics, salons,
@@ -139,6 +141,7 @@ vox agent/
 ├── voice_main.py           # Stage 2: push-to-talk voice wrapper around the SAME agent
 ├── live_main.py            # Stage 2.5: real-time interruptible call (Gemini Live API)
 ├── server.py               # business-portal backend: FastAPI over the SAME agent
+├── telephony.py            # ALL Twilio code: inbound webhook, audio bridge, outbound
 ├── web/
 │   ├── index.html          # client portal — onboarding, dashboard, test-call widget
 │   └── admin.html          # platform owner's console (/admin, password-protected)
@@ -167,7 +170,25 @@ vox agent/
 | 1 | Text receptionist with auto-booking | ✅ done |
 | 2 | Mic input (Gemini STT) + voice output (edge-tts) | ✅ done |
 | 2.5 | Real-time interruptible voice call (Gemini Live API) | ✅ done |
-| 2.75 | Business portal: onboarding, dashboard (calls/minutes/bookings), test-call widget | ✅ done |
-| 3 | Real phone number (Vapi or Pipecat+Plivo), inbound + outbound | later |
+| 2.75 | Business portal + admin console + evals | ✅ done |
+| 3 | Real phone calls via Twilio, inbound + outbound | ✅ code-complete — needs keys |
 | 4 | Multilingual voices (Telugu/Hindi via Sarvam), outbound campaigns | later |
-| 5 | Dashboard: transcripts, extracted leads, bookings | later |
+| 5 | Dashboard: transcripts, extracted leads, bookings | ✅ pulled early into 2.75 |
+
+## Launch checklist (the founder's parts)
+
+Everything below is the ONLY work left before real customers can call:
+
+1. **Gemini paid tier** — aistudio.google.com → enable billing. The free key
+   allows ~20 requests/day; one real conversation costs roughly ₹1–2 paid.
+2. **Twilio** — account + number + 4 keys in `.env` (SETUP.md Part 3, ~30 min).
+3. **Keep the server reachable** — ngrok while testing; a small cloud VM
+   (`python server.py --host 0.0.0.0`) when going permanent.
+4. **Clients** — onboard each one in the portal, put their Twilio number in
+   their YAML, hand them their dashboard.
+
+Capacity as built: each phone call is an independent async session; the
+practical ceiling is your Gemini tier's concurrent Live sessions (free: 3,
+paid tier 1: ~50 simultaneous calls). Storage is CSV/JSON — fine for pilot
+scale; when a client crosses hundreds of calls/day, storage.py is the single
+file that swaps to a database.

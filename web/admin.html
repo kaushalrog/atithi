@@ -131,6 +131,20 @@
     <h3>Latest calls across the platform</h3>
     <div id="recentBox"></div>
   </div>
+
+  <div class="card">
+    <h3>Place an outbound call <span class="pill" id="twilioPill">checking…</span></h3>
+    <p class="dim" style="margin:0 0 14px; font-size:.88rem; line-height:1.6">
+      The agent rings the number and speaks for the selected business — use it for
+      callbacks to leads or appointment reminders.</p>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+      <select id="callClient" style="background:rgba(255,255,255,.05);color:var(--ink);border:1px solid var(--border);border-radius:11px;padding:10px 13px;font:inherit;"></select>
+      <input type="text" id="callTo" placeholder="+91 98765 43210"
+             style="background:rgba(255,255,255,.05);color:var(--ink);border:1px solid var(--border);border-radius:11px;padding:10px 13px;font:inherit;min-width:200px;">
+      <button class="btn primary" id="callBtn">📞 Call now</button>
+    </div>
+    <div class="dim" id="callMsg" style="margin-top:12px; font-size:.88rem; min-height:1.3em;"></div>
+  </div>
 </main>
 
 <script>
@@ -206,6 +220,14 @@ async function showConsole() {
     cb.appendChild(t);
   }
 
+  const pill = $("twilioPill");
+  pill.textContent = data.twilio_configured ? "phone system connected" : "not connected — add Twilio keys in .env";
+  pill.className = "pill " + (data.twilio_configured ? "booked" : "lead");
+  const sel = $("callClient"); sel.innerHTML = "";
+  for (const c of data.clients) {
+    const o = el("option", "", c.business_name); o.value = c.client_id; sel.appendChild(o);
+  }
+
   const rb = $("recentBox"); rb.innerHTML = "";
   if (!data.recent_calls.length) {
     rb.appendChild(el("div", "empty", "No calls yet anywhere on the platform."));
@@ -229,6 +251,21 @@ async function showConsole() {
     rb.appendChild(t);
   }
 }
+
+async function placeCall() {
+  const msg = $("callMsg");
+  msg.textContent = "Dialling…";
+  const res = await fetch("/api/admin/call", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Admin-Key": sessionStorage.getItem(KEY) || "" },
+    body: JSON.stringify({ client_id: $("callClient").value, to: $("callTo").value.trim() }),
+  });
+  const data = await res.json().catch(() => ({}));
+  msg.textContent = res.ok
+    ? "✓ Ringing — the call will appear in the history when it ends. (SID " + data.call_sid + ")"
+    : "⚠ " + (data.detail || "Call failed");
+}
+$("callBtn").onclick = placeCall;
 
 $("loginBtn").onclick = login;
 $("pw").addEventListener("keydown", e => { if (e.key === "Enter") login(); });
