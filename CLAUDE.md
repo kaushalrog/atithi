@@ -67,9 +67,11 @@ AI receptionist for Indian small service businesses (clinics, salons, coaching i
   tts.py (ALL edge-tts code).
 - Persistence: storage.py (ALL disk I/O: bookings Sheet/CSV, leads.csv,
   calls/<client_id>/*.json). Nothing else touches paths.
-- Admin: /admin (web/admin.html) — platform-wide console for the owner,
-  gated by ADMIN_PASSWORD in .env via X-Admin-Key header. Client logins with
-  per-client isolation are still TODO (deployment stage).
+- Access control: per-business codes (access_key in each client YAML,
+  X-Client-Key header) lock owners to their own data; ADMIN_PASSWORD
+  (X-Admin-Key) opens everything. Portal has a login gate; /admin
+  (web/admin.html) is the platform console with system-status checks and
+  the business-code list.
 - Tests: tests/ — pytest, no network/key needed (FakeLLM proves the llm seam).
   Run `python -m pytest tests -q` after changes to core files.
 

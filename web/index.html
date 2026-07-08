@@ -266,9 +266,34 @@
     .nav button { justify-content: center; padding: 12px 0; }
     .addbiz .txt { display: none; }
   }
+
+  /* ---- login gate ---- */
+  .gatewrap { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center;
+              justify-content: center; background:
+                radial-gradient(900px 500px at 85% -10%, rgba(14,165,233,.13), transparent 60%),
+                radial-gradient(700px 500px at -10% 110%, rgba(20,184,166,.10), transparent 60%),
+                var(--bg); }
+  .gatebox { width: min(420px, 92vw); text-align: center; }
+  .gatebox img { width: 280px; max-width: 80%; margin-bottom: 26px; }
+  .gatebox p { color: var(--muted); line-height: 1.65; margin: 0 0 22px; }
+  .gatebox input { width: 100%; text-align: center; font-size: 1.05rem; padding: 13px 15px; margin-bottom: 12px; }
+  .gatebox .err { color: var(--danger); font-size: .88rem; min-height: 1.3em; margin-top: 10px; }
+  .bizlabel { font-weight: 700; font-size: .95rem; }
 </style>
 </head>
 <body>
+
+<!-- ================= login gate ================= -->
+<div class="gatewrap" id="gate">
+  <div class="gatebox">
+    <img src="/logo.svg" alt="VoxAgent">
+    <p>Enter your <b>business code</b> to see your receptionist's dashboard.<br>
+       (Platform admin? Use your admin password.)</p>
+    <input type="password" id="gateKey" placeholder="e.g. VX-84KQ2N" autocomplete="off">
+    <button class="btn big" id="gateBtn" style="width:100%; justify-content:center;">Open my dashboard</button>
+    <div class="err" id="gateErr"></div>
+  </div>
+</div>
 
 <aside class="side">
   <div class="brand">
@@ -304,7 +329,9 @@
     <h1 id="viewTitle">Dashboard</h1>
     <span class="datechip" id="dateChip"></span>
     <div class="spacer"></div>
+    <span class="bizlabel hidden" id="bizLabel"></span>
     <select id="clientSelect" title="Your business" autocomplete="off"></select>
+    <button class="btn ghost" id="logoutBtn" title="Log out">⎋</button>
     <button class="btn" id="testBtn">
       <svg class="ic" viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.13 1 .37 2 .72 2.9a2 2 0 0 1-.45 2.1L8.1 10a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.45c.94.35 1.9.6 2.9.72A2 2 0 0 1 22 16.9z"/></svg>
       Test your agent</button>
@@ -460,19 +487,30 @@ let SID = null;
 let busy = false;
 let DATA = { stats: null, calls: [], bookings: [], leads: [] };
 
+// AUTH: {mode:"admin", key} sees every business; {mode:"client", key, client_id}
+// is locked to one. Stored for the tab only — closing it logs out.
+let AUTH = null;
+function authHeaders() {
+  if (!AUTH) return {};
+  return AUTH.mode === "admin" ? { "X-Admin-Key": AUTH.key } : { "X-Client-Key": AUTH.key };
+}
+
 async function api(path, body) {
-  const opts = body === undefined ? {} : {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-  };
+  const opts = { headers: authHeaders() };
+  if (body !== undefined) {
+    opts.method = "POST";
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
   const res = await fetch(path, opts);
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
   return res.json();
 }
-function toast(msg) {
+function toast(msg, ms = 3000) {
   const t = document.createElement("div"); t.className = "toast"; t.textContent = msg;
   document.body.appendChild(t);
   requestAnimationFrame(() => t.classList.add("show"));
-  setTimeout(() => { t.classList.remove("show"); setTimeout(() => t.remove(), 350); }, 3000);
+  setTimeout(() => { t.classList.remove("show"); setTimeout(() => t.remove(), 350); }, ms);
 }
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -738,7 +776,8 @@ async function createBusiness() {
     await loadClients(created.client_id);
     showView("dashboard");
     await loadAll();
-    toast("🎉 " + created.business_name + " is live — meet your receptionist!");
+    toast("🎉 " + created.business_name + " is live! Owner's business code: " +
+          created.access_key + " (also shown in your admin console)", 9000);
     openTest();
   } catch (e) {
     msg.className = "formmsg err"; msg.textContent = "⚠ " + e.message;
@@ -883,7 +922,56 @@ async function toggleMic() {
   });
 }
 
+/* ============ login gate ============ */
+async function gateSubmit() {
+  const key = $("gateKey").value.trim();
+  $("gateErr").textContent = "";
+  if (!key) return;
+  // Try admin first, then a business code.
+  let res = await fetch("/api/admin/login", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: key }),
+  });
+  if (res.ok) {
+    AUTH = { mode: "admin", key };
+  } else {
+    res = await fetch("/api/portal/login", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ access_key: key }),
+    });
+    if (!res.ok) {
+      $("gateErr").textContent = "That code doesn't match any business — check it and try again.";
+      return;
+    }
+    const who = await res.json();
+    AUTH = { mode: "client", key, client_id: who.client_id, business_name: who.business_name };
+  }
+  sessionStorage.setItem("voxagent_auth", JSON.stringify(AUTH));
+  $("gate").classList.add("hidden");
+  await boot();
+}
+
+async function boot() {
+  if (AUTH.mode === "admin") {
+    const n = await loadClients();
+    if (n) { showView("dashboard"); await loadAll(); }
+    else { showView("onboard"); }
+  } else {
+    // Business owner: locked to their own business, no switcher, no onboarding.
+    CLIENT = AUTH.client_id;
+    $("clientSelect").classList.add("hidden");
+    $("addBizBtn").classList.add("hidden");
+    $("bizLabel").classList.remove("hidden");
+    $("bizLabel").textContent = AUTH.business_name;
+    showView("dashboard");
+    await loadAll();
+  }
+}
+
 /* ============ wiring ============ */
+$("gateBtn").onclick = gateSubmit;
+$("gateKey").addEventListener("keydown", e => { if (e.key === "Enter") gateSubmit(); });
+$("logoutBtn").onclick = () => { sessionStorage.removeItem("voxagent_auth"); location.reload(); };
 $("clientSelect").onchange = () => { CLIENT = $("clientSelect").value; loadAll(); };
 $("addBizBtn").onclick = () => showView("onboard");
 $("cancelOnboard").onclick = () => showView("dashboard");
@@ -903,10 +991,18 @@ $("micBtn").onclick = toggleMic;
   $("addService").onclick = addServiceRow;
   $("addFaq").onclick = addFaqRow;
   $("bizFallback").value = "If unsure about anything, say the front desk will call back with exact details — never guess or invent prices.";
-  const n = await loadClients();
-  if (n) { showView("dashboard"); await loadAll(); }
-  else { showView("onboard"); }
-  setInterval(() => { if (!$("view-dashboard").classList.contains("hidden") && !SID) loadAll(); }, 20000);
+  const saved = sessionStorage.getItem("voxagent_auth");
+  if (saved) {
+    AUTH = JSON.parse(saved);
+    $("gate").classList.add("hidden");
+    try { await boot(); }
+    catch (e) { sessionStorage.removeItem("voxagent_auth"); location.reload(); }
+  } else {
+    $("gateKey").focus();
+  }
+  setInterval(() => {
+    if (AUTH && !$("view-dashboard").classList.contains("hidden") && !SID) loadAll();
+  }, 20000);
 })();
 </script>
 </body>

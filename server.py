@@ -17,6 +17,7 @@ import argparse
 import datetime as dt
 import os
 import re
+import secrets
 import tempfile
 import threading
 import uuid
@@ -77,6 +78,10 @@ class AdminLoginRequest(BaseModel):
     password: str
 
 
+class PortalLoginRequest(BaseModel):
+    access_key: str
+
+
 class OutboundCallRequest(BaseModel):
     client_id: str
     to: str
@@ -104,6 +109,32 @@ class BusinessRequest(BaseModel):
     slot_days: list[str] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
     slot_ranges: list[list[str]] = [["10:00", "13:00"], ["16:00", "20:00"]]
     slot_gap_min: int = 30
+
+
+# ---------- access control -------------------------------------------------------
+#
+# Simple on purpose: every business has one access code (its "business code",
+# generated at onboarding, stored in its YAML). The owner types the code once;
+# the platform admin's password opens everything. No emails, no password
+# resets — the right amount of security for a pilot, and the shape real
+# accounts will slot into later.
+
+def client_access_key(client_id: str) -> str | None:
+    path = BASE_DIR / "clients" / f"{client_id}.yaml"
+    if not path.exists():
+        return None
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f).get("access_key")
+
+
+def authorize_client(client_id: str, client_key: str | None, admin_key: str | None):
+    admin_password = os.getenv("ADMIN_PASSWORD", "")
+    if admin_password and admin_key == admin_password:
+        return
+    expected = client_access_key(client_id)
+    if expected and client_key == expected:
+        return
+    raise HTTPException(status_code=401, detail="Not authorized for this business")
 
 
 # ---------- helpers ------------------------------------------------------------
@@ -199,6 +230,7 @@ def admin_overview():
         clients.append({
             "client_id": client_id,
             "business_name": cfg.get("business_name", client_id),
+            "access_key": cfg.get("access_key", "—"),
             "phone": cfg.get("phone", ""),
             "calls": len(calls),
             "minutes": minutes,
@@ -224,7 +256,12 @@ def admin_overview():
         "lead": "save_lead" in c["transcript"],
     } for c in all_calls[:12]]
     return {"totals": totals, "clients": clients, "recent_calls": recent,
-            "twilio_configured": telephony.is_configured()}
+            "twilio_configured": telephony.is_configured(),
+            "status": {
+                "gemini_key": bool(os.getenv("GEMINI_API_KEY")),
+                "twilio": telephony.is_configured(),
+                "sheets": bool(os.getenv("SHEET_ID")),
+            }}
 
 
 @app.post("/api/admin/call", dependencies=[Depends(require_admin)])
@@ -259,7 +296,7 @@ def logo():
     )
 
 
-@app.get("/api/clients")
+@app.get("/api/clients", dependencies=[Depends(require_admin)])
 def list_clients():
     out = []
     for path in sorted((BASE_DIR / "clients").glob("*.yaml")):
@@ -270,7 +307,21 @@ def list_clients():
     return out
 
 
-@app.post("/api/business")
+@app.post("/api/portal/login")
+def portal_login(req: PortalLoginRequest):
+    """A business owner logs in with their business code."""
+    code = req.access_key.strip()
+    if code:
+        for path in sorted((BASE_DIR / "clients").glob("*.yaml")):
+            with open(path, encoding="utf-8") as f:
+                cfg = yaml.safe_load(f)
+            if cfg.get("access_key") and cfg["access_key"] == code:
+                return {"client_id": path.stem,
+                        "business_name": cfg.get("business_name", path.stem)}
+    raise HTTPException(status_code=401, detail="That code doesn't match any business")
+
+
+@app.post("/api/business", dependencies=[Depends(require_admin)])
 def create_business(req: BusinessRequest):
     services = [s for s in req.services if s.name.strip()]
     if not req.business_name.strip() or not services:
@@ -283,6 +334,8 @@ def create_business(req: BusinessRequest):
 
     config = {
         "client_id": client_id,
+        # The owner's login code — shown once to the admin at creation.
+        "access_key": "VX-" + secrets.token_hex(3).upper(),
         "business_name": req.business_name.strip(),
         "address": req.address.strip(),
         "phone": req.phone.strip(),
@@ -295,13 +348,17 @@ def create_business(req: BusinessRequest):
     }
     with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(config, f, allow_unicode=True, sort_keys=False)
-    return {"client_id": client_id, "business_name": config["business_name"]}
+    return {"client_id": client_id, "business_name": config["business_name"],
+            "access_key": config["access_key"]}
 
 
 # ---------- talking to the agent (the Test-agent widget) ------------------------
 
 @app.post("/api/session")
-def create_session(req: SessionRequest):
+def create_session(req: SessionRequest,
+                   x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+                   x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
+    authorize_client(req.client_id, x_client_key, x_admin_key)
     purge_idle_sessions()
     try:
         agent = ReceptionistAgent(req.client_id)
@@ -319,9 +376,21 @@ def create_session(req: SessionRequest):
     return {"session_id": session_id, "business_name": agent.config["business_name"]}
 
 
+FRONT_DESK_LINE = ("Sorry, our line is very busy right now — the front desk "
+                   "will call you back shortly.")
+
+
 @app.post("/api/chat")
 def chat(req: ChatRequest):
-    return run_turn(get_session(req.session_id), req.message)
+    session = get_session(req.session_id)
+    # A model outage or rate limit must never show the customer an error page.
+    try:
+        return run_turn(session, req.message)
+    except Exception as e:
+        print(f"  [chat] degraded reply for {session['client_id']}: {type(e).__name__}: {e}")
+        session["agent"].history.append({"role": "user", "text": req.message})
+        session["agent"].history.append({"role": "assistant", "text": FRONT_DESK_LINE})
+        return {"reply": FRONT_DESK_LINE, "tools": [], "degraded": True}
 
 
 @app.post("/api/voice")
@@ -350,7 +419,10 @@ def speak(req: TTSRequest):
 # ---------- dashboard data -------------------------------------------------------
 
 @app.get("/api/stats")
-def stats(client_id: str):
+def stats(client_id: str,
+          x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+          x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
+    authorize_client(client_id, x_client_key, x_admin_key)
     calls = storage.read_call_logs(client_id)
     n_calls = len(calls)
     # Conversion = share of calls that produced a booking. Each call's transcript
@@ -366,23 +438,35 @@ def stats(client_id: str):
 
 
 @app.get("/api/calls")
-def calls(client_id: str):
+def calls(client_id: str,
+          x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+          x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
+    authorize_client(client_id, x_client_key, x_admin_key)
     return storage.read_call_logs(client_id)
 
 
 @app.get("/api/bookings")
-def bookings(client_id: str):
+def bookings(client_id: str,
+             x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+             x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
+    authorize_client(client_id, x_client_key, x_admin_key)
     return list(reversed(storage.read_bookings(client_id)))  # newest first
 
 
 @app.get("/api/leads")
-def leads(client_id: str):
+def leads(client_id: str,
+          x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+          x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
+    authorize_client(client_id, x_client_key, x_admin_key)
     return list(reversed(storage.read_leads(client_id)))
 
 
 @app.get("/api/phone_status")
-def phone_status(client_id: str):
+def phone_status(client_id: str,
+                 x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+                 x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
     """Is the phone line live for this business? Shown on the client dashboard."""
+    authorize_client(client_id, x_client_key, x_admin_key)
     path = BASE_DIR / "clients" / f"{client_id}.yaml"
     number = None
     if path.exists():

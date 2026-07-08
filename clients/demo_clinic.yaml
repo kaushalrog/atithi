@@ -6,6 +6,7 @@
 # as a date object and 10:00 as the number 600 (base-60!). Quoting keeps them strings.
 
 client_id: demo_clinic
+access_key: VX-84KQ2N   # the owner's login code for the portal
 business_name: Sri Balaji Dental Care
 address: "2nd Floor, 45 D.B. Road, R.S. Puram, Coimbatore - 641002 (above Aravind Pharmacy, opposite Kikani School)"
 phone: "+91 98430 12345"
