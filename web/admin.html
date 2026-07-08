@@ -114,6 +114,8 @@
 
 <!-- console -->
 <main class="hidden" id="console">
+  <div class="card" id="statusCard" style="display:flex; gap:26px; flex-wrap:wrap; padding:14px 20px; margin-bottom:16px;">
+  </div>
   <div class="stats">
     <div class="stat"><div class="num" id="tClients">–</div><div class="lbl">Businesses onboarded</div></div>
     <div class="stat"><div class="num" id="tCalls">–</div><div class="lbl">Total calls handled</div></div>
@@ -202,7 +204,7 @@ async function showConsole() {
   } else {
     const t = el("table");
     const tr = el("tr");
-    ["Business", "Calls", "Minutes", "Bookings", "Leads", "Last activity", ""].forEach(h => tr.appendChild(el("th", "", h)));
+    ["Business", "Business code", "Calls", "Minutes", "Bookings", "Leads", "Last activity", ""].forEach(h => tr.appendChild(el("th", "", h)));
     t.appendChild(tr);
     for (const c of data.clients) {
       const row = el("tr");
@@ -210,6 +212,11 @@ async function showConsole() {
       const idLine = el("div", "dim", c.client_id); idLine.style.fontSize = ".76rem"; idLine.style.fontWeight = "400";
       name.appendChild(idLine);
       row.appendChild(name);
+      const code = el("td");
+      const pillEl = el("span", "pill", c.access_key);
+      pillEl.title = "The owner logs into their dashboard with this code";
+      code.appendChild(pillEl);
+      row.appendChild(code);
       [c.calls, c.minutes, c.bookings, c.leads].forEach(v => row.appendChild(el("td", "", String(v))));
       row.appendChild(el("td", "dim", fmtWhen(c.last_activity)));
       const link = el("td");
@@ -218,6 +225,23 @@ async function showConsole() {
       t.appendChild(row);
     }
     cb.appendChild(t);
+  }
+
+  const sc = $("statusCard"); sc.innerHTML = "";
+  const items = [
+    ["Gemini AI key", data.status.gemini_key, "the agent's brain"],
+    ["Phone system (Twilio)", data.status.twilio, "add keys in .env — SETUP.md Part 3"],
+    ["Google Sheets", data.status.sheets, "optional — bookings fall back to CSV"],
+  ];
+  for (const [name, ok, hint] of items) {
+    const d = el("div", "", "");
+    d.style.cssText = "display:flex;align-items:center;gap:9px;font-size:.9rem;";
+    d.appendChild(el("span", "", ok ? "🟢" : "🔴"));
+    const label = el("span", "", name);
+    label.style.fontWeight = "650";
+    d.appendChild(label);
+    if (!ok) { const h = el("span", "dim", "· " + hint); h.style.fontSize = ".8rem"; d.appendChild(h); }
+    sc.appendChild(d);
   }
 
   const pill = $("twilioPill");

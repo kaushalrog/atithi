@@ -99,9 +99,15 @@ every business on the platform with per-client calls/minutes/bookings/leads,
 platform totals, and the latest calls across all clients. The client portal is
 what a business owner sees; the admin console is what YOU see.
 
-Note on access today: the client portal has no per-client logins yet, so
-locally it shows all businesses in its dropdown. Real client accounts (each
-owner sees only their own business) arrive with public deployment.
+## Who sees what (access model)
+
+- Each business has a **business code** (e.g. `VX-84KQ2N`), generated at
+  onboarding and listed in your admin console. An owner enters their code on
+  the portal and sees ONLY their business — no switcher, no other clients.
+- **Your admin password** (in `.env`) opens everything: all businesses in the
+  portal, plus the `/admin` console.
+- Codes live in each client's YAML (`access_key:`); server-side checks reject
+  any request for another business's data (401).
 
 ## Architecture
 
@@ -185,7 +191,8 @@ Everything below is the ONLY work left before real customers can call:
 3. **Keep the server reachable** — ngrok while testing; a small cloud VM
    (`python server.py --host 0.0.0.0`) when going permanent.
 4. **Clients** — onboard each one in the portal, put their Twilio number in
-   their YAML, hand them their dashboard.
+   their YAML, and hand them their **business code** (from the admin console)
+   so they can open their own dashboard.
 
 Capacity as built: each phone call is an independent async session; the
 practical ceiling is your Gemini tier's concurrent Live sessions (free: 3,
