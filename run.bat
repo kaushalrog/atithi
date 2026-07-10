@@ -2,6 +2,7 @@
 rem VoxAgent — double-click = the web portal opens in your browser.
 rem The server runs minimized in the background; close its window to stop.
 rem Other modes from a terminal:  run.bat text | voice | live | live-hd | web
+rem     run.bat phone   = go LIVE on the phone network (tunnel + webhook + server)
 setlocal
 cd /d "%~dp0"
 
@@ -18,11 +19,12 @@ if "%MODE%"=="web" (
     start "VoxAgent server" /min ".venv\Scripts\python.exe" server.py
     exit /b
 )
+if "%MODE%"=="phone"   ".venv\Scripts\python.exe" go_live.py & goto end
 if "%MODE%"=="text"    ".venv\Scripts\python.exe" main.py & goto end
 if "%MODE%"=="voice"   ".venv\Scripts\python.exe" voice_main.py & goto end
 if "%MODE%"=="live"    ".venv\Scripts\python.exe" live_main.py & goto end
 if "%MODE%"=="live-hd" ".venv\Scripts\python.exe" live_main.py --half-duplex & goto end
 
-echo Unknown option "%MODE%" - use web, text, voice, live, or live-hd.
+echo Unknown option "%MODE%" - use web, phone, text, voice, live, or live-hd.
 :end
 pause

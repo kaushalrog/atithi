@@ -300,3 +300,21 @@ def start_outbound_call(client_id: str, to_number: str) -> str:
         method="POST",
     )
     return call.sid
+
+
+def set_voice_webhook(public_url: str) -> str:
+    """Point TWILIO_NUMBER's incoming-call webhook at this server via the
+    Twilio API — no clicking around the Twilio console. Returns the number."""
+    cfg = twilio_config()
+    if not (cfg["sid"] and cfg["token"] and cfg["number"]):
+        raise RuntimeError("Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_NUMBER in .env first.")
+
+    from twilio.rest import Client
+
+    numbers = Client(cfg["sid"], cfg["token"]).incoming_phone_numbers.list(
+        phone_number=cfg["number"]
+    )
+    if not numbers:
+        raise RuntimeError(f"{cfg['number']} was not found in this Twilio account.")
+    numbers[0].update(voice_url=f"{public_url}/twilio/voice", voice_method="POST")
+    return numbers[0].phone_number

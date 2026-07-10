@@ -128,35 +128,26 @@ TWILIO_AUTH_TOKEN=your_auth_token
 TWILIO_NUMBER=+1xxxxxxxxxx
 ```
 
-### Step 3 — make your laptop reachable from the internet
+### Step 3 — go live (one command)
 
-Twilio must be able to reach your server. Easiest way while testing — ngrok:
+```
+run.bat phone
+```
 
-1. Download from **https://ngrok.com/download**, sign up (free), and run the
-   `ngrok config add-authtoken ...` command they show you once.
-2. Start VoxAgent (`run.bat`), then in another terminal:
-   ```
-   ngrok http 8765
-   ```
-3. ngrok prints a line like `https://ab12cd34.ngrok-free.app` — copy it into `.env`:
-   ```
-   PUBLIC_BASE_URL=https://ab12cd34.ngrok-free.app
-   ```
-4. Restart VoxAgent so it reads the new `.env`.
+That's it. The command opens a free tunnel to your laptop, points your Twilio
+number's webhook at it automatically (through Twilio's API), and starts the
+server. When it prints **"VoxAgent is LIVE — call +1... now!"**, dial.
 
-(The free ngrok URL changes every restart — update `.env` when it does. For a
-permanent URL later: an ngrok paid domain, or host the server on a cloud VM.)
+Notes:
+- If your Wi-Fi blocks Cloudflare tunnels (some campus/office networks do),
+  the command tells you. Fix: switch to your phone's hotspot, or make a free
+  https://ngrok.com account and add `NGROK_AUTHTOKEN=...` to `.env` — then run
+  it again.
+- The tunnel URL changes each run; the command re-points Twilio every time,
+  so you never touch the Twilio console. For a permanent setup, host the
+  server on a small cloud VM instead.
 
-### Step 4 — point the number at VoxAgent
-
-1. Twilio console → **Phone Numbers → Manage → Active numbers** → click your number.
-2. Under **Voice Configuration → A call comes in**, choose **Webhook** and paste:
-   ```
-   https://YOUR-NGROK-URL/twilio/voice
-   ```
-   Method: **HTTP POST**. Save.
-
-### Step 5 — call it!
+### Step 4 — call it!
 
 Ring your Twilio number from your phone. The AI receptionist answers, books,
 and everything appears on the dashboard as channel "phone". Outbound: open

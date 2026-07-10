@@ -12,3 +12,7 @@ evals/results/
 __pycache__/
 .venv/
 *.pyc
+
+# Downloaded tools
+cloudflared.exe
+ngrok.exe
