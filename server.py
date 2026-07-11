@@ -30,6 +30,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
 import auth
+import billing
 import storage
 import telephony
 from agent import ReceptionistAgent
@@ -91,6 +92,16 @@ class CredentialsRequest(BaseModel):
 class ActivateRequest(BaseModel):
     client_id: str
     months: int = 1
+
+
+class ForgotRequest(BaseModel):
+    email: str
+
+
+class ResetRequest(BaseModel):
+    email: str
+    code: str
+    new_password: str
 
 
 class OutboundCallRequest(BaseModel):
@@ -251,14 +262,15 @@ def admin_overview():
         minutes = round(sum(c["seconds"] for c in calls) / 60, 1)
         n_bookings = len(storage.read_bookings(client_id))
         n_leads = len(storage.read_leads(client_id))
-        billing = cfg.get("billing") or {}
+        billing_block = cfg.get("billing") or {}
         clients.append({
             "client_id": client_id,
             "business_name": cfg.get("business_name", client_id),
             "access_key": cfg.get("access_key", "—"),
-            "plan": billing.get("plan", "free"),
-            "paid_until": billing.get("paid_until"),
-            "active": storage.client_active(client_id),
+            "plan": billing_block.get("plan", "free"),
+            "paid_until": billing_block.get("paid_until"),
+            "renewal_requested": billing_block.get("renewal_requested"),
+            "active": billing.client_active(client_id),
             "phone": cfg.get("phone", ""),
             "calls": len(calls),
             "minutes": minutes,
@@ -284,6 +296,7 @@ def admin_overview():
         "lead": "save_lead" in c["transcript"],
     } for c in all_calls[:12]]
     return {"totals": totals, "clients": clients, "recent_calls": recent,
+            "password_resets": auth.pending_resets(),
             "twilio_configured": telephony.is_configured(),
             "status": {
                 "gemini_key": bool(os.getenv("GEMINI_API_KEY")),
@@ -295,9 +308,10 @@ def admin_overview():
 @app.post("/api/admin/activate", dependencies=[Depends(require_admin)])
 def admin_activate(req: ActivateRequest):
     """The owner paid — extend their plan by N months."""
-    if storage.read_client_config(req.client_id) is None:
-        raise HTTPException(status_code=404, detail=f"No client '{req.client_id}'")
-    paid_until = storage.set_paid_until(req.client_id, max(1, req.months))
+    try:
+        paid_until = billing.set_paid_until(req.client_id, max(1, req.months))
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     return {"ok": True, "paid_until": paid_until}
 
 
@@ -370,6 +384,29 @@ def auth_login(req: CredentialsRequest):
         raise HTTPException(status_code=401, detail=str(e))
 
 
+@app.post("/api/auth/forgot")
+def auth_forgot(req: ForgotRequest):
+    """Start a password reset. The response is identical whether or not the
+    email exists, so nobody can probe for accounts."""
+    code = auth.create_reset(req.email)
+    emailed = bool(code) and auth.send_reset_email(req.email.strip().lower(), code)
+    return {"ok": True, "emailed": emailed,
+            "message": ("Check your email for the reset code."
+                        if emailed else
+                        "If this account exists, a reset code was created — "
+                        "ask the VoxAgent team for it, then enter it below.")}
+
+
+@app.post("/api/auth/reset")
+def auth_reset(req: ResetRequest):
+    try:
+        return _with_business_name(auth.reset_password(req.email, req.code, req.new_password))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+
 @app.post("/api/portal/login")
 def portal_login(req: PortalLoginRequest):
     """A business owner logs in with their business code."""
@@ -420,10 +457,9 @@ def create_business(req: BusinessRequest,
         "faq": [{"q": f.q.strip(), "a": f.a.strip()} for f in req.faq if f.q.strip()],
         "policies": [p.strip() for p in req.policies if p.strip()],
         "fallback": req.fallback.strip() or DEFAULT_FALLBACK,
-        # Every new business starts on a 7-day free trial; after that the
-        # owner pays and the admin activates (see /api/admin/activate).
-        "billing": {"plan": "trial",
-                    "paid_until": (dt.date.today() + dt.timedelta(days=7)).isoformat()},
+        # Every new business starts on a free trial; after that the owner
+        # pays and the admin activates (see billing.py).
+        "billing": billing.new_trial(),
         "slots": generate_slots(req.slot_days, req.slot_ranges, req.slot_gap_min),
     }
     with open(path, "w", encoding="utf-8") as f:
@@ -442,7 +478,7 @@ def create_session(req: SessionRequest,
                    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
                    authorization: str | None = Header(default=None)):
     authorize_client(req.client_id, x_client_key, x_admin_key, authorization)
-    if not storage.client_active(req.client_id):
+    if not billing.client_active(req.client_id):
         raise HTTPException(status_code=402,
                             detail="This business's plan has ended — activate it to continue")
     purge_idle_sessions()
@@ -558,20 +594,20 @@ def billing_status(client_id: str,
                    authorization: str | None = Header(default=None)):
     """Plan info for the client dashboard's billing banner."""
     authorize_client(client_id, x_client_key, x_admin_key, authorization)
-    cfg = storage.read_client_config(client_id) or {}
-    billing = cfg.get("billing") or {}
-    paid_until = str(billing.get("paid_until", ""))
-    days_left = None
-    if paid_until:
-        days_left = (dt.date.fromisoformat(paid_until) - dt.date.today()).days
-    return {
-        "plan": billing.get("plan", "free"),
-        "paid_until": paid_until or None,
-        "days_left": days_left,
-        "active": storage.client_active(client_id),
-        "price_inr": int(os.getenv("BILLING_PRICE_INR", "1999")),
-        "upi": os.getenv("BILLING_UPI", ""),
-    }
+    return billing.status(client_id)
+
+
+@app.post("/api/billing/renew")
+def billing_renew(req: SessionRequest,
+                  x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+                  x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+                  authorization: str | None = Header(default=None)):
+    """The owner clicked 'I've paid' — flag it for the admin to confirm."""
+    authorize_client(req.client_id, x_client_key, x_admin_key, authorization)
+    try:
+        return billing.request_renewal(req.client_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.get("/api/phone_status")

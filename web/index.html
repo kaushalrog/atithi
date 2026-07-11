@@ -290,12 +290,17 @@
     <p id="gateHint">Sign in to your VoxAgent dashboard.</p>
     <input type="email" id="gateEmail" placeholder="Email" autocomplete="email">
     <input type="password" id="gatePw" placeholder="Password" autocomplete="current-password">
+    <input type="text" id="resetCode" placeholder="Reset code (e.g. RS-A1B2C3)" class="hidden" autocomplete="off">
+    <input type="password" id="resetNewPw" placeholder="New password" class="hidden" autocomplete="new-password">
     <button class="btn big" id="gateBtn" style="width:100%; justify-content:center;">Sign in</button>
-    <div style="margin-top:14px">
+    <div style="margin-top:14px; display:flex; justify-content:center; gap:18px;">
       <button class="more" id="gateToggle" style="background:none;border:none;color:var(--acc);cursor:pointer;font:inherit;font-size:.9rem;">
         New business? Create an account</button>
+      <button class="more" id="gateForgot" style="background:none;border:none;color:var(--muted);cursor:pointer;font:inherit;font-size:.9rem;">
+        Forgot password?</button>
     </div>
     <div class="err" id="gateErr"></div>
+    <div id="gateMsg" style="color:var(--muted);font-size:.88rem;min-height:1.3em;margin-top:8px;line-height:1.5;"></div>
   </div>
 </div>
 
@@ -573,22 +578,57 @@ async function loadAll() {
 }
 function renderBilling(b) {
   const card = $("billCard");
+  card.innerHTML = "";
   if (b.plan === "free") { card.classList.add("hidden"); return; }
   card.classList.remove("hidden");
-  const pay = "₹" + b.price_inr.toLocaleString("en-IN") + "/month" +
-              (b.upi ? " — pay via UPI to " + b.upi : " — the VoxAgent team will contact you");
+
+  const head = el("div");
+  head.style.fontWeight = "650";
   if (!b.active) {
     card.style.borderColor = "rgba(244,113,113,.5)";
-    card.textContent = "⏸ Service paused — your plan ended on " + b.paid_until +
-                       ". To reactivate: " + pay + ".";
+    head.textContent = "⏸ Service paused — your plan ended on " + b.paid_until + ".";
   } else if (b.plan === "trial") {
     card.style.borderColor = "rgba(245,180,88,.4)";
-    card.textContent = "🎁 Free trial — " + b.days_left + " day" +
-                       (b.days_left === 1 ? "" : "s") + " left. Afterwards: " + pay + ".";
+    head.textContent = "🎁 Free trial — " + b.days_left + " day" +
+                       (b.days_left === 1 ? "" : "s") + " left.";
   } else {
     card.style.borderColor = "rgba(52,211,153,.35)";
-    card.textContent = "✓ Plan active until " + b.paid_until + ".";
+    head.textContent = "✓ Plan active until " + b.paid_until + ".";
   }
+  card.appendChild(head);
+
+  const pay = el("div");
+  pay.style.cssText = "display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:9px;";
+  pay.appendChild(el("span", "", "Pay ₹" + b.price_inr.toLocaleString("en-IN") + "/month" +
+                                 (b.upi ? " via UPI:" : " — the VoxAgent team will contact you.")));
+  if (b.upi) {
+    const upi = el("code", "", b.upi);
+    upi.style.cssText = "background:rgba(255,255,255,.07);border:1px solid var(--border);padding:3px 11px;border-radius:8px;";
+    pay.appendChild(upi);
+    const copy = el("button", "btn ghost", "Copy");
+    copy.style.cssText = "padding:4px 13px;font-size:.8rem;";
+    copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(b.upi); toast("UPI ID copied ✓"); }
+      catch (e) { toast("Copy failed — UPI: " + b.upi, 6000); }
+    };
+    pay.appendChild(copy);
+  }
+  if (b.renewal_requested) {
+    const sent = el("span", "", "✔ Payment claim sent — awaiting confirmation.");
+    sent.style.color = "var(--acc)";
+    pay.appendChild(sent);
+  } else {
+    const renew = el("button", "btn", !b.active ? "I've paid — reactivate" : "I've paid — extend my plan");
+    renew.style.cssText = "padding:6px 15px;font-size:.84rem;";
+    renew.onclick = async () => {
+      try {
+        renderBilling(await api("/api/billing/renew", { client_id: CLIENT }));
+        toast("Thanks! The VoxAgent team will confirm your payment and activate.", 5000);
+      } catch (e) { toast("⚠ " + e.message, 5000); }
+    };
+    pay.appendChild(renew);
+  }
+  card.appendChild(pay);
 }
 function renderPhone(p) {
   if (p.connected) {
@@ -957,6 +997,8 @@ async function toggleMic() {
 
 /* ============ login gate ============ */
 let signupMode = false;
+let forgotMode = false;
+let codeRequested = false;
 function setGateMode(signup) {
   signupMode = signup;
   $("gateBtn").textContent = signup ? "Create my account" : "Sign in";
@@ -968,11 +1010,50 @@ function setGateMode(signup) {
     : "New business? Create an account";
 }
 
+function enterForgotMode() {
+  if (forgotMode) { location.reload(); return; }  // "back to sign in"
+  forgotMode = true; codeRequested = false;
+  setGateMode(false);
+  $("gatePw").classList.add("hidden");
+  $("gateToggle").classList.add("hidden");
+  $("gateBtn").textContent = "Get a reset code";
+  $("gateHint").textContent = "Enter your account email — we'll create a reset code for you.";
+  $("gateForgot").textContent = "← Back to sign in";
+}
+
 async function gateSubmit() {
   $("gateErr").textContent = "";
   const email = $("gateEmail").value.trim();
+  if (!email) return;
+
+  if (forgotMode) {
+    if (!codeRequested) {
+      const res = await fetch("/api/auth/forgot", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json().catch(() => ({}));
+      $("gateMsg").textContent = data.message || "";
+      codeRequested = true;
+      $("resetCode").classList.remove("hidden");
+      $("resetNewPw").classList.remove("hidden");
+      $("gateBtn").textContent = "Set new password";
+      $("resetCode").focus();
+      return;
+    }
+    const res = await fetch("/api/auth/reset", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, code: $("resetCode").value.trim(),
+                             new_password: $("resetNewPw").value }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { $("gateErr").textContent = data.detail || "Reset failed"; return; }
+    finishLogin(data);
+    return;
+  }
+
   const password = $("gatePw").value;
-  if (!email || !password) return;
+  if (!password) return;
   const res = await fetch(signupMode ? "/api/auth/signup" : "/api/auth/login", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
@@ -982,6 +1063,10 @@ async function gateSubmit() {
     $("gateErr").textContent = data.detail || "Sign-in failed — try again.";
     return;
   }
+  finishLogin(data);
+}
+
+async function finishLogin(data) {
   AUTH = data;
   localStorage.setItem("voxagent_auth", JSON.stringify(AUTH));
   // The platform admin lands straight on the admin console.
@@ -1020,7 +1105,9 @@ async function boot() {
 /* ============ wiring ============ */
 $("gateBtn").onclick = gateSubmit;
 $("gateToggle").onclick = () => setGateMode(!signupMode);
+$("gateForgot").onclick = enterForgotMode;
 $("gatePw").addEventListener("keydown", e => { if (e.key === "Enter") gateSubmit(); });
+$("resetNewPw").addEventListener("keydown", e => { if (e.key === "Enter") gateSubmit(); });
 $("logoutBtn").onclick = () => { localStorage.removeItem("voxagent_auth"); location.href = "/"; };
 $("clientSelect").onchange = () => { CLIENT = $("clientSelect").value; loadAll(); };
 $("addBizBtn").onclick = () => showView("onboard");

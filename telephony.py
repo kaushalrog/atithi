@@ -37,6 +37,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 
+import billing
 import storage
 from agent import TOOL_SCHEMAS, ReceptionistAgent
 
@@ -201,7 +202,7 @@ async def twilio_voice(request: Request, client_id: str | None = None):
         raise HTTPException(status_code=403, detail="Invalid Twilio signature")
     client = resolve_client(form.get("To", ""), client_id)
     caller = form.get("From", "")
-    if not storage.client_active(client):
+    if not billing.client_active(client):
         # Unpaid/expired business: apologize to the caller instead of answering.
         return Response(content=(
             '<?xml version="1.0" encoding="UTF-8"?><Response>'
