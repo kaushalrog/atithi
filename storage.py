@@ -27,6 +27,7 @@ BASE_DIR = Path(__file__).resolve().parent
 BOOKINGS_CSV = BASE_DIR / "bookings.csv"
 LEADS_CSV = BASE_DIR / "leads.csv"
 CALLS_DIR = BASE_DIR / "calls"
+CLIENTS_DIR = BASE_DIR / "clients"
 
 BOOKING_HEADER = [
     "timestamp", "client_id", "name", "phone", "service", "date", "time", "status",
@@ -142,6 +143,47 @@ def read_call_logs(client_id: str) -> list[dict]:
         except (json.JSONDecodeError, OSError):
             continue  # one corrupt file must not break the dashboard
     return sorted(records, key=lambda r: r["started"], reverse=True)
+
+
+# ---- client configs & billing ------------------------------------------------------
+
+def read_client_config(client_id: str) -> dict | None:
+    import yaml
+    path = CLIENTS_DIR / f"{client_id}.yaml"
+    if not path.exists():
+        return None
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def client_active(client_id: str) -> bool:
+    """Is this business allowed to use the agent? Businesses without a billing
+    block (the hand-made demo ones) are grandfathered as always-active; new
+    ones get a trial and must be activated (paid) after it ends."""
+    cfg = read_client_config(client_id)
+    if cfg is None:
+        return False
+    billing = cfg.get("billing")
+    if not billing:
+        return True
+    return str(billing.get("paid_until", "")) >= dt.date.today().isoformat()
+
+
+def set_paid_until(client_id: str, months: int) -> str:
+    """Extend a business's subscription; returns the new end date."""
+    import yaml
+    path = CLIENTS_DIR / f"{client_id}.yaml"
+    with open(path, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    billing = cfg.get("billing") or {}
+    base = max(dt.date.today(),
+               dt.date.fromisoformat(str(billing.get("paid_until", dt.date.today().isoformat()))))
+    billing.update({"plan": "paid",
+                    "paid_until": (base + dt.timedelta(days=30 * months)).isoformat()})
+    cfg["billing"] = billing
+    with _write_lock, open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+    return billing["paid_until"]
 
 
 # ---- shared CSV helpers ----------------------------------------------------------

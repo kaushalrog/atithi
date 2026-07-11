@@ -16,3 +16,7 @@ __pycache__/
 # Downloaded tools
 cloudflared.exe
 ngrok.exe
+
+# Account data (emails + password hashes + session tokens)
+users.json
+tokens.json
