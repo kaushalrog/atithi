@@ -29,6 +29,7 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadF
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
+import auth
 import storage
 import telephony
 from agent import ReceptionistAgent
@@ -82,6 +83,16 @@ class PortalLoginRequest(BaseModel):
     access_key: str
 
 
+class CredentialsRequest(BaseModel):
+    email: str
+    password: str
+
+
+class ActivateRequest(BaseModel):
+    client_id: str
+    months: int = 1
+
+
 class OutboundCallRequest(BaseModel):
     client_id: str
     to: str
@@ -113,11 +124,16 @@ class BusinessRequest(BaseModel):
 
 # ---------- access control -------------------------------------------------------
 #
-# Simple on purpose: every business has one access code (its "business code",
-# generated at onboarding, stored in its YAML). The owner types the code once;
-# the platform admin's password opens everything. No emails, no password
-# resets — the right amount of security for a pilot, and the shape real
-# accounts will slot into later.
+# Primary: email+password accounts (auth.py) — the frontend sends the session
+# token as "Authorization: Bearer <token>". Admin sees everything; an owner
+# only their own business. The older mechanisms (X-Admin-Key password header,
+# per-business access codes) still work as fallbacks for scripts and tests.
+
+def bearer_user(authorization: str | None) -> dict | None:
+    if authorization and authorization.startswith("Bearer "):
+        return auth.user_for_token(authorization[7:])
+    return None
+
 
 def client_access_key(client_id: str) -> str | None:
     path = BASE_DIR / "clients" / f"{client_id}.yaml"
@@ -127,7 +143,11 @@ def client_access_key(client_id: str) -> str | None:
         return yaml.safe_load(f).get("access_key")
 
 
-def authorize_client(client_id: str, client_key: str | None, admin_key: str | None):
+def authorize_client(client_id: str, client_key: str | None, admin_key: str | None,
+                     authorization: str | None = None):
+    user = bearer_user(authorization)
+    if user and (user["role"] == "admin" or user["client_id"] == client_id):
+        return
     admin_password = os.getenv("ADMIN_PASSWORD", "")
     if admin_password and admin_key == admin_password:
         return
@@ -199,12 +219,16 @@ def generate_slots(days: list[str], ranges: list[list[str]], gap_min: int) -> di
 # shared secret from .env sent as an X-Admin-Key header — simple, and the
 # shape is right: when real client logins arrive, this becomes a role check.
 
-def require_admin(x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
+def require_admin(x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+                  authorization: str | None = Header(default=None)):
+    user = bearer_user(authorization)
+    if user and user["role"] == "admin":
+        return
     admin_password = os.getenv("ADMIN_PASSWORD", "")
     if not admin_password:
         raise HTTPException(status_code=503, detail="Set ADMIN_PASSWORD in .env to use the admin console")
     if x_admin_key != admin_password:
-        raise HTTPException(status_code=401, detail="Wrong admin password")
+        raise HTTPException(status_code=401, detail="Admin access only")
 
 
 @app.post("/api/admin/login")
@@ -227,10 +251,14 @@ def admin_overview():
         minutes = round(sum(c["seconds"] for c in calls) / 60, 1)
         n_bookings = len(storage.read_bookings(client_id))
         n_leads = len(storage.read_leads(client_id))
+        billing = cfg.get("billing") or {}
         clients.append({
             "client_id": client_id,
             "business_name": cfg.get("business_name", client_id),
             "access_key": cfg.get("access_key", "—"),
+            "plan": billing.get("plan", "free"),
+            "paid_until": billing.get("paid_until"),
+            "active": storage.client_active(client_id),
             "phone": cfg.get("phone", ""),
             "calls": len(calls),
             "minutes": minutes,
@@ -262,6 +290,15 @@ def admin_overview():
                 "twilio": telephony.is_configured(),
                 "sheets": bool(os.getenv("SHEET_ID")),
             }}
+
+
+@app.post("/api/admin/activate", dependencies=[Depends(require_admin)])
+def admin_activate(req: ActivateRequest):
+    """The owner paid — extend their plan by N months."""
+    if storage.read_client_config(req.client_id) is None:
+        raise HTTPException(status_code=404, detail=f"No client '{req.client_id}'")
+    paid_until = storage.set_paid_until(req.client_id, max(1, req.months))
+    return {"ok": True, "paid_until": paid_until}
 
 
 @app.post("/api/admin/call", dependencies=[Depends(require_admin)])
@@ -307,6 +344,32 @@ def list_clients():
     return out
 
 
+def _with_business_name(session: dict) -> dict:
+    if session.get("client_id"):
+        cfg = storage.read_client_config(session["client_id"]) or {}
+        session["business_name"] = cfg.get("business_name", session["client_id"])
+    return session
+
+
+@app.post("/api/auth/signup")
+def auth_signup(req: CredentialsRequest):
+    """New business owner creates an account; onboarding comes next."""
+    try:
+        return _with_business_name(auth.signup(req.email, req.password))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.post("/api/auth/login")
+def auth_login(req: CredentialsRequest):
+    try:
+        return _with_business_name(auth.login(req.email, req.password))
+    except PermissionError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+
 @app.post("/api/portal/login")
 def portal_login(req: PortalLoginRequest):
     """A business owner logs in with their business code."""
@@ -321,8 +384,21 @@ def portal_login(req: PortalLoginRequest):
     raise HTTPException(status_code=401, detail="That code doesn't match any business")
 
 
-@app.post("/api/business", dependencies=[Depends(require_admin)])
-def create_business(req: BusinessRequest):
+@app.post("/api/business")
+def create_business(req: BusinessRequest,
+                    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+                    authorization: str | None = Header(default=None)):
+    # Admin can create any number of businesses; a signed-up owner exactly one
+    # (their own — it gets linked to their account and starts a free trial).
+    user = bearer_user(authorization)
+    is_admin = (user and user["role"] == "admin") or (
+        os.getenv("ADMIN_PASSWORD", "") and x_admin_key == os.getenv("ADMIN_PASSWORD"))
+    if not is_admin:
+        if user is None:
+            raise HTTPException(status_code=401, detail="Sign in to create your business")
+        if user["client_id"]:
+            raise HTTPException(status_code=403, detail="Your account already has a business")
+
     services = [s for s in req.services if s.name.strip()]
     if not req.business_name.strip() or not services:
         raise HTTPException(status_code=422, detail="Business name and at least one service are required")
@@ -344,10 +420,16 @@ def create_business(req: BusinessRequest):
         "faq": [{"q": f.q.strip(), "a": f.a.strip()} for f in req.faq if f.q.strip()],
         "policies": [p.strip() for p in req.policies if p.strip()],
         "fallback": req.fallback.strip() or DEFAULT_FALLBACK,
+        # Every new business starts on a 7-day free trial; after that the
+        # owner pays and the admin activates (see /api/admin/activate).
+        "billing": {"plan": "trial",
+                    "paid_until": (dt.date.today() + dt.timedelta(days=7)).isoformat()},
         "slots": generate_slots(req.slot_days, req.slot_ranges, req.slot_gap_min),
     }
     with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(config, f, allow_unicode=True, sort_keys=False)
+    if not is_admin:
+        auth.attach_client(user["email"], client_id)
     return {"client_id": client_id, "business_name": config["business_name"],
             "access_key": config["access_key"]}
 
@@ -357,8 +439,12 @@ def create_business(req: BusinessRequest):
 @app.post("/api/session")
 def create_session(req: SessionRequest,
                    x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
-                   x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
-    authorize_client(req.client_id, x_client_key, x_admin_key)
+                   x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+                   authorization: str | None = Header(default=None)):
+    authorize_client(req.client_id, x_client_key, x_admin_key, authorization)
+    if not storage.client_active(req.client_id):
+        raise HTTPException(status_code=402,
+                            detail="This business's plan has ended — activate it to continue")
     purge_idle_sessions()
     try:
         agent = ReceptionistAgent(req.client_id)
@@ -421,8 +507,9 @@ def speak(req: TTSRequest):
 @app.get("/api/stats")
 def stats(client_id: str,
           x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
-          x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
-    authorize_client(client_id, x_client_key, x_admin_key)
+          x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+          authorization: str | None = Header(default=None)):
+    authorize_client(client_id, x_client_key, x_admin_key, authorization)
     calls = storage.read_call_logs(client_id)
     n_calls = len(calls)
     # Conversion = share of calls that produced a booking. Each call's transcript
@@ -440,33 +527,60 @@ def stats(client_id: str,
 @app.get("/api/calls")
 def calls(client_id: str,
           x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
-          x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
-    authorize_client(client_id, x_client_key, x_admin_key)
+          x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+          authorization: str | None = Header(default=None)):
+    authorize_client(client_id, x_client_key, x_admin_key, authorization)
     return storage.read_call_logs(client_id)
 
 
 @app.get("/api/bookings")
 def bookings(client_id: str,
              x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
-             x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
-    authorize_client(client_id, x_client_key, x_admin_key)
+             x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+             authorization: str | None = Header(default=None)):
+    authorize_client(client_id, x_client_key, x_admin_key, authorization)
     return list(reversed(storage.read_bookings(client_id)))  # newest first
 
 
 @app.get("/api/leads")
 def leads(client_id: str,
           x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
-          x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
-    authorize_client(client_id, x_client_key, x_admin_key)
+          x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+          authorization: str | None = Header(default=None)):
+    authorize_client(client_id, x_client_key, x_admin_key, authorization)
     return list(reversed(storage.read_leads(client_id)))
+
+
+@app.get("/api/billing_status")
+def billing_status(client_id: str,
+                   x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+                   x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+                   authorization: str | None = Header(default=None)):
+    """Plan info for the client dashboard's billing banner."""
+    authorize_client(client_id, x_client_key, x_admin_key, authorization)
+    cfg = storage.read_client_config(client_id) or {}
+    billing = cfg.get("billing") or {}
+    paid_until = str(billing.get("paid_until", ""))
+    days_left = None
+    if paid_until:
+        days_left = (dt.date.fromisoformat(paid_until) - dt.date.today()).days
+    return {
+        "plan": billing.get("plan", "free"),
+        "paid_until": paid_until or None,
+        "days_left": days_left,
+        "active": storage.client_active(client_id),
+        "price_inr": int(os.getenv("BILLING_PRICE_INR", "1999")),
+        "upi": os.getenv("BILLING_UPI", ""),
+    }
 
 
 @app.get("/api/phone_status")
 def phone_status(client_id: str,
                  x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
-                 x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")):
+                 x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+                 authorization: str | None = Header(default=None)):
     """Is the phone line live for this business? Shown on the client dashboard."""
-    authorize_client(client_id, x_client_key, x_admin_key)
+    authorize_client(client_id, x_client_key, x_admin_key, authorization)
     path = BASE_DIR / "clients" / f"{client_id}.yaml"
     number = None
     if path.exists():

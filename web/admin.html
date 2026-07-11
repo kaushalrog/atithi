@@ -102,12 +102,13 @@
   <button class="btn hidden" id="logoutBtn">Log out</button>
 </div>
 
-<!-- password gate -->
+<!-- login gate -->
 <div class="gate" id="gate">
   <div class="mark">👑</div>
-  <h1>Admin access</h1>
-  <p>This console shows every business on your platform.<br>Enter the admin password from your <code>.env</code>.</p>
-  <input type="password" id="pw" placeholder="Admin password" autocomplete="current-password">
+  <h1>Admin sign-in</h1>
+  <p>This console shows every business on your platform.</p>
+  <input type="email" id="email" placeholder="Email" autocomplete="email" style="margin-bottom:10px">
+  <input type="password" id="pw" placeholder="Password" autocomplete="current-password">
   <button class="btn primary" id="loginBtn" style="width:100%; justify-content:center; padding:13px;">Unlock console</button>
   <div class="err" id="gateErr"></div>
 </div>
@@ -152,7 +153,10 @@
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const KEY = "voxagent_admin_key";
+let AUTH = null;  // {token, role, ...} — shared with the portal via localStorage
+function authHeaders() {
+  return AUTH ? { "Authorization": "Bearer " + AUTH.token } : {};
+}
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -169,24 +173,27 @@ function fmtWhen(iso) {
 
 async function login() {
   $("gateErr").textContent = "";
-  const password = $("pw").value;
-  const res = await fetch("/api/admin/login", {
+  const res = await fetch("/api/auth/login", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ email: $("email").value.trim(), password: $("pw").value }),
   });
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    $("gateErr").textContent = (await res.json().catch(() => ({}))).detail || "Login failed";
+    $("gateErr").textContent = data.detail || "Login failed";
     return;
   }
-  sessionStorage.setItem(KEY, password);
+  if (data.role !== "admin") {
+    $("gateErr").textContent = "This account isn't an admin — owners use the main page.";
+    return;
+  }
+  AUTH = data;
+  localStorage.setItem("voxagent_auth", JSON.stringify(AUTH));
   await showConsole();
 }
 
 async function showConsole() {
-  const res = await fetch("/api/admin/overview", {
-    headers: { "X-Admin-Key": sessionStorage.getItem(KEY) || "" },
-  });
-  if (!res.ok) { sessionStorage.removeItem(KEY); return; }
+  const res = await fetch("/api/admin/overview", { headers: authHeaders() });
+  if (!res.ok) { localStorage.removeItem("voxagent_auth"); AUTH = null; return; }
   const data = await res.json();
   $("gate").classList.add("hidden");
   $("console").classList.remove("hidden");
@@ -204,7 +211,7 @@ async function showConsole() {
   } else {
     const t = el("table");
     const tr = el("tr");
-    ["Business", "Business code", "Calls", "Minutes", "Bookings", "Leads", "Last activity", ""].forEach(h => tr.appendChild(el("th", "", h)));
+    ["Business", "Plan", "Calls", "Minutes", "Bookings", "Leads", "Last activity", ""].forEach(h => tr.appendChild(el("th", "", h)));
     t.appendChild(tr);
     for (const c of data.clients) {
       const row = el("tr");
@@ -212,15 +219,21 @@ async function showConsole() {
       const idLine = el("div", "dim", c.client_id); idLine.style.fontSize = ".76rem"; idLine.style.fontWeight = "400";
       name.appendChild(idLine);
       row.appendChild(name);
-      const code = el("td");
-      const pillEl = el("span", "pill", c.access_key);
-      pillEl.title = "The owner logs into their dashboard with this code";
-      code.appendChild(pillEl);
-      row.appendChild(code);
+      const plan = el("td");
+      const planPill = el("span", "pill " + (c.active ? (c.plan === "paid" ? "booked" : "") : "lead"),
+        c.plan === "free" ? "free" :
+        c.active ? c.plan + " · till " + c.paid_until : "⏸ ended " + c.paid_until);
+      plan.appendChild(planPill);
+      const act = el("button", "btn", "+1 month");
+      act.style.cssText = "margin-left:8px;padding:4px 10px;font-size:.75rem;";
+      act.onclick = () => activate(c.client_id);
+      plan.appendChild(act);
+      row.appendChild(plan);
       [c.calls, c.minutes, c.bookings, c.leads].forEach(v => row.appendChild(el("td", "", String(v))));
       row.appendChild(el("td", "dim", fmtWhen(c.last_activity)));
       const link = el("td");
-      const a = el("a", "portal-link", "View portal →"); a.href = "/"; a.target = "_blank";
+      const a = el("a", "portal-link", "View portal →"); a.href = "/?as=admin"; a.target = "_blank";
+      a.title = "Owner login code: " + c.access_key;
       link.appendChild(a); row.appendChild(link);
       t.appendChild(row);
     }
@@ -281,7 +294,7 @@ async function placeCall() {
   msg.textContent = "Dialling…";
   const res = await fetch("/api/admin/call", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Admin-Key": sessionStorage.getItem(KEY) || "" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ client_id: $("callClient").value, to: $("callTo").value.trim() }),
   });
   const data = await res.json().catch(() => ({}));
@@ -291,11 +304,26 @@ async function placeCall() {
 }
 $("callBtn").onclick = placeCall;
 
+async function activate(clientId) {
+  const res = await fetch("/api/admin/activate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ client_id: clientId, months: 1 }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) showConsole();
+  else alert(data.detail || "Activation failed");
+}
+
 $("loginBtn").onclick = login;
 $("pw").addEventListener("keydown", e => { if (e.key === "Enter") login(); });
-$("logoutBtn").onclick = () => { sessionStorage.removeItem(KEY); location.reload(); };
+$("logoutBtn").onclick = () => { localStorage.removeItem("voxagent_auth"); location.reload(); };
 
-if (sessionStorage.getItem(KEY)) showConsole();
+const saved = localStorage.getItem("voxagent_auth");
+if (saved) {
+  AUTH = JSON.parse(saved);
+  if (AUTH.role === "admin") showConsole();
+}
 </script>
 </body>
 </html>

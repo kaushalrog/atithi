@@ -201,6 +201,13 @@ async def twilio_voice(request: Request, client_id: str | None = None):
         raise HTTPException(status_code=403, detail="Invalid Twilio signature")
     client = resolve_client(form.get("To", ""), client_id)
     caller = form.get("From", "")
+    if not storage.client_active(client):
+        # Unpaid/expired business: apologize to the caller instead of answering.
+        return Response(content=(
+            '<?xml version="1.0" encoding="UTF-8"?><Response>'
+            "<Say>Sorry, this number is temporarily unavailable. "
+            "Please try again later.</Say></Response>"
+        ), media_type="application/xml")
     public = twilio_config()["public_url"]
     ws_url = public.replace("https://", "wss://").replace("http://", "ws://") + "/twilio/stream"
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
