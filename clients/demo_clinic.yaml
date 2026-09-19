@@ -1,84 +1,91 @@
-# Demo client config — a fictional dental clinic in Coimbatore.
-# WHY YAML: business knowledge lives here, never in Python code. To onboard a new
-# client, copy this file, edit the values, done. (Architecture principle 1.)
-#
-# NOTE: dates and times are quoted on purpose. Unquoted, YAML parses 2026-07-06
-# as a date object and 10:00 as the number 600 (base-60!). Quoting keeps them strings.
-
 client_id: demo_clinic
-access_key: VX-84KQ2N   # the owner's login code for the portal
-twilio_number: "+16592517349"   # calls to this number reach this business
+access_key: VX-84KQ2N
+twilio_number: '+16592517349'
 business_name: Sri Balaji Dental Care
-address: "2nd Floor, 45 D.B. Road, R.S. Puram, Coimbatore - 641002 (above Aravind Pharmacy, opposite Kikani School)"
-phone: "+91 98430 12345"
-timings: "Monday to Saturday: 9:30 AM - 1:00 PM and 4:00 PM - 8:30 PM. Sunday closed."
-
+address: 2nd Floor, 45 D.B. Road, R.S. Puram, Coimbatore - 641002 (above Aravind Pharmacy,
+  opposite Kikani School)
+phone: +91 98430 12345
+timings: 'Monday to Saturday: 9:30 AM - 1:00 PM and 4:00 PM - 8:30 PM. Sunday closed.'
 services:
-  - name: Dental consultation
-    price: "₹300"
-  - name: Kids dental check-up (under 12)
-    price: "₹250"
-  - name: Scaling & polishing (teeth cleaning)
-    price: "₹1,200"
-  - name: Digital X-ray (per tooth)
-    price: "₹250"
-  - name: Tooth extraction (simple)
-    price: "₹800 per tooth"
-  - name: Wisdom tooth removal (surgical)
-    price: "₹3,500 per tooth"
-  - name: Root canal treatment
-    price: "₹4,500 per tooth (including temporary filling)"
-  - name: Dental crown (ceramic)
-    price: "₹6,000 per crown"
-  - name: Dental crown (zirconia)
-    price: "₹12,000 per crown"
-  - name: Teeth whitening (in-clinic)
-    price: "₹8,000"
-  - name: Braces consultation
-    price: "₹500"
-  - name: Metal braces (full treatment)
-    price: "starting from ₹35,000"
-  - name: Dental implant (per tooth)
-    price: "starting from ₹25,000 (implant + crown)"
-
+- name: Dental consultation
+  price: ₹300
+- name: Kids dental check-up (under 12)
+  price: ₹250
+- name: Scaling & polishing (teeth cleaning)
+  price: ₹1,200
+- name: Digital X-ray (per tooth)
+  price: ₹250
+- name: Tooth extraction (simple)
+  price: ₹800 per tooth
+- name: Wisdom tooth removal (surgical)
+  price: ₹3,500 per tooth
+- name: Root canal treatment
+  price: ₹4,500 per tooth (including temporary filling)
+- name: Dental crown (ceramic)
+  price: ₹6,000 per crown
+- name: Dental crown (zirconia)
+  price: ₹12,000 per crown
+- name: Teeth whitening (in-clinic)
+  price: ₹8,000
+- name: Braces consultation
+  price: ₹500
+- name: Metal braces (full treatment)
+  price: starting from ₹35,000
+- name: Dental implant (per tooth)
+  price: starting from ₹25,000 (implant + crown)
 faq:
-  - q: Who are the doctors?
-    a: "Dr. Priya Raghavan (BDS, MDS - Root canal specialist) and Dr. Arun Kumar (BDS - General dentistry). Dr. Priya is available in the evenings, Dr. Arun in the mornings."
-  - q: Do you accept insurance?
-    a: "We do not have cashless insurance tie-ups. We provide a detailed bill and treatment summary that you can submit to your insurer for reimbursement."
-  - q: Is there parking?
-    a: "Two-wheeler parking is available in front of the building. For cars, paid parking is available at Kikani School grounds, a 2-minute walk away."
-  - q: Do you have EMI options?
-    a: "Yes, for treatments above ₹20,000 (braces, implants) we offer no-cost EMI through Bajaj Finserv. Carry your Aadhaar and PAN card."
-  - q: Is root canal painful?
-    a: "The procedure is done under local anesthesia, so you will feel almost nothing during it. Mild soreness for a day or two afterwards is normal."
-  - q: How long does teeth cleaning take?
-    a: "A scaling and polishing session takes about 30 to 40 minutes."
-  - q: Are walk-ins allowed?
-    a: "Walk-ins are accepted, but appointment patients are seen first, so walk-ins may wait 45 minutes or more. Booking a slot is strongly recommended."
-  - q: Do you treat children?
-    a: "Yes, we see children of all ages. Kids' check-ups are ₹250, and Dr. Arun is very good with young children."
-  - q: Which languages do the staff speak?
-    a: "Tamil, English and Hindi."
-  - q: Do you do X-rays at the clinic?
-    a: "Yes, we have digital X-ray in-house (₹250 per tooth). For full-mouth OPG X-rays we refer you to a scan centre next door."
-
+- q: Who are the doctors?
+  a: Dr. Priya Raghavan (BDS, MDS - Root canal specialist) and Dr. Arun Kumar (BDS
+    - General dentistry). Dr. Priya is available in the evenings, Dr. Arun in the
+    mornings.
+- q: Do you accept insurance?
+  a: We do not have cashless insurance tie-ups. We provide a detailed bill and treatment
+    summary that you can submit to your insurer for reimbursement.
+- q: Is there parking?
+  a: Two-wheeler parking is available in front of the building. For cars, paid parking
+    is available at Kikani School grounds, a 2-minute walk away.
+- q: Do you have EMI options?
+  a: Yes, for treatments above ₹20,000 (braces, implants) we offer no-cost EMI through
+    Bajaj Finserv. Carry your Aadhaar and PAN card.
+- q: Is root canal painful?
+  a: The procedure is done under local anesthesia, so you will feel almost nothing
+    during it. Mild soreness for a day or two afterwards is normal.
+- q: How long does teeth cleaning take?
+  a: A scaling and polishing session takes about 30 to 40 minutes.
+- q: Are walk-ins allowed?
+  a: Walk-ins are accepted, but appointment patients are seen first, so walk-ins may
+    wait 45 minutes or more. Booking a slot is strongly recommended.
+- q: Do you treat children?
+  a: Yes, we see children of all ages. Kids' check-ups are ₹250, and Dr. Arun is very
+    good with young children.
+- q: Which languages do the staff speak?
+  a: Tamil, English and Hindi.
+- q: Do you do X-rays at the clinic?
+  a: Yes, we have digital X-ray in-house (₹250 per tooth). For full-mouth OPG X-rays
+    we refer you to a scan centre next door.
 policies:
-  - "A booking fee of ₹100 is collected to confirm an appointment. It is adjusted against the final bill. The booking fee is NON-REFUNDABLE if you cancel."
-  - "Rescheduling is free if done at least 4 hours before the appointment time."
-  - "If you arrive more than 15 minutes late, your slot may be given away and you will be treated as a walk-in."
-  - "All prices are indicative. The exact treatment cost is confirmed by the doctor after examination."
-
-fallback: "If you are unsure about anything, or the customer asks something not covered in the business information, say that the front desk will call them back with the exact details. NEVER guess or invent prices, offers, or medical advice."
-
-# Available appointment slots for the next 7 days (Stage 1: static demo data,
-# read by the check_availability tool — never pasted into the prompt).
-# 2026-07-12 is a Sunday: clinic closed, so no slots.
-slots:
-  "2026-07-07": ["09:30", "12:00", "16:30", "19:00"]
-  "2026-07-08": ["10:30", "11:00", "17:30"]
-  "2026-07-09": ["09:30", "10:00", "16:00", "18:00", "19:30"]
-  "2026-07-10": ["11:00", "12:30", "17:00"]
-  "2026-07-11": ["09:30", "10:30", "11:30", "16:30", "18:30"]
-  "2026-07-12": []
-  "2026-07-13": ["10:00", "11:30", "17:00", "18:30"]
+- A booking fee of ₹100 is collected to confirm an appointment. It is adjusted against
+  the final bill. The booking fee is NON-REFUNDABLE if you cancel.
+- Rescheduling is free if done at least 4 hours before the appointment time.
+- If you arrive more than 15 minutes late, your slot may be given away and you will
+  be treated as a walk-in.
+- All prices are indicative. The exact treatment cost is confirmed by the doctor after
+  examination.
+fallback: If you are unsure about anything, or the customer asks something not covered
+  in the business information, say that the front desk will call them back with the
+  exact details. NEVER guess or invent prices, offers, or medical advice.
+schedule:
+  days:
+  - Mon
+  - Tue
+  - Wed
+  - Thu
+  - Fri
+  - Sat
+  ranges:
+  - - 09:30
+    - '13:00'
+  - - '16:00'
+    - '20:30'
+  gap_min: 30
+  horizon_days: 14

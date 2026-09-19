@@ -24,9 +24,44 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import scheduling  # noqa: E402
 import storage  # noqa: E402
 from agent import ReceptionistAgent  # noqa: E402
 from llm import QuotaExhausted  # noqa: E402
+
+
+def build_context(client_id: str = "demo_clinic") -> dict:
+    """Resolve the {placeholders} scenarios use for dates and times.
+
+    Scenarios used to name a literal date ("9th July"). It went stale, and the
+    suite then measured nothing about booking. Asking the live schedule for a
+    genuinely open day keeps every run meaningful.
+    """
+    config = storage.read_client_config(client_id) or {}
+    slots = scheduling.available_slots(config, set())
+    today = dt.date.today().isoformat()
+    for date in sorted(slots):
+        if date > today and "16:00" in slots[date]:
+            day = dt.date.fromisoformat(date)
+            return {
+                "date_iso": date,
+                "date_spoken": f"{day.strftime('%A')} {day.day} {day.strftime('%B')}",
+                "open_time_spoken": "4 PM",
+                "open_time_24": "16:00",
+                "closed_time_spoken": "2 PM",   # between the morning and evening ranges
+            }
+    raise SystemExit(f"{client_id} has no open day with a 16:00 slot — check its schedule")
+
+
+def fill(value, context: dict):
+    """Substitute {placeholders} through a scenario's strings."""
+    if isinstance(value, str):
+        return value.format(**context)
+    if isinstance(value, list):
+        return [fill(v, context) for v in value]
+    if isinstance(value, dict):
+        return {k: fill(v, context) for k, v in value.items()}
+    return value
 
 TELUGU = re.compile(r"[ఀ-౿]")
 
@@ -41,6 +76,7 @@ def run_scenario(scenario: dict, workdir: Path) -> tuple[list, list]:
     storage.BOOKINGS_CSV = sdir / "bookings.csv"
     storage.LEADS_CSV = sdir / "leads.csv"
     storage.CALLS_DIR = sdir / "calls"
+    storage.clear_caches()   # each scenario starts from clean, isolated data
 
     agent = ReceptionistAgent(scenario.get("client", "demo_clinic"))
     replies = [agent.chat(turn) for turn in scenario["turns"]]
@@ -94,6 +130,10 @@ def evaluate(checks: dict, replies: list[str], tools_used: list[str], agent) -> 
 
 def main():
     scenarios = yaml.safe_load((ROOT / "evals" / "scenarios.yaml").read_text(encoding="utf-8"))
+    context = build_context()
+    scenarios = [fill(s, context) for s in scenarios]
+    print(f"\n(booking scenarios target {context['date_spoken']} at "
+          f"{context['open_time_spoken']})")
     # Targeted rerun (saves scarce free-tier quota):
     #   python evals\run_evals.py booking_happy_path telugu_customer
     if len(sys.argv) > 1:

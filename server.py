@@ -18,19 +18,19 @@ import datetime as dt
 import os
 import re
 import secrets
-import tempfile
 import threading
 import uuid
 import webbrowser
 from pathlib import Path
 
-import yaml
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
 import auth
 import billing
+import llm as llm_module
+import scheduling
 import storage
 import telephony
 from agent import ReceptionistAgent
@@ -42,6 +42,32 @@ app = FastAPI(title="VoxAgent")
 app.include_router(telephony.router)  # /twilio/voice + /twilio/stream (phone calls)
 tts = EdgeTTS()
 
+
+@app.on_event("startup")
+def _warm_up():
+    """Build the Gemini client while the server boots.
+
+    It costs ~780 ms to construct. Doing it here means the first caller — who
+    is on a live phone line — doesn't wait for it.
+    """
+    llm_module.warm_up()
+
+
+# The pages change only when we deploy, so serve them from memory — but
+# revalidate against the file's mtime (one stat() call) so editing a page
+# during development doesn't serve a stale copy until restart.
+_page_cache: dict[str, tuple] = {}
+
+
+def _page(name: str) -> str:
+    path = BASE_DIR / "web" / name
+    stamp = path.stat().st_mtime_ns
+    hit = _page_cache.get(name)
+    if hit is None or hit[0] != stamp:
+        hit = (stamp, path.read_text(encoding="utf-8"))
+        _page_cache[name] = hit
+    return hit[1]
+
 # One test-call session = one agent + one call-log entry. In memory only; the
 # call log JSON on disk is the durable record. Idle sessions are purged so a
 # long-running server doesn't accumulate dead agents.
@@ -51,7 +77,7 @@ SESSION_IDLE_LIMIT = dt.timedelta(hours=2)
 MIME_FIX = {"audio/mpeg": "audio/mp3", "audio/x-wav": "audio/wav",
             "application/octet-stream": "audio/wav"}
 
-WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+WEEKDAYS = scheduling.WEEKDAYS   # one definition, shared with the scheduler
 
 DEFAULT_FALLBACK = (
     "If you are unsure about anything, or the customer asks something not "
@@ -147,11 +173,8 @@ def bearer_user(authorization: str | None) -> dict | None:
 
 
 def client_access_key(client_id: str) -> str | None:
-    path = BASE_DIR / "clients" / f"{client_id}.yaml"
-    if not path.exists():
-        return None
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f).get("access_key")
+    cfg = storage.read_client_config(client_id)
+    return cfg.get("access_key") if cfg else None
 
 
 def authorize_client(client_id: str, client_key: str | None, admin_key: str | None,
@@ -201,25 +224,15 @@ def run_turn(session: dict, message: str) -> dict:
 
 
 def generate_slots(days: list[str], ranges: list[list[str]], gap_min: int) -> dict:
-    """Turn 'open Mon-Sat, 10-1 and 4-8, every 30 min' into concrete slots for
-    the next 7 days. Static demo data — a real calendar replaces this at a
-    later stage, behind the same check_availability tool."""
-    slots = {}
-    today = dt.date.today()
-    for i in range(7):
-        day = today + dt.timedelta(days=i)
-        times = []
-        if WEEKDAYS[day.weekday()] in days:
-            for start, end in ranges:
-                if not start or not end:
-                    continue
-                t = dt.datetime.combine(day, dt.time.fromisoformat(start))
-                stop = dt.datetime.combine(day, dt.time.fromisoformat(end))
-                while t < stop:
-                    times.append(t.strftime("%H:%M"))
-                    t += dt.timedelta(minutes=max(gap_min, 5))
-        slots[day.isoformat()] = times
-    return slots
+    """Expand 'open Mon-Sat, 10-1 and 4-8, every 30 min' into dated slots.
+
+    Kept as a preview of the rule for the onboarding form. What a business
+    STORES is the rule itself (`schedule:`), not these dates — see
+    scheduling.py for why that outage-proofing matters.
+    """
+    return scheduling.generate(
+        scheduling.schedule_from_form(days, ranges, gap_min)
+    )
 
 
 # ---------- admin (the platform owner's console) --------------------------------
@@ -254,10 +267,9 @@ def admin_overview():
     clients, a health row per business, and the latest calls platform-wide."""
     clients, all_calls = [], []
     totals = {"clients": 0, "calls": 0, "minutes": 0.0, "bookings": 0, "leads": 0}
-    for path in sorted((BASE_DIR / "clients").glob("*.yaml")):
-        with open(path, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-        client_id = path.stem
+    for entry in storage.all_clients():          # cached parses, no re-globbing
+        cfg = entry["config"]
+        client_id = entry["client_id"]
         calls = storage.read_call_logs(client_id)
         minutes = round(sum(c["seconds"] for c in calls) / 60, 1)
         n_bookings = len(storage.read_bookings(client_id))
@@ -270,7 +282,7 @@ def admin_overview():
             "plan": billing_block.get("plan", "free"),
             "paid_until": billing_block.get("paid_until"),
             "renewal_requested": billing_block.get("renewal_requested"),
-            "active": billing.client_active(client_id),
+            "active": billing._is_active(billing_block),   # config already in hand
             "phone": cfg.get("phone", ""),
             "calls": len(calls),
             "minutes": minutes,
@@ -331,31 +343,28 @@ def admin_outbound_call(req: OutboundCallRequest):
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return (BASE_DIR / "web" / "index.html").read_text(encoding="utf-8")
+    return _page("index.html")
 
 
 @app.get("/admin", response_class=HTMLResponse)
 def admin_page():
-    return (BASE_DIR / "web" / "admin.html").read_text(encoding="utf-8")
+    return _page("admin.html")
 
 
 @app.get("/logo.svg")
 def logo():
     return Response(
-        content=(BASE_DIR / "web" / "logo.svg").read_bytes(),
+        content=_page("logo.svg").encode("utf-8"),
         media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=86400"},
     )
 
 
 @app.get("/api/clients", dependencies=[Depends(require_admin)])
 def list_clients():
-    out = []
-    for path in sorted((BASE_DIR / "clients").glob("*.yaml")):
-        with open(path, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-        out.append({"client_id": path.stem,
-                    "business_name": cfg.get("business_name", path.stem)})
-    return out
+    return [{"client_id": e["client_id"],
+             "business_name": e["config"].get("business_name", e["client_id"])}
+            for e in storage.all_clients()]
 
 
 def _with_business_name(session: dict) -> dict:
@@ -412,12 +421,11 @@ def portal_login(req: PortalLoginRequest):
     """A business owner logs in with their business code."""
     code = req.access_key.strip()
     if code:
-        for path in sorted((BASE_DIR / "clients").glob("*.yaml")):
-            with open(path, encoding="utf-8") as f:
-                cfg = yaml.safe_load(f)
+        for entry in storage.all_clients():
+            cfg = entry["config"]
             if cfg.get("access_key") and cfg["access_key"] == code:
-                return {"client_id": path.stem,
-                        "business_name": cfg.get("business_name", path.stem)}
+                return {"client_id": entry["client_id"],
+                        "business_name": cfg.get("business_name", entry["client_id"])}
     raise HTTPException(status_code=401, detail="That code doesn't match any business")
 
 
@@ -460,10 +468,14 @@ def create_business(req: BusinessRequest,
         # Every new business starts on a free trial; after that the owner
         # pays and the admin activates (see billing.py).
         "billing": billing.new_trial(),
-        "slots": generate_slots(req.slot_days, req.slot_ranges, req.slot_gap_min),
+        # Store the RULE, not dated slots: dated slots silently expired and
+        # left the agent unable to book anything (see scheduling.py).
+        "schedule": scheduling.schedule_from_form(
+            req.slot_days, req.slot_ranges, req.slot_gap_min
+        ),
     }
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(config, f, allow_unicode=True, sort_keys=False)
+    # Through storage so the config caches invalidate with the write.
+    storage.write_client_config(client_id, config)
     if not is_admin:
         auth.attach_client(user["email"], client_id)
     return {"client_id": client_id, "business_name": config["business_name"],
@@ -530,15 +542,69 @@ def voice(session_id: str = Form(...), audio: UploadFile = File(...)):
 def speak(req: TTSRequest):
     """Reply text in -> mp3 speech out (voice auto-picked by script, see tts.py)."""
     clean = re.sub(r"[*_#`]", "", req.text)
-    out_path = Path(tempfile.gettempdir()) / f"voxagent_web_{uuid.uuid4().hex}.mp3"
-    try:
-        tts.synthesize(clean, str(out_path))
-        return Response(content=out_path.read_bytes(), media_type="audio/mpeg")
-    finally:
-        out_path.unlink(missing_ok=True)
+    # Straight from the network into the response — no temp file round trip.
+    return Response(content=tts.synthesize_bytes(clean), media_type="audio/mpeg")
 
 
 # ---------- dashboard data -------------------------------------------------------
+
+def _stats_from(calls, bookings, leads) -> dict:
+    """Stats from data already in hand — no second pass over the disk."""
+    n_calls = len(calls)
+    # Conversion = share of calls that produced a booking. Each call's transcript
+    # records its tool calls, so a booking made during the call is visible there.
+    booked_calls = sum(1 for c in calls if "book_appointment" in c.get("transcript", ""))
+    return {
+        "calls": n_calls,
+        "minutes": round(sum(c["seconds"] for c in calls) / 60, 1),
+        "bookings": len(bookings),
+        "leads": len(leads),
+        "conversion": round(100 * booked_calls / n_calls) if n_calls else 0,
+    }
+
+
+DASHBOARD_CALL_LIMIT = 200
+
+
+def _phone_status(client_id: str) -> dict:
+    cfg = storage.read_client_config(client_id) or {}
+    number = cfg.get("twilio_number") or telephony.twilio_config()["number"] or None
+    return {"connected": telephony.is_configured() and bool(number), "number": number}
+
+
+@app.get("/api/dashboard")
+def dashboard(client_id: str, response: Response,
+              x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+              x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+              authorization: str | None = Header(default=None),
+              if_none_match: str | None = Header(default=None)):
+    """Everything one dashboard screen needs, in a single request.
+
+    The page used to fire six authenticated requests (stats, calls, bookings,
+    leads, billing, phone) that between them read the same files four times
+    over. This reads each source once and serves an ETag, so the 20-second
+    refresh costs an empty 304 whenever nothing has actually changed.
+    """
+    authorize_client(client_id, x_client_key, x_admin_key, authorization)
+    version = storage.data_version(client_id)
+    if if_none_match and if_none_match == version:
+        return Response(status_code=304, headers={"ETag": version})
+
+    calls = storage.read_call_logs(client_id)
+    bookings = storage.read_bookings(client_id)
+    leads = storage.read_leads(client_id)
+    response.headers["ETag"] = version
+    return {
+        # Stats count every call ever; the list ships only the recent ones so
+        # the payload stays small for a busy client (transcripts are long).
+        "stats": _stats_from(calls, bookings, leads),
+        "calls": calls[:DASHBOARD_CALL_LIMIT],
+        "bookings": list(reversed(bookings)),
+        "leads": list(reversed(leads)),
+        "billing": billing.status(client_id),
+        "phone": _phone_status(client_id),
+    }
+
 
 @app.get("/api/stats")
 def stats(client_id: str,
@@ -546,18 +612,9 @@ def stats(client_id: str,
           x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
           authorization: str | None = Header(default=None)):
     authorize_client(client_id, x_client_key, x_admin_key, authorization)
-    calls = storage.read_call_logs(client_id)
-    n_calls = len(calls)
-    # Conversion = share of calls that produced a booking. Each call's transcript
-    # records its tool calls, so a booking made during the call is visible there.
-    booked_calls = sum(1 for c in calls if "book_appointment" in c["transcript"])
-    return {
-        "calls": n_calls,
-        "minutes": round(sum(c["seconds"] for c in calls) / 60, 1),
-        "bookings": len(storage.read_bookings(client_id)),
-        "leads": len(storage.read_leads(client_id)),
-        "conversion": round(100 * booked_calls / n_calls) if n_calls else 0,
-    }
+    return _stats_from(storage.read_call_logs(client_id),
+                       storage.read_bookings(client_id),
+                       storage.read_leads(client_id))
 
 
 @app.get("/api/calls")
@@ -617,13 +674,7 @@ def phone_status(client_id: str,
                  authorization: str | None = Header(default=None)):
     """Is the phone line live for this business? Shown on the client dashboard."""
     authorize_client(client_id, x_client_key, x_admin_key, authorization)
-    path = BASE_DIR / "clients" / f"{client_id}.yaml"
-    number = None
-    if path.exists():
-        with open(path, encoding="utf-8") as f:
-            number = yaml.safe_load(f).get("twilio_number")
-    number = number or telephony.twilio_config()["number"] or None
-    return {"connected": telephony.is_configured() and bool(number), "number": number}
+    return _phone_status(client_id)
 
 
 @app.get("/api/transcript/{session_id}")

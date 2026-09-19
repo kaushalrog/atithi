@@ -61,6 +61,8 @@ def test_resolve_client_priority(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr(telephony, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(storage, "CLIENTS_DIR", clients_dir)  # routing reads via storage
+    storage.clear_caches()
     monkeypatch.setenv("DEFAULT_CLIENT", "fallback_biz")
 
     assert resolve_client("+15550001111", explicit="chosen") == "chosen"
@@ -118,11 +120,13 @@ def test_bridge_start_and_media(tmp_storage, fake_llm):
 
 
 def test_bridge_pumps_audio_interruption_tools_and_history(tmp_storage, fake_llm):
+    from conftest import open_day, open_times
+    date = open_day()
     live = FakeLive(events=[
         {"type": "audio", "data": make_tone_pcm(24000, 60)},
         {"type": "interrupted"},
         {"type": "tool_calls", "calls": [
-            {"id": "t1", "name": "check_availability", "args": {"date": "2026-07-09"}}]},
+            {"id": "t1", "name": "check_availability", "args": {"date": date}}]},
         {"type": "user_text", "text": "how much is cleaning?"},
         {"type": "agent_text", "text": "Cleaning is ₹1,200."},
         {"type": "turn_complete"},
@@ -135,7 +139,7 @@ def test_bridge_pumps_audio_interruption_tools_and_history(tmp_storage, fake_llm
     events = [m["event"] for m in sent]
     assert events == ["media", "clear"]
     assert live.tool_results and live.tool_results[0][0]["name"] == "check_availability"
-    assert "09:30" in live.tool_results[0][0]["result"]["available_slots"]
+    assert live.tool_results[0][0]["result"]["available_slots"] == open_times(date=date)
     roles = [m["role"] for m in bridge.agent.history]
     assert roles == ["user", "assistant"]
 

@@ -67,16 +67,17 @@ def resolve_client(to_number: str, explicit: str | None = None) -> str:
 
     Priority: explicit ?client_id= (outbound calls) -> a client YAML whose
     twilio_number matches the dialed number -> DEFAULT_CLIENT -> demo_clinic.
+
+    The number lookup used to re-read and re-parse every client YAML while the
+    caller waited; storage keeps the parsed configs cached, so it is now a
+    dictionary walk over already-loaded data.
     """
     if explicit:
         return explicit
     if to_number:
-        import yaml
-        for path in (BASE_DIR / "clients").glob("*.yaml"):
-            with open(path, encoding="utf-8") as f:
-                cfg = yaml.safe_load(f)
-            if str(cfg.get("twilio_number", "")).strip() == to_number.strip():
-                return path.stem
+        owner = storage.client_for_number(to_number)
+        if owner:
+            return owner
     return os.getenv("DEFAULT_CLIENT", "demo_clinic")
 
 
@@ -290,12 +291,8 @@ def start_outbound_call(client_id: str, to_number: str) -> str:
             "TWILIO_AUTH_TOKEN, TWILIO_NUMBER and PUBLIC_BASE_URL in .env "
             "(see SETUP.md, Part 3)."
         )
-    import yaml
-    client_yaml = BASE_DIR / "clients" / f"{client_id}.yaml"
-    from_number = cfg["number"]
-    if client_yaml.exists():
-        with open(client_yaml, encoding="utf-8") as f:
-            from_number = yaml.safe_load(f).get("twilio_number") or cfg["number"]
+    client_cfg = storage.read_client_config(client_id) or {}
+    from_number = client_cfg.get("twilio_number") or cfg["number"]
     if not from_number:
         raise RuntimeError("No TWILIO_NUMBER in .env and no twilio_number in the client YAML.")
 

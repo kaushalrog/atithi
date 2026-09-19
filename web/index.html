@@ -535,12 +535,26 @@ function setStat(id, target, suffix = "") {
   lastVals[id] = target;
   const node = $(id);
   const isFloat = !Number.isInteger(target);
+  const fmt = v => (isFloat ? v.toFixed(1) : Math.round(v)) + suffix;
+  const settle = () => { node.textContent = fmt(target); };
+
+  // The animation must never be the only thing that puts the real number on
+  // screen. requestAnimationFrame is paused in a background tab, so an owner
+  // who loads the dashboard in another tab used to come back to "0 calls"
+  // when they actually had 11.
+  if (document.hidden ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    settle();
+    return;
+  }
   const t0 = performance.now(), dur = 750;
+  clearTimeout(node._settle);
+  node._settle = setTimeout(settle, dur + 250);   // backstop if frames stall
   (function tick(t) {
     const k = Math.min(1, (t - t0) / dur);
-    const v = target * (1 - Math.pow(1 - k, 3));
-    node.textContent = (isFloat ? v.toFixed(1) : Math.round(v)) + suffix;
+    node.textContent = fmt(target * (1 - Math.pow(1 - k, 3)));
     if (k < 1) requestAnimationFrame(tick);
+    else { clearTimeout(node._settle); settle(); }
   })(t0);
 }
 
@@ -564,16 +578,26 @@ function fmtWhen(iso) {
 }
 function fmtDur(s) { return Math.floor(s / 60) + "m " + String(s % 60).padStart(2, "0") + "s"; }
 
+// One request for the whole screen. The server sends an ETag, so the periodic
+// refresh answers 304 with no body — and we skip re-rendering entirely —
+// whenever nothing has actually changed.
+let DASH_ETAG = null;
+
 async function loadAll() {
-  if (!CLIENT) return;
-  const q = "?client_id=" + CLIENT;
-  let phone, billing;
-  [DATA.stats, DATA.calls, DATA.bookings, DATA.leads, phone, billing] = await Promise.all([
-    api("/api/stats" + q), api("/api/calls" + q), api("/api/bookings" + q),
-    api("/api/leads" + q), api("/api/phone_status" + q), api("/api/billing_status" + q),
-  ]);
-  renderPhone(phone);
-  renderBilling(billing);
+  if (!CLIENT || !AUTH) return;
+  const headers = authHeaders();
+  if (DASH_ETAG) headers["If-None-Match"] = DASH_ETAG;
+  const res = await fetch("/api/dashboard?client_id=" + encodeURIComponent(CLIENT), { headers });
+  if (res.status === 304) return;                 // unchanged: nothing to do
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+  DASH_ETAG = res.headers.get("ETag");
+  const d = await res.json();
+  DATA.stats = d.stats;
+  DATA.calls = d.calls;
+  DATA.bookings = d.bookings;
+  DATA.leads = d.leads;
+  renderPhone(d.phone);
+  renderBilling(d.billing);
   renderAll();
 }
 function renderBilling(b) {
@@ -1109,7 +1133,11 @@ $("gateForgot").onclick = enterForgotMode;
 $("gatePw").addEventListener("keydown", e => { if (e.key === "Enter") gateSubmit(); });
 $("resetNewPw").addEventListener("keydown", e => { if (e.key === "Enter") gateSubmit(); });
 $("logoutBtn").onclick = () => { localStorage.removeItem("voxagent_auth"); location.href = "/"; };
-$("clientSelect").onchange = () => { CLIENT = $("clientSelect").value; loadAll(); };
+$("clientSelect").onchange = () => {
+  CLIENT = $("clientSelect").value;
+  DASH_ETAG = null;            // different business, different data
+  loadAll();
+};
 $("addBizBtn").onclick = () => showView("onboard");
 $("cancelOnboard").onclick = () => showView("dashboard");
 $("createBtn").onclick = createBusiness;

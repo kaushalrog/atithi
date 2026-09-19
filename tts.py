@@ -51,9 +51,25 @@ class EdgeTTS:
     def synthesize(self, text: str, out_path: str) -> str:
         """Write speech for `text` to an mp3 file. Returns the voice used."""
         voice = VOICES[detect_language(text)]
-        # edge-tts is async-only; we hide that in here so callers stay simple.
-        asyncio.run(self._synth(text, voice, out_path))
+        audio = self.synthesize_bytes(text)
+        with open(out_path, "wb") as f:
+            f.write(audio)
         return voice
 
-    async def _synth(self, text: str, voice: str, out_path: str):
-        await edge_tts.Communicate(text, voice).save(out_path)
+    def synthesize_bytes(self, text: str) -> bytes:
+        """Speech as mp3 bytes, straight from the network into memory.
+
+        The web endpoint used to write a temp file and read it straight back
+        just to hand the bytes to the browser — three pointless disk
+        operations on the path between the agent answering and the caller
+        hearing it.
+        """
+        voice = VOICES[detect_language(text)]
+        return asyncio.run(self._collect(text, voice))
+
+    async def _collect(self, text: str, voice: str) -> bytes:
+        chunks = bytearray()
+        async for chunk in edge_tts.Communicate(text, voice).stream():
+            if chunk["type"] == "audio":
+                chunks.extend(chunk["data"])
+        return bytes(chunks)

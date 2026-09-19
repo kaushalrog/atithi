@@ -4,8 +4,33 @@
     {
       "name": "voxagent-web",
       "runtimeExecutable": "C:\\Users\\saire\\OneDrive\\Desktop\\vox agent\\.venv\\Scripts\\python.exe",
-      "runtimeArgs": ["C:\\Users\\saire\\OneDrive\\Desktop\\vox agent\\server.py", "--no-browser"],
+      "runtimeArgs": [
+        "C:\\Users\\saire\\OneDrive\\Desktop\\vox agent\\server.py",
+        "--no-browser"
+      ],
       "port": 8765
+    },
+    {
+      "name": "internpilot-frontend",
+      "runtimeExecutable": "npm.cmd",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "C:\\Users\\saire\\OneDrive\\Desktop\\internship apply\\frontend"
+      ],
+      "port": 5173
+    },
+    {
+      "name": "opportunityos",
+      "runtimeExecutable": "npm.cmd",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "C:\\Users\\saire\\OneDrive\\Desktop\\AI\\opportunityos"
+      ],
+      "port": 3000
     }
   ]
 }
