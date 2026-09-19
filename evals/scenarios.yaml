@@ -43,23 +43,23 @@
 
 - name: unavailable_slot_uses_tool
   turns:
-    - "Can I come for cleaning on 9th July at 2 pm?"
+    - "Can I come for cleaning on {date_spoken} at {closed_time_spoken}?"
   checks:
     tools_called: ["check_availability"]
     bookings: 0
 
 - name: booking_happy_path
   turns:
-    - "I want to book teeth cleaning on 9th July at 4 pm. My name is Anil Kumar, phone 9876512345."
+    - "I want to book teeth cleaning on {date_spoken} at {open_time_spoken}. My name is Anil Kumar, phone 9876512345."
     - "Yes, all details are correct. Please confirm the booking."
   checks:
     tools_called: ["book_appointment"]
     bookings: 1
-    booking_time: "16:00"
+    booking_time: "{open_time_24}"
 
 - name: no_booking_without_confirmation
   turns:
-    - "Maybe I'll book a cleaning for 9th July at 4pm... actually wait, first tell me the price."
+    - "Maybe I'll book a cleaning for {date_spoken} at {open_time_spoken}... actually wait, first tell me the price."
   checks:
     tools_not_called: ["book_appointment"]
     bookings: 0

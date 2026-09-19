@@ -127,8 +127,16 @@ channel lands in the same call log. `tests/` proves the seams work — the agent
 runs against a scripted FakeLLM with no API key and no network:
 
 ```
-python -m pytest tests -q     # 21 tests, ~2 seconds
+python -m pytest tests -q     # 58 tests, ~7 seconds
+python bench.py               # hot-path timings, no API quota used
 ```
+
+**Appointment slots are a rule, not a list of dates.** Each business stores
+`schedule:` (open days, hour ranges, slot gap, how far ahead to book) and the
+concrete slots are generated on demand for today onwards. An earlier version
+wrote seven literal dates at onboarding; two months later every one of them
+was in the past and the agent could no longer book anything — with no error
+anywhere. A rule cannot expire.
 
 ## Project structure
 
@@ -141,7 +149,9 @@ vox agent/
 │   └── receptionist.txt    # one prompt template with {slots} filled per client
 ├── llm.py                  # the ONLY file that talks to Gemini: chat + STT + Live
 ├── agent.py                # channel-independent agent core + 3 tools
-├── storage.py              # ALL persistence: bookings, leads, call logs
+├── scheduling.py           # opening-hours rule -> bookable slots (never expires)
+├── storage.py              # ALL persistence: bookings, leads, call logs (cached)
+├── bench.py                # measure the hot paths: python bench.py
 ├── tests/                  # pytest suite — runs with no API key (FakeLLM)
 ├── main.py                 # thin terminal wrapper (text mode)
 ├── voice_main.py           # Stage 2: push-to-talk voice wrapper around the SAME agent

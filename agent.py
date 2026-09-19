@@ -20,10 +20,10 @@ the error and corrects itself. Self-healing beats hoping.
 import datetime as dt
 import re
 import sys
+import threading
 from pathlib import Path
 
-import yaml
-
+import scheduling
 import storage
 from llm import GeminiLLM
 
@@ -102,60 +102,94 @@ def _phone_ok(phone: str) -> bool:
     return len(re.sub(r"\D", "", phone or "")) >= 10
 
 
+# The prompt template and each client's rendered prompt are the same on every
+# call of the day — read and render them once, not once per conversation.
+_template_cache: list = []
+_prompt_cache: dict = {}
+_prompt_lock = threading.Lock()
+_shared_llm = None
+_llm_lock = threading.Lock()
+
+
+def _prompt_template() -> str:
+    path = BASE_DIR / "prompts" / "receptionist.txt"
+    stamp = path.stat().st_mtime_ns
+    if not _template_cache or _template_cache[0] != stamp:
+        _template_cache[:] = [stamp, path.read_text(encoding="utf-8")]
+    return _template_cache[1]
+
+
+def default_llm() -> GeminiLLM:
+    """One LLM wrapper for the whole process.
+
+    Building one costs ~780 ms (the Gemini client underneath). Creating it per
+    conversation meant every phone call opened with nearly a second of silence.
+    GeminiLLM holds no conversation state, so a single instance is safe to
+    share across calls and threads.
+    """
+    global _shared_llm
+    if _shared_llm is None:
+        with _llm_lock:
+            if _shared_llm is None:
+                _shared_llm = GeminiLLM()
+    return _shared_llm
+
+
 class ReceptionistAgent:
     """One instance = one conversation with one business's receptionist."""
 
     def __init__(self, client_id: str, llm=None):
         self.client_id = client_id
         self.config = self._load_config(client_id)
-        self._apply_existing_bookings()
+        # This conversation's own view of what's free. Never the shared cached
+        # config — booking a slot removes it here only.
+        self.slots = scheduling.available_slots(
+            self.config, storage.booked_pairs(client_id)
+        )
         self.system_prompt = self._render_system_prompt()
-        self.llm = llm or GeminiLLM()
+        self.llm = llm or default_llm()
         self.history: list[dict] = []
 
     # ---- setup ---------------------------------------------------------------
 
     def _load_config(self, client_id: str) -> dict:
-        path = BASE_DIR / "clients" / f"{client_id}.yaml"
-        if not path.exists():
-            raise FileNotFoundError(f"No client config found at {path}")
-        with open(path, encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-        # Defensive: if someone forgets to quote dates in YAML, keys arrive as
-        # datetime.date objects. Normalize slot keys to plain "YYYY-MM-DD" strings.
-        config["slots"] = {str(k): v for k, v in config.get("slots", {}).items()}
+        """The shared, cached parse of the client YAML — treat as read-only."""
+        config = storage.read_client_config(client_id)
+        if config is None:
+            raise FileNotFoundError(
+                f"No client config found at {BASE_DIR / 'clients' / (client_id + '.yaml')}"
+            )
         return config
 
-    def _apply_existing_bookings(self):
-        """Remove already-booked slots so they are never offered twice.
-
-        Reads past bookings from local storage (Sheet-only bookings aren't
-        replayed yet — a real calendar backend replaces this mechanism later).
-        """
-        for row in storage.read_bookings(self.client_id):
-            if row.get("status") != "confirmed":
-                continue
-            day = self.config["slots"].get(row.get("date", ""))
-            if day and row.get("time") in day:
-                day.remove(row["time"])
-
     def _render_system_prompt(self) -> str:
-        template = (BASE_DIR / "prompts" / "receptionist.txt").read_text(encoding="utf-8")
         cfg = self.config
-        services = "\n".join(f"- {s['name']}: {s['price']}" for s in cfg["services"])
-        faq = "\n".join(f"Q: {f['q']}\nA: {f['a']}" for f in cfg["faq"]) or "(none provided)"
-        policies = "\n".join(f"- {p}" for p in cfg["policies"]) or "(none provided)"
         today = dt.date.today()
-        return template.format(
+        # id(cfg) changes whenever the YAML is re-parsed, so it doubles as a
+        # version marker: edit the file and the prompt re-renders.
+        key = (self.client_id, id(cfg), today)
+        with _prompt_lock:
+            hit = _prompt_cache.get(key)
+        if hit is not None:
+            return hit
+
+        services = "\n".join(f"- {s['name']}: {s['price']}" for s in cfg.get("services", []))
+        faq = "\n".join(f"Q: {f['q']}\nA: {f['a']}" for f in cfg.get("faq", [])) or "(none provided)"
+        policies = "\n".join(f"- {p}" for p in cfg.get("policies", [])) or "(none provided)"
+        prompt = _prompt_template().format(
             business_name=cfg["business_name"],
-            address=cfg["address"],
-            timings=cfg["timings"],
+            address=cfg.get("address", ""),
+            timings=cfg.get("timings", ""),
             services_and_prices=services,
             faq=faq,
             policies=policies,
-            fallback_instruction=cfg["fallback"],
+            fallback_instruction=cfg.get("fallback", ""),
             today=today.strftime("%A, %Y-%m-%d"),
         )
+        with _prompt_lock:
+            if len(_prompt_cache) > 512:
+                _prompt_cache.clear()
+            _prompt_cache[key] = prompt
+        return prompt
 
     # ---- the conversation loop -------------------------------------------------
 
@@ -230,7 +264,7 @@ class ReceptionistAgent:
         return {"error": f"Unknown tool: {name}"}
 
     def _check_availability(self, date: str) -> dict:
-        """Stage 1 mock: reads slots from the client YAML.
+        """What's actually free on a date, computed from the business's hours.
 
         Returns ALL free slots for the date, unfiltered. We used to filter by a
         'morning/afternoon/evening' window — until an eval caught the agent
@@ -241,12 +275,17 @@ class ReceptionistAgent:
         Later stages replace this body with a real calendar lookup — the tool's
         name and schema stay the same, so the agent doesn't change at all.
         """
-        slots = self.config["slots"].get(date)
+        slots = self.slots.get(date)
         if slots is None:
+            horizon = sorted(self.slots)
             return {
                 "date": date,
                 "available_slots": [],
                 "note": (
+                    f"No slot information for {date}. Bookings are open from "
+                    f"{horizon[0]} to {horizon[-1]}. Offer a date in that range, "
+                    "or have the front desk call the customer back."
+                    if horizon else
                     "No slot information for this date. Offer to have the front "
                     "desk call the customer back."
                 ),
@@ -256,7 +295,7 @@ class ReceptionistAgent:
     def _book_appointment(self, customer_name, phone, service, date, time) -> dict:
         # Validate BEFORE writing anything. The error messages are written for
         # the model: it reads them and fixes its own mistake in the next turn.
-        available = self.config["slots"].get(date) or []
+        available = self.slots.get(date) or []
         if time not in available:
             return {
                 "status": "failed",
@@ -279,7 +318,7 @@ class ReceptionistAgent:
         ]
         saved_to = storage.save_booking(row)
         # Consume the slot so the same time can't be double-booked.
-        self.config["slots"][date].remove(time)
+        self.slots[date].remove(time)
         print(
             f"\n  ✅ BOOKING CONFIRMED — {customer_name} | {phone} | {service} "
             f"| {date} {time}\n     saved to: {saved_to}\n"

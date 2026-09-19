@@ -63,10 +63,29 @@ AI receptionist for Indian small service businesses (clinics, salons, coaching i
 - Core: agent.py — ReceptionistAgent, 3 tools (check_availability,
   book_appointment, save_lead). Tools validate inputs and return errors the
   model can act on (bad slot -> offers alternatives; short phone -> re-confirm).
+- Availability: scheduling.py — a client YAML stores the RULE
+  (`schedule:` days/ranges/gap/horizon), never dated slots. Dated slots
+  silently expired once and the agent lost the ability to book anything for
+  two months; a rule cannot expire. Past times are never offered.
 - Providers (one-file swaps): llm.py (ALL Gemini code: chat, STT, Live),
-  tts.py (ALL edge-tts code).
+  tts.py (ALL edge-tts code). ONE shared genai client for the process —
+  constructing it costs ~780 ms, so it is built at server startup, never
+  per conversation.
 - Persistence: storage.py (ALL disk I/O: bookings Sheet/CSV, leads.csv,
-  calls/<client_id>/*.json). Nothing else touches paths.
+  calls/<client_id>/*.json). Nothing else touches paths. Every file is
+  parsed once and cached until it changes (our writes invalidate exactly;
+  outside edits are caught by an mtime+size check). **Cached values are
+  shared — treat them as read-only and copy before mutating.**
+
+## Performance rules
+
+- `python bench.py` measures the hot paths offline. Run it after touching
+  agent.py, storage.py, auth.py, llm.py or scheduling.py.
+- Anything on the path between a caller speaking and the agent answering is
+  latency the customer hears. Never construct a provider client, parse a
+  YAML, or scan a CSV inside that path.
+- The dashboard is ONE request (`/api/dashboard`) with an ETag; the periodic
+  refresh answers 304 with no body when nothing changed.
 - Access control: per-business codes (access_key in each client YAML,
   X-Client-Key header) lock owners to their own data; ADMIN_PASSWORD
   (X-Admin-Key) opens everything. Portal has a login gate; /admin

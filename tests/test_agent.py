@@ -1,10 +1,16 @@
-"""Agent core: the tool-use loop, tool validation, and slot bookkeeping."""
+"""Agent core: the tool-use loop, tool validation, and slot bookkeeping.
+
+Dates here are derived from the client's live schedule, never hardcoded. The
+old suite pinned a literal date, which drifted into the past and let a total
+booking outage pass every test for two months.
+"""
 
 import storage
 from agent import ReceptionistAgent
+from conftest import open_day, open_times
 
-# demo_clinic.yaml has slots on this date: 09:30, 10:00, 16:00, 18:00, 19:30
-DATE = "2026-07-09"
+# A time no business in this project is open — safe "unavailable" fixture.
+CLOSED_TIME = "03:00"
 
 
 def make_agent(fake_llm, responses):
@@ -18,16 +24,18 @@ def test_plain_reply(tmp_storage, fake_llm):
 
 
 def test_tool_loop_executes_and_feeds_back(tmp_storage, fake_llm):
+    date = open_day()
+    first_slot = open_times(date=date)[0]
     agent = make_agent(fake_llm, [
-        {"text": None, "tool_calls": [{"name": "check_availability", "args": {"date": DATE}}]},
-        {"text": "We have 09:30 free.", "tool_calls": []},
+        {"text": None, "tool_calls": [{"name": "check_availability", "args": {"date": date}}]},
+        {"text": f"We have {first_slot} free.", "tool_calls": []},
     ])
     reply = agent.chat("anything tomorrow?")
-    assert reply == "We have 09:30 free."
+    assert reply == f"We have {first_slot} free."
     roles = [m["role"] for m in agent.history]
     assert roles == ["user", "assistant", "tool", "assistant"]
     tool_result = agent.history[2]["result"]
-    assert "09:30" in tool_result["available_slots"]
+    assert first_slot in tool_result["available_slots"]
     # the agent must offer all three tools to the model every turn
     assert {t["name"] for t in agent.llm.requests[0]["tools"]} == {
         "check_availability", "book_appointment", "save_lead",
@@ -35,7 +43,8 @@ def test_tool_loop_executes_and_feeds_back(tmp_storage, fake_llm):
 
 
 def test_runaway_tool_loop_is_stopped(tmp_storage, fake_llm):
-    endless = {"text": None, "tool_calls": [{"name": "check_availability", "args": {"date": DATE}}]}
+    endless = {"text": None,
+               "tool_calls": [{"name": "check_availability", "args": {"date": open_day()}}]}
     agent = make_agent(fake_llm, [endless] * 6)
     reply = agent.chat("hi")
     assert "front desk" in reply  # the safety net answer, not a crash
@@ -54,42 +63,64 @@ def test_check_availability_returns_all_slots_unfiltered(tmp_storage, fake_llm):
     # No server-side time filtering: an eval showed a window mismatch ("evening"
     # meaning 4 PM to the model but 5 PM to us) hides real slots from customers.
     agent = make_agent(fake_llm, [])
-    result = agent._check_availability(DATE)
-    assert result["available_slots"] == ["09:30", "10:00", "16:00", "18:00", "19:30"]
-    unknown = agent._check_availability("2030-01-01")
-    assert unknown["available_slots"] == [] and "note" in unknown
+    date = open_day()
+    result = agent._check_availability(date)
+    assert result["available_slots"] == open_times(date=date)
+    assert len(result["available_slots"]) > 1
+
+
+def test_availability_is_never_empty_for_the_whole_window(tmp_storage, fake_llm):
+    """Regression guard for the outage: a rolling schedule always has slots."""
+    agent = make_agent(fake_llm, [])
+    assert sum(len(v) for v in agent.slots.values()) > 0
+    # and the window starts today, not on some date frozen at onboarding
+    import datetime as dt
+    assert min(agent.slots) == dt.date.today().isoformat()
+
+
+def test_unknown_date_explains_the_bookable_window(tmp_storage, fake_llm):
+    agent = make_agent(fake_llm, [])
+    result = agent._check_availability("2020-01-01")
+    assert result["available_slots"] == []
+    assert "front desk" in result["note"] or "Bookings are open" in result["note"]
 
 
 def test_booking_rejects_unavailable_slot(tmp_storage, fake_llm):
     agent = make_agent(fake_llm, [])
-    result = agent._book_appointment("A", "9876543210", "Cleaning", DATE, "14:00")
+    date = open_day()
+    result = agent._book_appointment("A", "9876543210", "Cleaning", date, CLOSED_TIME)
     assert result["status"] == "failed"
-    assert "09:30" in result["available_slots"]  # gives the model the fix
+    assert result["available_slots"] == open_times(date=date)  # gives the model the fix
 
 
 def test_booking_rejects_short_phone(tmp_storage, fake_llm):
     agent = make_agent(fake_llm, [])
-    result = agent._book_appointment("A", "12345", "Cleaning", DATE, "09:30")
+    date = open_day()
+    result = agent._book_appointment("A", "12345", "Cleaning", date, open_times(date=date)[0])
     assert result["status"] == "failed"
     assert "phone" in result["error"].lower()
 
 
 def test_booking_consumes_slot_and_persists(tmp_storage, fake_llm):
     agent = make_agent(fake_llm, [])
-    result = agent._book_appointment("Ravi", "+91 98765 43210", "Cleaning", DATE, "09:30")
+    date = open_day()
+    slot = open_times(date=date)[0]
+    result = agent._book_appointment("Ravi", "+91 98765 43210", "Cleaning", date, slot)
     assert result["status"] == "confirmed"
-    assert "09:30" not in agent._check_availability(DATE)["available_slots"]
+    assert slot not in agent._check_availability(date)["available_slots"]
     rows = storage.read_bookings("demo_clinic")
-    assert len(rows) == 1 and rows[0]["time"] == "09:30"
+    assert len(rows) == 1 and rows[0]["time"] == slot
     # a fresh agent must replay the booking and not offer the slot again
     agent2 = make_agent(fake_llm, [])
-    assert "09:30" not in agent2._check_availability(DATE)["available_slots"]
+    assert slot not in agent2._check_availability(date)["available_slots"]
 
 
 def test_double_booking_same_slot_fails(tmp_storage, fake_llm):
     agent = make_agent(fake_llm, [])
-    assert agent._book_appointment("A", "9876543210", "X", DATE, "10:00")["status"] == "confirmed"
-    assert agent._book_appointment("B", "9876543211", "X", DATE, "10:00")["status"] == "failed"
+    date = open_day()
+    slot = open_times(date=date)[1]
+    assert agent._book_appointment("A", "9876543210", "X", date, slot)["status"] == "confirmed"
+    assert agent._book_appointment("B", "9876543211", "X", date, slot)["status"] == "failed"
 
 
 def test_save_lead(tmp_storage, fake_llm):
@@ -103,4 +134,4 @@ def test_save_lead(tmp_storage, fake_llm):
 def test_lead_rejects_short_phone(tmp_storage, fake_llm):
     agent = make_agent(fake_llm, [])
     assert agent._save_lead("K", "12", "x", "")["status"] == "failed"
-    assert storage.read_leads("demo_clinic") == []
+    assert list(storage.read_leads("demo_clinic")) == []

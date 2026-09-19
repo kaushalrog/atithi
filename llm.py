@@ -22,6 +22,8 @@ send(messages, tools) returns:
 """
 
 import os
+import re
+import threading
 import time
 
 from dotenv import load_dotenv
@@ -40,13 +42,63 @@ class QuotaExhausted(Exception):
 # preview names as Google retires them (the 07-2025 half-cascade one is already gone).
 LIVE_MODEL = "gemini-2.5-flash-native-audio-latest"
 
+# ---- the shared client ------------------------------------------------------------
+#
+# Constructing genai.Client() costs ~780 ms (measured). It used to happen once
+# per ReceptionistAgent, i.e. once per web session AND once per phone call —
+# 780 ms of dead air before the agent could even greet the caller. One client
+# per API key fixes that AND lets every turn reuse an already-open TLS
+# connection instead of re-handshaking. The client is safe to share across
+# threads and coroutines; it is just a stateless wrapper over a connection pool.
+
+_clients: dict[str, genai.Client] = {}
+_clients_lock = threading.Lock()
+
+
+def _api_key() -> str:
+    key = os.getenv("GEMINI_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not set. Copy .env.example to .env and add your "
+            "key (see SETUP.md for how to get one)."
+        )
+    return key
+
+
+def shared_client() -> genai.Client:
+    key = _api_key()
+    client = _clients.get(key)
+    if client is None:
+        with _clients_lock:
+            client = _clients.get(key)          # another thread may have won
+            if client is None:
+                client = genai.Client(api_key=key)
+                _clients[key] = client
+    return client
+
+
+def warm_up():
+    """Build the client at startup so the first caller doesn't pay for it."""
+    try:
+        shared_client()
+    except Exception as e:                       # never block boot on this
+        print(f"  [llm] warm-up skipped: {e}")
+
+
+# Tool schemas are module constants that never change, but converting them
+# builds pydantic models — so do it once per schema list, not once per turn.
+_tool_cache: dict[int, tuple] = {}
+
 
 def _tools_to_gemini(tools):
     """Convert our plain JSON-schema tool dicts to Gemini's format.
     Shared by the turn-based (GeminiLLM) and streaming (GeminiLive) classes."""
     if not tools:
         return None
-    return [
+    cached = _tool_cache.get(id(tools))
+    if cached is not None and cached[0] is tools:   # keep a ref so id can't be reused
+        return cached[1]
+    converted = [
         types.Tool(
             function_declarations=[
                 types.FunctionDeclaration(
@@ -58,22 +110,46 @@ def _tools_to_gemini(tools):
             ]
         )
     ]
+    _tool_cache[id(tools)] = (tools, converted)
+    return converted
+
+
+_RETRY_DELAY_RE = re.compile(r"'retryDelay':\s*'(\d+)")
+
+
+def _retry_wait(error, attempt: int) -> float:
+    """How long to wait before retrying.
+
+    Google tells us exactly how long in the 429 body ('retryDelay': '5s').
+    Honouring it beats a fixed 20 s guess: a caller on a live phone line gets
+    the answer as soon as the window reopens instead of sitting in silence.
+    """
+    if error.code == 429:
+        found = _RETRY_DELAY_RE.search(str(error))
+        if found:
+            return min(int(found.group(1)) + 1, 25)
+        return 20
+    return 2 * (attempt + 1)
 
 
 class GeminiLLM:
     def __init__(self, model: str = MODEL):
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise RuntimeError(
-                "GEMINI_API_KEY is not set. Copy .env.example to .env and add your "
-                "key (see SETUP.md for how to get one)."
-            )
-        self.client = genai.Client(api_key=api_key)
+        self.client = shared_client()
         self.model = model
+        self._config_cache: tuple | None = None
 
     def send(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
         """One model turn: neutral messages in -> neutral response out."""
         system_prompt, contents = self._to_gemini_messages(messages)
+        config = self._config_for(system_prompt, tools)
+        response = self._call_with_retry(contents, config)
+        return self._normalize(response)
+
+    def _config_for(self, system_prompt, tools):
+        """The request config only changes when the client (system prompt) does,
+        so build it once per conversation instead of once per turn."""
+        if self._config_cache and self._config_cache[0] == (id(tools), system_prompt):
+            return self._config_cache[1]
         config = types.GenerateContentConfig(
             system_instruction=system_prompt,
             tools=_tools_to_gemini(tools),
@@ -81,8 +157,8 @@ class GeminiLLM:
             # thinking off makes replies faster and saves free-tier quota.
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
-        response = self._call_with_retry(contents, config)
-        return self._normalize(response)
+        self._config_cache = ((id(tools), system_prompt), config)
+        return config
 
     def transcribe(self, audio_bytes: bytes, mime_type: str = "audio/wav") -> str:
         """Speech-to-text via Gemini's audio understanding (Stage 2).
@@ -170,7 +246,7 @@ class GeminiLLM:
                 # waits of 20s guarantee we reach a fresh rate-limit minute.
                 retriable = e.code in (429, 500, 503)
                 if retriable and attempt < attempts - 1:
-                    wait = 20 if e.code == 429 else 2 * (attempt + 1)
+                    wait = _retry_wait(e, attempt)
                     print(f"  [llm] API error {e.code}, retrying in {wait}s...")
                     time.sleep(wait)
                     continue
@@ -221,13 +297,7 @@ class GeminiLive:
     INPUT_MIME = "audio/pcm;rate=16000"
 
     def __init__(self, model: str = LIVE_MODEL):
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise RuntimeError(
-                "GEMINI_API_KEY is not set. Copy .env.example to .env and add your "
-                "key (see SETUP.md for how to get one)."
-            )
-        self.client = genai.Client(api_key=api_key)
+        self.client = shared_client()   # ~780 ms saved on every phone call
         self.model = model
         self._cm = None
         self._session = None

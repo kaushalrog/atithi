@@ -29,19 +29,22 @@ def new_trial() -> dict:
             "paid_until": (dt.date.today() + dt.timedelta(days=TRIAL_DAYS)).isoformat()}
 
 
+def _is_active(billing: dict | None) -> bool:
+    if not billing:
+        return True  # grandfathered demo client (no billing block)
+    return str(billing.get("paid_until", "")) >= dt.date.today().isoformat()
+
+
 def client_active(client_id: str) -> bool:
     """May this business use the agent (portal sessions + phone calls)?"""
     cfg = storage.read_client_config(client_id)
     if cfg is None:
         return False
-    billing = cfg.get("billing")
-    if not billing:
-        return True  # grandfathered demo client
-    return str(billing.get("paid_until", "")) >= dt.date.today().isoformat()
+    return _is_active(cfg.get("billing"))
 
 
 def status(client_id: str) -> dict:
-    """Everything the dashboard's billing banner needs."""
+    """Everything the dashboard's billing banner needs (one config read)."""
     cfg = storage.read_client_config(client_id) or {}
     billing = cfg.get("billing") or {}
     paid_until = str(billing.get("paid_until", ""))
@@ -52,7 +55,7 @@ def status(client_id: str) -> dict:
         "plan": billing.get("plan", "free"),
         "paid_until": paid_until or None,
         "days_left": days_left,
-        "active": client_active(client_id),
+        "active": _is_active(cfg.get("billing")),
         "renewal_requested": billing.get("renewal_requested"),
         "price_inr": int(os.getenv("BILLING_PRICE_INR", "1999")),
         "upi": os.getenv("BILLING_UPI", ""),
@@ -64,7 +67,9 @@ def request_renewal(client_id: str) -> dict:
     cfg = storage.read_client_config(client_id)
     if cfg is None:
         raise LookupError(f"No client '{client_id}'")
-    billing = cfg.get("billing") or new_trial()
+    # storage hands back the shared cached parse; copy before editing.
+    cfg = dict(cfg)
+    billing = dict(cfg.get("billing") or new_trial())
     billing["renewal_requested"] = dt.datetime.now().isoformat(timespec="seconds")
     cfg["billing"] = billing
     storage.write_client_config(client_id, cfg)
@@ -78,7 +83,8 @@ def set_paid_until(client_id: str, months: int) -> str:
     cfg = storage.read_client_config(client_id)
     if cfg is None:
         raise LookupError(f"No client '{client_id}'")
-    billing = cfg.get("billing") or {}
+    cfg = dict(cfg)                              # never mutate the shared cache
+    billing = dict(cfg.get("billing") or {})
     base = max(dt.date.today(),
                dt.date.fromisoformat(str(billing.get("paid_until", dt.date.today().isoformat()))))
     billing["plan"] = "paid"

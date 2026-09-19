@@ -25,6 +25,7 @@ import re
 import secrets
 import smtplib
 import sqlite3
+import threading
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -47,7 +48,23 @@ CREATE TABLE IF NOT EXISTS tokens (
 CREATE TABLE IF NOT EXISTS resets (
     code TEXT PRIMARY KEY, email TEXT NOT NULL, expires TEXT NOT NULL,
     used INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS idx_tokens_email ON tokens(email);
+CREATE INDEX IF NOT EXISTS idx_resets_email ON resets(email);
 """
+
+# ---- connection handling -----------------------------------------------------------
+#
+# Every authenticated API request calls user_for_token(). That used to open a
+# fresh SQLite connection, re-run PRAGMA journal_mode, execute the whole schema
+# and re-check the legacy-JSON migration — before the actual lookup. Now the
+# connection is opened once per thread and the schema/migration run once per
+# database file. One connection per thread (not one global) because SQLite
+# connections are not safe to use from several threads at once, and FastAPI
+# serves sync endpoints from a thread pool.
+
+_local = threading.local()
+_prepared: set[str] = set()
+_prepare_lock = threading.Lock()
 
 
 def _now() -> str:
@@ -55,12 +72,40 @@ def _now() -> str:
 
 
 def _db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_FILE, timeout=10)
+    path = str(DB_FILE)                      # tests repoint DB_FILE at a tmp file
+    conn = getattr(_local, "conn", None)
+    if conn is not None and getattr(_local, "path", None) == path:
+        return conn
+    if conn is not None:
+        conn.close()
+    conn = sqlite3.connect(path, timeout=10)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.executescript(_SCHEMA)
-    _migrate_legacy_json(conn)
+    with _prepare_lock:
+        if path not in _prepared:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")   # WAL makes this safe
+            conn.executescript(_SCHEMA)
+            _migrate_legacy_json(conn)
+            _prepared.add(path)
+    _local.conn = conn
+    _local.path = path
     return conn
+
+
+# ---- the token cache ---------------------------------------------------------------
+#
+# The token -> user lookup is the single hottest query in the app (it runs on
+# every request). Tokens change only when someone signs up, logs in, resets a
+# password or onboards a business, so we cache the answer in process and clear
+# the cache on exactly those events — fast AND never stale.
+
+_token_cache: dict[str, dict] = {}
+_cache_lock = threading.Lock()
+
+
+def _invalidate_cache():
+    with _cache_lock:
+        _token_cache.clear()
 
 
 def _migrate_legacy_json(conn: sqlite3.Connection):
@@ -116,6 +161,7 @@ def ensure_admin_seed():
             "ON CONFLICT(email) DO UPDATE SET password_hash=excluded.password_hash, role='admin'",
             (email, _hash(password, salt), salt, "admin", _now()),
         )
+    _invalidate_cache()
 
 
 def signup(email: str, password: str) -> dict:
@@ -150,24 +196,43 @@ def issue_token(email: str) -> dict:
         conn.execute("DELETE FROM tokens WHERE expires < ?", (_now(),))
         conn.execute("INSERT INTO tokens VALUES (?,?,?)", (token, email, expires))
         user = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+    _invalidate_cache()
     return {"token": token, "email": email, "role": user["role"],
             "client_id": user["client_id"]}
 
 
 def user_for_token(token: str) -> dict | None:
-    with _db() as conn:
-        row = conn.execute(
-            "SELECT u.email, u.role, u.client_id FROM tokens t "
-            "JOIN users u ON u.email = t.email "
-            "WHERE t.token=? AND t.expires >= ?", (token, _now()),
-        ).fetchone()
-    return dict(row) if row else None
+    """Hot path: runs on every authenticated request. Served from cache."""
+    with _cache_lock:
+        hit = _token_cache.get(token)
+    if hit is not None:
+        if hit["expires"] >= _now():
+            return {k: hit[k] for k in ("email", "role", "client_id")}
+        with _cache_lock:
+            _token_cache.pop(token, None)
+        return None
+
+    conn = _db()
+    row = conn.execute(
+        "SELECT u.email, u.role, u.client_id, t.expires FROM tokens t "
+        "JOIN users u ON u.email = t.email "
+        "WHERE t.token=? AND t.expires >= ?", (token, _now()),
+    ).fetchone()
+    if row is None:
+        return None
+    entry = dict(row)
+    with _cache_lock:
+        if len(_token_cache) > 4096:       # bounded; tokens are tiny
+            _token_cache.clear()
+        _token_cache[token] = entry
+    return {k: entry[k] for k in ("email", "role", "client_id")}
 
 
 def attach_client(email: str, client_id: str):
     """Link a freshly onboarded business to the owner's account."""
     with _db() as conn:
         conn.execute("UPDATE users SET client_id=? WHERE email=?", (client_id, email))
+    _invalidate_cache()   # cached sessions still think this owner has no business
 
 
 # ---- password reset --------------------------------------------------------------
@@ -202,6 +267,7 @@ def reset_password(email: str, code: str, new_password: str) -> dict:
                      (_hash(new_password, salt), salt, email))
         conn.execute("UPDATE resets SET used=1 WHERE code=?", (row["code"],))
         conn.execute("DELETE FROM tokens WHERE email=?", (email,))
+    _invalidate_cache()   # every old session must stop working immediately
     return issue_token(email)
 
 
