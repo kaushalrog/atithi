@@ -149,28 +149,216 @@ def test_bridge_pumps_audio_interruption_tools_and_history(tmp_storage, fake_llm
     assert "+919876543210" in logs[0]["transcript"]  # caller id preserved
 
 
-# ---- the inbound webhook -----------------------------------------------------------
+# ---- the inbound webhook and the media stream (audit H1) -----------------------------
+#
+# Every test runs offline: signatures are computed with Twilio's own validator
+# and a made-up auth token; GeminiLive and the agent are spies, so a rejected
+# connection can be proven to have allocated NOTHING.
 
-def test_voice_webhook_returns_stream_twiml(monkeypatch):
-    monkeypatch.setenv("PUBLIC_BASE_URL", "https://demo.ngrok.app")
-    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "")  # no signature check in local mode
-    from fastapi.testclient import TestClient
-    from server import app
+import shutil
+import time
+import xml.etree.ElementTree as ET
 
-    client = TestClient(app)
-    res = client.post("/twilio/voice", data={"To": "+15550001111", "From": "+919876543210"})
+from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+from twilio.request_validator import RequestValidator
+
+import llm
+import server
+
+TOKEN = "test-auth-token"
+PUBLIC = "https://demo.ngrok.app"
+WEBHOOK_URL = "https://testserver/twilio/voice"   # what TestClient's request.url becomes
+
+
+def sign(url, params=None):
+    return RequestValidator(TOKEN).compute_signature(url, params or {})
+
+
+class SpyLive:
+    created = []
+
+    def __init__(self):
+        SpyLive.created.append(self)
+
+    async def connect(self, system_prompt, tools):
+        pass
+
+    async def close(self):
+        pass
+
+    async def send_text(self, text):
+        pass
+
+    async def send_audio(self, chunk):
+        pass
+
+    async def events(self):
+        return
+        yield
+
+
+@pytest.fixture
+def phone(tmp_storage, fake_llm, monkeypatch):
+    """Live calls enabled and fully configured, with spies on every resource."""
+    monkeypatch.setenv("ENABLE_LIVE_CALLS", "true")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", TOKEN)
+    monkeypatch.setenv("PUBLIC_BASE_URL", PUBLIC)
+    monkeypatch.setenv("MAX_CONCURRENT_CALLS", "3")
+    clients = tmp_storage / "clients"
+    clients.mkdir()
+    shutil.copy(storage.CLIENTS_DIR / "demo_clinic.yaml", clients)
+    cfg = yaml.safe_load((clients / "demo_clinic.yaml").read_text(encoding="utf-8"))
+    cfg["billing"] = {"plan": "trial", "paid_until": "2000-01-01"}
+    (clients / "expired_biz.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    monkeypatch.setattr(storage, "CLIENTS_DIR", clients)
+    storage.clear_caches()
+    monkeypatch.setattr(telephony, "_used_tickets", {})
+    monkeypatch.setattr(telephony, "_active_calls", 0)
+    SpyLive.created = []
+    monkeypatch.setattr(llm, "GeminiLive", SpyLive)
+    agents = []
+
+    def make_agent(client_id):
+        agents.append(client_id)
+        return ReceptionistAgent(client_id, llm=fake_llm([]))
+    monkeypatch.setattr(telephony, "ReceptionistAgent", make_agent)
+    return {"client": TestClient(server.app), "agents": agents}
+
+
+def post_voice(client, data, signature=None, query=""):
+    return client.post("/twilio/voice" + query, data=data, headers={
+        "X-Twilio-Signature": signature if signature is not None
+        else sign(WEBHOOK_URL + query, data)})
+
+
+def stream(client, params, call_sid="CA1", signature=None):
+    """Open /twilio/stream like Twilio would, send start + stop, and return the
+    server's close code: 1008 = rejected, 1000 = the call ran and hung up."""
+    headers = {"x-twilio-signature": signature if signature is not None
+               else sign(telephony.stream_url())}
+    try:
+        with client.websocket_connect("/twilio/stream", headers=headers) as ws:
+            ws.send_json({"event": "connected"})
+            ws.send_json({"event": "start", "start": {
+                "streamSid": "MZ1", "callSid": call_sid, "customParameters": params}})
+            ws.send_json({"event": "stop"})
+            ws.receive_text()        # server closes after stop (or after a rejection)
+    except WebSocketDisconnect as e:
+        return e.code
+    raise AssertionError("server sent data instead of closing")
+
+
+def ticket_from_twiml(xml_text):
+    root = ET.fromstring(xml_text)
+    return {p.get("name"): p.get("value") for p in root.iter("Parameter")}
+
+
+def test_signed_call_gets_twiml_with_a_ticket_and_the_stream_runs(phone):
+    data = {"To": "+15550001111", "From": "+919876543210", "CallSid": "CA1"}
+    res = post_voice(phone["client"], data)
     assert res.status_code == 200
-    assert "wss://demo.ngrok.app/twilio/stream" in res.text
-    assert 'name="caller" value="+919876543210"' in res.text
+    root = ET.fromstring(res.text)
+    assert root.find("Connect/Stream").get("url") == "wss://demo.ngrok.app/twilio/stream"
+    params = ticket_from_twiml(res.text)
+    assert params["caller"] == "+919876543210" and params["client_id"] == "demo_clinic"
+    assert params["ticket"] and params["call_sid"] == "CA1"
+
+    assert stream(phone["client"], params) == 1000
+    assert len(SpyLive.created) == 1 and phone["agents"] == ["demo_clinic"]
+    assert telephony._active_calls == 0                    # slot released
+    assert storage.read_call_logs("demo_clinic") == []     # no turns spoken → not a call
 
 
-def test_voice_webhook_rejects_bad_signature(monkeypatch):
-    monkeypatch.setenv("PUBLIC_BASE_URL", "https://demo.ngrok.app")
-    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "real-token-set")
-    from fastapi.testclient import TestClient
-    from server import app
+def test_twiml_attributes_are_escaped(phone):
+    """Audit L2 (reproduced as R8b): From used to inject TwiML."""
+    evil = '+2"/></Stream></Connect><Dial>+15550000000</Dial><Connect><Stream url="x'
+    res = post_voice(phone["client"], {"To": "+1", "From": evil, "CallSid": "CA1"})
+    assert res.status_code == 200
+    root = ET.fromstring(res.text)                   # still well-formed XML
+    assert root.find(".//Dial") is None
+    assert ticket_from_twiml(res.text)["caller"] == evil
 
-    client = TestClient(app)
-    res = client.post("/twilio/voice", data={"To": "+15550001111"},
-                      headers={"X-Twilio-Signature": "forged"})
+
+@pytest.mark.parametrize("case", ["forged", "missing"])
+def test_webhook_rejects_bad_or_missing_signature(phone, case):
+    sig = "forged" if case == "forged" else ""
+    res = post_voice(phone["client"], {"To": "+1", "CallSid": "CA1"}, signature=sig)
     assert res.status_code == 403
+
+
+def test_webhook_fails_closed_without_an_auth_token(phone, monkeypatch):
+    """The old "local mode" answered anyone when TWILIO_AUTH_TOKEN was empty."""
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "")
+    res = phone["client"].post("/twilio/voice", data={"To": "+1"})
+    assert res.status_code == 503
+
+
+def test_live_calls_off_by_default(phone, monkeypatch):
+    monkeypatch.delenv("ENABLE_LIVE_CALLS")
+    assert post_voice(phone["client"], {"To": "+1", "CallSid": "CA1"}).status_code == 503
+    params = telephony.mint_stream_ticket("CA1", "demo_clinic", "")
+    assert stream(phone["client"], params) == 1008
+    with pytest.raises(RuntimeError, match="ENABLE_LIVE_CALLS"):
+        telephony.start_outbound_call("demo_clinic", "+919876543210")
+    assert SpyLive.created == [] and phone["agents"] == []
+
+
+def test_webhook_answers_inactive_or_unknown_business_with_an_apology(phone):
+    for query in ("?client_id=expired_biz", "?client_id=no_such_biz"):
+        res = post_voice(phone["client"], {"To": "+1", "CallSid": "CA1"}, query=query)
+        assert res.status_code == 200 and "<Say>" in res.text and "<Stream" not in res.text
+
+
+def test_webhook_says_busy_at_the_call_limit(phone, monkeypatch):
+    monkeypatch.setenv("MAX_CONCURRENT_CALLS", "0")
+    res = post_voice(phone["client"], {"To": "+1", "CallSid": "CA1"})
+    assert "busy" in res.text and "<Stream" not in res.text
+
+
+def good_ticket(**overrides):
+    params = telephony.mint_stream_ticket("CA1", "demo_clinic", "+919876543210")
+    params.update(overrides)
+    return params
+
+
+@pytest.mark.parametrize("name,params,call_sid", [
+    ("no ticket", {}, "CA1"),
+    ("tampered business", good_ticket(client_id="lakshmi_beauty_salon"), "CA1"),
+    ("tampered signature", good_ticket(ticket="0" * 64), "CA1"),
+    ("another call's ticket", good_ticket(), "CA_OTHER"),
+    ("expired", telephony.mint_stream_ticket("CA1", "demo_clinic", "", now=time.time() - 3600), "CA1"),
+    ("unknown business", telephony.mint_stream_ticket("CA1", "no_such_biz", ""), "CA1"),
+    ("inactive plan", telephony.mint_stream_ticket("CA1", "expired_biz", ""), "CA1"),
+])
+def test_stream_rejects_before_allocating_anything(phone, name, params, call_sid):
+    assert stream(phone["client"], params, call_sid=call_sid) == 1008, name
+    assert SpyLive.created == [] and phone["agents"] == [], name
+
+
+@pytest.mark.parametrize("signature", ["", "forged"])
+def test_stream_rejects_bad_handshake_signature(phone, signature):
+    assert stream(phone["client"], good_ticket(), signature=signature) == 1008
+    assert SpyLive.created == [] and phone["agents"] == []
+
+
+def test_stream_ticket_cannot_be_replayed(phone):
+    params = good_ticket()
+    assert stream(phone["client"], params) == 1000
+    assert stream(phone["client"], params) == 1008
+    assert len(SpyLive.created) == 1
+
+
+def test_stream_enforces_the_concurrent_call_limit(phone, monkeypatch):
+    monkeypatch.setattr(telephony, "_active_calls", 3)        # three calls in progress
+    assert stream(phone["client"], good_ticket()) == 1008
+    assert SpyLive.created == []
+
+
+def test_call_slot_is_released_when_the_model_fails_to_connect(phone, monkeypatch):
+    async def broken(self, *a):
+        raise ConnectionError("Gemini unreachable")
+    monkeypatch.setattr(SpyLive, "connect", broken)
+    with pytest.raises(ConnectionError):
+        stream(phone["client"], good_ticket())
+    assert telephony._active_calls == 0

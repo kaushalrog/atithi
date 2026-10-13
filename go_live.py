@@ -152,6 +152,15 @@ def main():
     load_dotenv()
     port = int(os.getenv("PORT", "8765"))
 
+    import telephony
+    if not telephony.live_calls_enabled():
+        # Going live exposes the whole server — portal, admin, phone line — to
+        # the internet. That stays a deliberate, explicit step.
+        print("Live calls are disabled. Read docs/SAFE_TESTING.md, then set")
+        print("   ENABLE_LIVE_CALLS=true")
+        print("in .env once its checklist passes.")
+        sys.exit(1)
+
     missing = [k for k in ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_NUMBER")
                if not os.getenv(k)]
     if missing:
@@ -172,7 +181,6 @@ def main():
     save_env_value("PUBLIC_BASE_URL", url)
     print(f"  public URL: {url}")
 
-    import telephony
     number = telephony.set_voice_webhook(url)
     print(f"  Twilio webhook updated for {number}")
 

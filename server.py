@@ -569,7 +569,9 @@ DASHBOARD_CALL_LIMIT = 200
 def _phone_status(client_id: str) -> dict:
     cfg = storage.read_client_config(client_id) or {}
     number = cfg.get("twilio_number") or telephony.twilio_config()["number"] or None
-    return {"connected": telephony.is_configured() and bool(number), "number": number}
+    return {"connected": telephony.live_calls_enabled() and telephony.is_configured()
+                         and bool(number),
+            "number": number}
 
 
 @app.get("/api/dashboard")

@@ -165,17 +165,34 @@ r = c.post("/api/chat", json={"session_id": sid, "message": "A" * 2_000_000})
 report("R7 /api/chat accepts unbounded message size", r.status_code == 200,
        f"2 MB message -> HTTP {r.status_code}; it would be forwarded to the LLM on every later turn")
 
-# R8: TwiML built by string interpolation -> XML injection via client_id when unsigned.
-os.environ["PUBLIC_BASE_URL"] = "https://example.test"
-r = c.post('/twilio/voice?client_id=demo_clinic"/><Dial>+15550000000</Dial><X a="',
-           data={"To": "+1", "From": "+2"})
-report("R8a TwiML injection through client_id (signature check off)",
+# R8 + R9 run with the phone line FULLY ENABLED and configured — the attacker's
+# best case. (On post-Phase-0.5 code, live calls are off by default; testing
+# only that default would hide whether the gates themselves work.)
+from twilio.request_validator import RequestValidator  # noqa: E402
+os.environ.update({"ENABLE_LIVE_CALLS": "true", "TWILIO_AUTH_TOKEN": "audit-token",
+                   "PUBLIC_BASE_URL": "https://example.test"})
+
+
+def signed_post(path, data):
+    """POST exactly as Twilio would: correctly signed with the auth token."""
+    req = c.build_request("POST", path, data=data)
+    url = str(req.url).replace("http://", "https://", 1)
+    req.headers["X-Twilio-Signature"] = RequestValidator("audit-token").compute_signature(url, data)
+    return c.send(req)
+
+
+# R8: TwiML built by string interpolation -> XML injection.
+r = signed_post('/twilio/voice?client_id=demo_clinic"/><Dial>+15550000000</Dial><X a="',
+                {"To": "+1", "From": "+2", "CallSid": "CA8"})
+report("R8a TwiML injection through client_id (signed request)",
        "<Dial>+15550000000</Dial>" in r.text,
        f"injected <Dial> present: {'<Dial>' in r.text} (unknown client fails billing check first)")
-r = c.post("/twilio/voice", data={"To": "+1", "From": '+2"/></Stream></Connect><Dial>+15550000000</Dial>'
-           '<Connect><Stream url="x"><Parameter name="a" value="'})
-report("R8b TwiML injection through unescaped From (signature check off)",
-       "<Dial>+15550000000</Dial>" in r.text, f"injected <Dial> present: {'<Dial>' in r.text}")
+r = signed_post("/twilio/voice", {"To": "+1", "CallSid": "CA8", "From":
+                '+2"/></Stream></Connect><Dial>+15550000000</Dial><Connect><Stream url="x">'
+                '<Parameter name="a" value="'})
+report("R8b TwiML injection through unescaped From (signed request)",
+       "<Dial>+15550000000</Dial>" in r.text,
+       f"HTTP {r.status_code}; injected <Dial> present: {'<Dial>' in r.text}")
 
 # R9: the phone websocket has no auth and skips the billing check done in /twilio/voice.
 cfg = dict(storage.read_client_config("demo_clinic"))
@@ -201,13 +218,18 @@ class SpyLive:
 
 
 import llm  # noqa: E402
+from starlette.websockets import WebSocketDisconnect  # noqa: E402
 llm.GeminiLive = SpyLive
 telephony.ReceptionistAgent = lambda cid: ReceptionistAgent(cid, llm=FakeLLM())
-with c.websocket_connect("/twilio/stream") as ws:
-    ws.send_json({"event": "start", "start": {"streamSid": "MZ1",
-                  "customParameters": {"client_id": "expired_biz"}}})
-    ws.send_json({"event": "stop"})
+outcome = "accepted"
+try:   # an attacker: no Twilio signature, no ticket, an expired business
+    with c.websocket_connect("/twilio/stream") as ws:
+        ws.send_json({"event": "start", "start": {"streamSid": "MZ1", "callSid": "CA9",
+                      "customParameters": {"client_id": "expired_biz"}}})
+        ws.send_json({"event": "stop"})
+except WebSocketDisconnect as e:
+    outcome = f"rejected (close code {e.code})"
 report("R9 /twilio/stream opens a paid model session for an EXPIRED client, unauthenticated",
        billing.client_active("expired_biz") is False and len(created) == 1,
-       f"client_active=False, Gemini Live sessions opened: {len(created)}")
+       f"client_active=False, connection {outcome}, Gemini Live sessions opened: {len(created)}")
 print(f"\n(temp dir: {TMP})")
