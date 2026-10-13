@@ -1,0 +1,196 @@
+"""Phase 0 audit reproductions. Offline: FakeLLM, temp storage, temp auth DB.
+Run from the repo root:  python docs/audit_repro.py
+(never touches project data files: storage + auth DB point at a temp dir)
+Each check prints REPRODUCED / NOT REPRODUCED with the observed evidence."""
+import asyncio, datetime as dt, os, sys, tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+for k in ("GEMINI_API_KEY", "SHEET_ID", "TWILIO_AUTH_TOKEN", "ADMIN_PASSWORD", "ADMIN_EMAIL"):
+    os.environ.pop(k, None)
+
+import storage, auth, scheduling  # noqa: E402
+
+TMP = Path(tempfile.mkdtemp(prefix="vox_audit_"))
+storage.BOOKINGS_CSV = TMP / "bookings.csv"
+storage.LEADS_CSV = TMP / "leads.csv"
+storage.CALLS_DIR = TMP / "calls"
+auth.DB_FILE = TMP / "voxagent.db"
+storage.clear_caches()
+storage.load_dotenv = lambda *a, **k: None
+
+from agent import ReceptionistAgent  # noqa: E402
+
+
+class FakeLLM:
+    def __init__(self, script=()):
+        self.script = list(script)
+    def send(self, messages, tools=None):
+        return self.script.pop(0) if self.script else {"text": "ok", "tool_calls": []}
+    def transcribe(self, *a, **k):
+        return ""
+
+
+def report(name, reproduced, evidence):
+    print(f"[{'REPRODUCED' if reproduced else 'NOT REPRODUCED'}] {name}\n    {evidence}")
+
+
+def first_open():
+    cfg = storage.read_client_config("demo_clinic")
+    slots = scheduling.available_slots(cfg, set())
+    d = next(d for d in sorted(slots) if slots[d])
+    return d, slots[d][0]
+
+
+# R1: two concurrent conversations can book the same slot.
+storage.clear_caches()
+d, t = first_open()
+a1 = ReceptionistAgent("demo_clinic", llm=FakeLLM())
+a2 = ReceptionistAgent("demo_clinic", llm=FakeLLM())   # both built before either books
+r1 = a1._book_appointment("Asha", "9876543210", "Cleaning", d, t)["status"]
+r2 = a2._book_appointment("Bala", "9876543211", "Cleaning", d, t)["status"]
+rows = [r for r in storage.read_bookings("demo_clinic") if (r["date"], r["time"]) == (d, t)]
+report("R1 double-booking across concurrent conversations", r1 == r2 == "confirmed" and len(rows) == 2,
+       f"agent1={r1}, agent2={r2}, confirmed rows for {d} {t}: {len(rows)}")
+
+# R2: when Sheets is the booking store, availability and dashboard never see the booking.
+for p in TMP.glob("*.csv"):
+    p.unlink()
+storage.clear_caches()
+orig = storage._save_to_google_sheet
+storage._save_to_google_sheet = lambda row: "Google Sheet"     # simulate a working Sheet
+a = ReceptionistAgent("demo_clinic", llm=FakeLLM())
+res = a._book_appointment("Asha", "9876543210", "Cleaning", d, t)
+fresh = ReceptionistAgent("demo_clinic", llm=FakeLLM())
+still_offered = t in fresh._check_availability(d)["available_slots"]
+report("R2 Sheets bookings invisible to availability + dashboard",
+       res["saved_to"] == "Google Sheet" and still_offered and storage.read_bookings("demo_clinic") == [],
+       f"saved_to={res['saved_to']!r}; new conversation still offers {d} {t}: {still_offered}; "
+       f"dashboard bookings={len(storage.read_bookings('demo_clinic'))}")
+storage._save_to_google_sheet = orig
+
+# R3: conversion metric counts FAILED booking attempts as conversions.
+import server  # noqa: E402
+for p in TMP.glob("*.csv"):
+    p.unlink()
+storage.clear_caches()
+a = ReceptionistAgent("demo_clinic", llm=FakeLLM([
+    {"text": None, "tool_calls": [{"name": "book_appointment", "args": {
+        "customer_name": "X", "phone": "123", "service": "Cleaning", "date": d, "time": t}}]},
+    {"text": "Could you confirm your 10-digit number?", "tool_calls": []},
+]))
+a.chat("book me")
+storage.log_call_from_agent(a, "web-test", dt.datetime.now(), call_id="r3")
+stats = server._stats_from(storage.read_call_logs("demo_clinic"),
+                           storage.read_bookings("demo_clinic"), storage.read_leads("demo_clinic"))
+report("R3 conversion counts failed booking attempts", stats["conversion"] == 100 and stats["bookings"] == 0,
+       f"stats={stats}")
+
+# R4: phone/live channel never records tool calls -> phone bookings invisible to conversion.
+import telephony  # noqa: E402
+import shutil
+shutil.rmtree(storage.CALLS_DIR, ignore_errors=True)
+for p in TMP.glob("*.csv"):
+    p.unlink()
+storage.clear_caches()
+
+
+class FakeLive:
+    def __init__(self, evs): self.evs = evs; self.results = []
+    async def send_tool_results(self, r): self.results.append(r)
+    async def events(self):
+        for e in self.evs:
+            yield e
+
+
+agent = ReceptionistAgent("demo_clinic", llm=FakeLLM())
+live = FakeLive([
+    {"type": "user_text", "text": "Book cleaning, Asha 9876543210"},
+    {"type": "tool_calls", "calls": [{"id": "1", "name": "book_appointment", "args": {
+        "customer_name": "Asha", "phone": "9876543210", "service": "Cleaning", "date": d, "time": t}}]},
+    {"type": "agent_text", "text": "Booked!"}, {"type": "turn_complete"}])
+async def _noop(m): pass
+bridge = telephony.TwilioBridge(agent, live, _noop, caller="+919876543210")
+asyncio.run(bridge.pump_gemini())
+bridge.finish()
+stats = server._stats_from(storage.read_call_logs("demo_clinic"),
+                           storage.read_bookings("demo_clinic"), storage.read_leads("demo_clinic"))
+log = storage.read_call_logs("demo_clinic")[0]
+report("R4 phone-call bookings missing from transcript + conversion",
+       stats["bookings"] == 1 and stats["conversion"] == 0,
+       f"bookings={stats['bookings']}, conversion={stats['conversion']}%, turns={log['turns']} "
+       f"(caller-id line counted as a customer turn), 'book_appointment' in transcript: "
+       f"{'book_appointment' in log['transcript']}")
+
+# R5..R8 via HTTP.
+from fastapi.testclient import TestClient  # noqa: E402
+c = TestClient(server.app)
+server.tts.synthesize_bytes = lambda text: b"ID3" + str(len(text)).encode()
+r = c.post("/api/tts", json={"text": "x" * 200_000})
+report("R5 /api/tts needs no auth and has no size bound", r.status_code == 200,
+       f"unauthenticated 200 KB request -> HTTP {r.status_code}")
+
+# create a session via admin password, then send a 2 MB chat message
+os.environ["ADMIN_PASSWORD"] = "choose_a_strong_password"     # the .env.example placeholder
+server.ReceptionistAgent = lambda cid: ReceptionistAgent(cid, llm=FakeLLM())
+c500 = TestClient(server.app, raise_server_exceptions=False)
+r = c500.post("/api/admin/login", json={"password": "choose_a_strong_password"})
+report("R6a /api/admin/login crashes for every input", r.status_code == 500,
+       f"POST /api/admin/login (correct password) -> HTTP {r.status_code}")
+r = c.get("/api/admin/overview", headers={"X-Admin-Key": "choose_a_strong_password"})
+report("R6b .env.example placeholder admin password is accepted verbatim", r.status_code == 200,
+       f"GET /api/admin/overview with the placeholder -> HTTP {r.status_code}; "
+       f"response exposes access_keys: {'access_key' in r.text}")
+sid = c.post("/api/session", json={"client_id": "demo_clinic"},
+             headers={"X-Admin-Key": "choose_a_strong_password"}).json()["session_id"]
+r = c.post("/api/chat", json={"session_id": sid, "message": "A" * 2_000_000})
+report("R7 /api/chat accepts unbounded message size", r.status_code == 200,
+       f"2 MB message -> HTTP {r.status_code}; it would be forwarded to the LLM on every later turn")
+
+# R8: TwiML built by string interpolation -> XML injection via client_id when unsigned.
+os.environ["PUBLIC_BASE_URL"] = "https://example.test"
+r = c.post('/twilio/voice?client_id=demo_clinic"/><Dial>+15550000000</Dial><X a="',
+           data={"To": "+1", "From": "+2"})
+report("R8a TwiML injection through client_id (signature check off)",
+       "<Dial>+15550000000</Dial>" in r.text,
+       f"injected <Dial> present: {'<Dial>' in r.text} (unknown client fails billing check first)")
+r = c.post("/twilio/voice", data={"To": "+1", "From": '+2"/></Stream></Connect><Dial>+15550000000</Dial>'
+           '<Connect><Stream url="x"><Parameter name="a" value="'})
+report("R8b TwiML injection through unescaped From (signature check off)",
+       "<Dial>+15550000000</Dial>" in r.text, f"injected <Dial> present: {'<Dial>' in r.text}")
+
+# R9: the phone websocket has no auth and skips the billing check done in /twilio/voice.
+cfg = dict(storage.read_client_config("demo_clinic"))
+import billing  # noqa: E402
+expired_dir = TMP / "clients"; expired_dir.mkdir(exist_ok=True)
+import yaml  # noqa: E402
+cfg["billing"] = {"plan": "trial", "paid_until": "2000-01-01"}
+(expired_dir / "expired_biz.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
+storage.CLIENTS_DIR = expired_dir
+storage.clear_caches()
+created = []
+
+
+class SpyLive:
+    def __init__(self): created.append(self)
+    async def connect(self, *a): pass
+    async def close(self): pass
+    async def send_text(self, t): pass
+    async def send_audio(self, b): pass
+    async def events(self):
+        if False:
+            yield {}
+
+
+import llm  # noqa: E402
+llm.GeminiLive = SpyLive
+telephony.ReceptionistAgent = lambda cid: ReceptionistAgent(cid, llm=FakeLLM())
+with c.websocket_connect("/twilio/stream") as ws:
+    ws.send_json({"event": "start", "start": {"streamSid": "MZ1",
+                  "customParameters": {"client_id": "expired_biz"}}})
+    ws.send_json({"event": "stop"})
+report("R9 /twilio/stream opens a paid model session for an EXPIRED client, unauthenticated",
+       billing.client_active("expired_biz") is False and len(created) == 1,
+       f"client_active=False, Gemini Live sessions opened: {len(created)}")
+print(f"\n(temp dir: {TMP})")
