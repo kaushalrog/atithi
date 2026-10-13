@@ -7,7 +7,7 @@ coaching institutes. The long-term goal is a voice agent that answers and makes
 phone calls in English, Telugu, and Hindi, books appointments automatically, and
 logs every conversation. It's being built in stages; **this is Stage 1**: a
 text-based receptionist you chat with in the terminal, with real auto-booking
-into Google Sheets (or a local CSV fallback).
+into a local database (copied to Google Sheets if you set one up).
 
 ## Quick start
 
@@ -94,7 +94,8 @@ The backend (`server.py`) is a thin FastAPI layer over the same
 ## The admin console (`/admin`)
 
 The platform owner's view — same backend, separate page at
-**http://127.0.0.1:8765/admin**, protected by `ADMIN_PASSWORD` from `.env`:
+**http://127.0.0.1:8765/admin**, protected by `ADMIN_PASSWORD` from `.env`
+(at least 12 characters; the `.env.example` sample keeps the console disabled):
 every business on the platform with per-client calls/minutes/bookings/leads,
 platform totals, and the latest calls across all clients. The client portal is
 what a business owner sees; the admin console is what YOU see.
@@ -117,7 +118,7 @@ what a business owner sees; the admin console is what YOU see.
  ├─ voice_main.py push-talk ─┼──►  agent.py  ──chat──►  llm.py   (Gemini: chat, STT, Live)
  ├─ live_main.py  live call ─┤     (the brain) ──speak─► tts.py  (edge-tts Indian voices)
  └─ server.py+web portal ────┘         │
-                                   storage.py ──► Google Sheet / bookings.csv
+                                   storage.py ──► bookings.db (──copy──► Google Sheet)
                                    (all disk I/O)   leads.csv / calls/*.json
 ```
 
@@ -127,7 +128,7 @@ channel lands in the same call log. `tests/` proves the seams work — the agent
 runs against a scripted FakeLLM with no API key and no network:
 
 ```
-python -m pytest tests -q     # 58 tests, ~7 seconds
+python -m pytest tests -q     # 100 tests, ~2 seconds (see docs/SAFE_TESTING.md)
 python bench.py               # hot-path timings, no API quota used
 ```
 
@@ -165,7 +166,7 @@ vox agent/
 ├── tts.py                  # the ONLY file that talks to edge-tts (swap voices here)
 ├── audio_io.py             # hardware layer: mic recording + speaker playback
 ├── transcripts/            # saved conversations (created on first /transcript)
-├── bookings.csv            # local booking fallback (created on first booking)
+├── bookings.db             # ALL bookings (SQLite; one confirmed booking per slot) — gitignored
 ├── SETUP.md                # Gemini key + Google Sheets setup, step by step
 ├── .env.example            # copy to .env, add real keys (never commit .env)
 └── requirements.txt
@@ -175,7 +176,7 @@ vox agent/
 
 1. The customer's message is appended to history and sent to Gemini along with two tool schemas: `check_availability` and `book_appointment`.
 2. Gemini replies either with plain text (done — show it to the customer) or with one or more **tool calls** (a name + arguments, e.g. `check_availability(date="2026-07-09")`).
-3. Our Python code executes each requested tool — reading slots from the client YAML, or appending a booking row to the Sheet/CSV.
+3. Our Python code executes each requested tool — reading slots from the client YAML, or saving a booking in `bookings.db` (which refuses a second booking for the same slot).
 4. The tool results are appended to the conversation and sent **back** to Gemini, which now writes its reply using real data ("We have 10:00 or 16:00 free").
 5. Steps 2–4 repeat until Gemini answers with plain text — so the model can chain calls, e.g. check a slot first, then book it, in a single customer turn.
 
@@ -187,7 +188,7 @@ vox agent/
 | 2 | Mic input (Gemini STT) + voice output (edge-tts) | ✅ done |
 | 2.5 | Real-time interruptible voice call (Gemini Live API) | ✅ done |
 | 2.75 | Business portal + admin console + evals | ✅ done |
-| 3 | Real phone calls via Twilio, inbound + outbound | ✅ code-complete — needs keys |
+| 3 | Real phone calls via Twilio, inbound + outbound | ✅ code-complete — needs keys; off until `ENABLE_LIVE_CALLS=true` |
 | 4 | Multilingual voices (Telugu/Hindi via Sarvam), outbound campaigns | later |
 | 5 | Dashboard: transcripts, extracted leads, bookings | ✅ pulled early into 2.75 |
 
@@ -197,7 +198,9 @@ Everything below is the ONLY work left before real customers can call:
 
 1. **Gemini paid tier** — aistudio.google.com → enable billing. The free key
    allows ~20 requests/day; one real conversation costs roughly ₹1–2 paid.
-2. **Twilio** — account + number + 4 keys in `.env` (SETUP.md Part 3, ~30 min).
+2. **Twilio** — account + number + 4 keys in `.env` (SETUP.md Part 3, ~30 min),
+   then the [docs/SAFE_TESTING.md](docs/SAFE_TESTING.md) checklist before
+   `ENABLE_LIVE_CALLS=true`.
 3. **Keep the server reachable** — ngrok while testing; a small cloud VM
    (`python server.py --host 0.0.0.0`) when going permanent.
 4. **Clients** — onboard each one in the portal, put their Twilio number in
@@ -206,6 +209,6 @@ Everything below is the ONLY work left before real customers can call:
 
 Capacity as built: each phone call is an independent async session; the
 practical ceiling is your Gemini tier's concurrent Live sessions (free: 3,
-paid tier 1: ~50 simultaneous calls). Storage is CSV/JSON — fine for pilot
-scale; when a client crosses hundreds of calls/day, storage.py is the single
-file that swaps to a database.
+paid tier 1: ~50 simultaneous calls; set `MAX_CONCURRENT_CALLS` to match).
+Bookings are in SQLite; leads and call logs are CSV/JSON — fine for pilot
+scale. Run a single server process (see SAFE_TESTING.md §3).

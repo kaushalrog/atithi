@@ -1,8 +1,11 @@
 # VoxAgent Setup Guide
 
 Two things need setting up: a **Gemini API key** (required — the brain) and
-**Google Sheets** (optional — bookings fall back to a local `bookings.csv` if you
-skip this, so the demo works either way).
+**Google Sheets** (optional — bookings always live in the local `bookings.db`
+database and show on the dashboard; a Sheet just receives a copy of each one).
+
+Testing without spending money or touching real data: see
+[docs/SAFE_TESTING.md](docs/SAFE_TESTING.md).
 
 ---
 
@@ -95,9 +98,12 @@ GOOGLE_SHEETS_CREDENTIALS_PATH=credentials.json
 SHEET_ID=paste_the_sheet_id_here
 ```
 
-Done. Next booking lands in the sheet. If anything about Sheets fails, VoxAgent
-prints a warning and writes to `bookings.csv` instead — the conversation never
-breaks.
+Done. Each new booking is saved in `bookings.db` first, then copied into the
+sheet. If anything about Sheets fails, VoxAgent prints a warning and the
+booking is still safe in `bookings.db` — the conversation never breaks.
+
+The Sheet is a **copy for you to read**. VoxAgent never reads it back, so
+cancelling or editing a row there does NOT free the slot for the agent.
 
 ---
 
@@ -130,9 +136,22 @@ TWILIO_NUMBER=+1xxxxxxxxxx
 
 ### Step 3 — go live (one command)
 
+Live calls are **off** until you switch them on. First work through the
+checklist in [docs/SAFE_TESTING.md](docs/SAFE_TESTING.md) (tests pass, strong
+admin password, a test business), then add to `.env`:
+
+```
+ENABLE_LIVE_CALLS=true
+```
+
+and run:
+
 ```
 run.bat phone
 ```
+
+Your first call is a verification step (SAFE_TESTING.md §5): one security check
+on the audio connection can only be confirmed against real Twilio traffic.
 
 That's it. The command opens a free tunnel to your laptop, points your Twilio
 number's webhook at it automatically (through Twilio's API), and starts the
