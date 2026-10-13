@@ -1,0 +1,36 @@
+client_id: lakshmi_beauty_salon
+access_key: VX-7TPX3R
+business_name: Lakshmi Beauty Salon
+address: 12 Cross Cut Road, Gandhipuram, Coimbatore - 641012
+phone: +91 90000 11223
+timings: 'Tue-Sun: 10:00 AM - 8:00 PM. Monday closed.'
+services:
+- name: Haircut (women)
+  price: ₹350
+- name: Hair spa
+  price: ₹1,200
+- name: Bridal makeup package
+  price: starting from ₹15,000
+faq:
+- q: Do you use branded products?
+  a: Yes, we use L'Oreal and Wella professional products only.
+- q: Do you do home service?
+  a: Home service is available for bridal packages within Coimbatore city.
+policies:
+- Bridal bookings need a 50% advance.
+- Cancellations within 24 hours forfeit the advance.
+fallback: If unsure about anything, say the front desk will call back with exact details
+  — never guess or invent prices.
+schedule:
+  days:
+  - Tue
+  - Wed
+  - Thu
+  - Fri
+  - Sat
+  - Sun
+  ranges:
+  - - '10:00'
+    - '20:00'
+  gap_min: 30
+  horizon_days: 14

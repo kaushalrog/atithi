@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoxAgent — Admin Console</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><defs><linearGradient id=%22g%22 x1=%220%22 y1=%220%22 x2=%221%22 y2=%221%22><stop stop-color=%22%23f5b458%22/><stop offset=%221%22 stop-color=%22%23e879a0%22/></linearGradient></defs><rect width=%22100%22 height=%22100%22 rx=%2224%22 fill=%22url(%23g)%22/><path d=%22M50 24l9 18 20 3-14.5 14 3.5 20L50 69.5 32 79l3.5-20L21 45l20-3z%22 fill=%22white%22/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0a1120; --panel: rgba(255,255,255,.035); --panel-solid: #101a2d;
+    --border: rgba(148,163,184,.13); --border-strong: rgba(148,163,184,.25);
+    --ink: #e8eef8; --muted: #8b99ad;
+    --acc: #f5b458; --acc2: #e879a0;
+    --grad: linear-gradient(135deg, #f5b458, #e879a0);
+    --teal: #2dd4bf; --radius: 18px;
+    font-size: 15px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; color: var(--ink);
+    font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+    background:
+      radial-gradient(900px 500px at 85% -10%, rgba(232,121,160,.10), transparent 60%),
+      radial-gradient(700px 500px at -10% 110%, rgba(245,180,88,.08), transparent 60%),
+      var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, .num, .brandname { font-family: "Sora", "Inter", sans-serif; }
+  ::-webkit-scrollbar { width: 10px; }
+  ::-webkit-scrollbar-thumb { background: rgba(148,163,184,.2); border-radius: 8px; }
+
+  .topbar { display: flex; align-items: center; gap: 14px; padding: 16px 30px;
+            border-bottom: 1px solid var(--border); background: rgba(10,17,32,.7);
+            backdrop-filter: blur(14px); position: sticky; top: 0; z-index: 10; }
+  .mark { width: 40px; height: 40px; border-radius: 12px; background: var(--grad);
+          display: flex; align-items: center; justify-content: center; font-size: 1.15rem;
+          box-shadow: 0 6px 20px rgba(232,121,160,.3); }
+  .brandname { font-weight: 800; font-size: 1.12rem; }
+  .brandtag { font-size: .68rem; color: var(--muted); letter-spacing: 1.6px; margin-top: 2px; }
+  .spacer { flex: 1; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; border: none; border-radius: 11px;
+         padding: 10px 17px; font: inherit; font-size: .92rem; font-weight: 600; cursor: pointer;
+         background: rgba(255,255,255,.06); color: var(--ink); border: 1px solid var(--border);
+         transition: background .15s; text-decoration: none; }
+  .btn:hover { background: rgba(255,255,255,.1); }
+  .btn.primary { background: var(--grad); color: #2b1204; border: none;
+                 box-shadow: 0 6px 18px rgba(232,121,160,.3); }
+
+  main { max-width: 1120px; margin: 0 auto; padding: 26px 28px 70px; animation: rise .3s ease; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+  .hidden { display: none !important; }
+
+  /* login gate */
+  .gate { max-width: 400px; margin: 12vh auto 0; text-align: center; }
+  .gate .mark { width: 62px; height: 62px; margin: 0 auto 18px; font-size: 1.7rem; border-radius: 18px; }
+  .gate h1 { margin: 0 0 8px; }
+  .gate p { color: var(--muted); margin: 0 0 22px; line-height: 1.6; }
+  .gate input { width: 100%; background: rgba(255,255,255,.05); color: var(--ink);
+                border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px;
+                font: inherit; font-size: 1rem; outline: none; text-align: center; margin-bottom: 12px; }
+  .gate input:focus { border-color: rgba(245,180,88,.5); box-shadow: 0 0 0 3px rgba(245,180,88,.12); }
+  .gate .err { color: #f47171; font-size: .88rem; min-height: 1.3em; margin-top: 10px; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 16px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+          padding: 18px; transition: transform .15s, border-color .2s; }
+  .stat:hover { transform: translateY(-2px); border-color: var(--border-strong); }
+  .stat .num { font-size: 1.9rem; font-weight: 800; line-height: 1;
+               background: linear-gradient(135deg, #ffd9a0, #f5a8c4); -webkit-background-clip: text;
+               background-clip: text; color: transparent; }
+  .stat .lbl { color: var(--muted); font-size: .81rem; margin-top: 7px; font-weight: 500; }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+          padding: 20px 22px; margin-bottom: 16px; }
+  .card h3 { margin: 0 0 14px; font-size: .76rem; text-transform: uppercase; letter-spacing: 1.4px;
+             color: var(--muted); font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: .89rem; }
+  th { text-align: left; color: var(--muted); font-weight: 600; font-size: .75rem;
+       text-transform: uppercase; letter-spacing: .8px; padding: 2px 12px 10px 0; white-space: nowrap; }
+  td { padding: 10px 12px 10px 0; border-top: 1px solid var(--border); vertical-align: middle; }
+  td.name { font-weight: 650; }
+  td.dim, .dim { color: var(--muted); }
+  .pill { border-radius: 20px; padding: 3px 12px; font-size: .73rem; font-weight: 600; white-space: nowrap;
+          background: rgba(148,163,184,.12); color: var(--muted); border: 1px solid var(--border); }
+  .pill.booked { background: rgba(52,211,153,.12); color: #6ee7b7; border-color: rgba(52,211,153,.3); }
+  .pill.lead { background: rgba(245,180,88,.12); color: var(--acc); border-color: rgba(245,180,88,.3); }
+  .portal-link { color: var(--teal); text-decoration: none; font-weight: 600; font-size: .85rem; }
+  .portal-link:hover { text-decoration: underline; }
+  .empty { color: var(--muted); font-size: .9rem; padding: 12px 4px; line-height: 1.6; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="mark">👑</div>
+  <div><div class="brandname">VoxAgent Admin</div><div class="brandtag">PLATFORM CONSOLE</div></div>
+  <div class="spacer"></div>
+  <a class="btn" href="/" target="_blank">Open client portal ↗</a>
+  <button class="btn hidden" id="logoutBtn">Log out</button>
+</div>
+
+<!-- login gate -->
+<div class="gate" id="gate">
+  <div class="mark">👑</div>
+  <h1>Admin sign-in</h1>
+  <p>This console shows every business on your platform.</p>
+  <input type="email" id="email" placeholder="Email" autocomplete="email" style="margin-bottom:10px">
+  <input type="password" id="pw" placeholder="Password" autocomplete="current-password">
+  <button class="btn primary" id="loginBtn" style="width:100%; justify-content:center; padding:13px;">Unlock console</button>
+  <div class="err" id="gateErr"></div>
+</div>
+
+<!-- console -->
+<main class="hidden" id="console">
+  <div class="card" id="statusCard" style="display:flex; gap:26px; flex-wrap:wrap; padding:14px 20px; margin-bottom:16px;">
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="num" id="tClients">–</div><div class="lbl">Businesses onboarded</div></div>
+    <div class="stat"><div class="num" id="tCalls">–</div><div class="lbl">Total calls handled</div></div>
+    <div class="stat"><div class="num" id="tMinutes">–</div><div class="lbl">Total minutes talked</div></div>
+    <div class="stat"><div class="num" id="tBookings">–</div><div class="lbl">Total bookings</div></div>
+    <div class="stat"><div class="num" id="tLeads">–</div><div class="lbl">Total leads</div></div>
+  </div>
+
+  <div class="card hidden" id="resetsCard">
+    <h3>Password reset requests</h3>
+    <p class="dim" style="margin:0 0 12px; font-size:.87rem; line-height:1.6">
+      An owner clicked “Forgot password”. Tell them their code (call/WhatsApp) —
+      they enter it with a new password on the sign-in page. Codes expire in 1 hour.</p>
+    <div id="resetsBox"></div>
+  </div>
+
+  <div class="card">
+    <h3>Your clients</h3>
+    <div id="clientsBox"></div>
+  </div>
+
+  <div class="card">
+    <h3>Latest calls across the platform</h3>
+    <div id="recentBox"></div>
+  </div>
+
+  <div class="card">
+    <h3>Place an outbound call <span class="pill" id="twilioPill">checking…</span></h3>
+    <p class="dim" style="margin:0 0 14px; font-size:.88rem; line-height:1.6">
+      The agent rings the number and speaks for the selected business — use it for
+      callbacks to leads or appointment reminders.</p>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+      <select id="callClient" style="background:rgba(255,255,255,.05);color:var(--ink);border:1px solid var(--border);border-radius:11px;padding:10px 13px;font:inherit;"></select>
+      <input type="text" id="callTo" placeholder="+91 98765 43210"
+             style="background:rgba(255,255,255,.05);color:var(--ink);border:1px solid var(--border);border-radius:11px;padding:10px 13px;font:inherit;min-width:200px;">
+      <button class="btn primary" id="callBtn">📞 Call now</button>
+    </div>
+    <div class="dim" id="callMsg" style="margin-top:12px; font-size:.88rem; min-height:1.3em;"></div>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let AUTH = null;  // {token, role, ...} — shared with the portal via localStorage
+function authHeaders() {
+  return AUTH ? { "Authorization": "Bearer " + AUTH.token } : {};
+}
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+function fmtWhen(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) + ", " +
+         d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+}
+
+async function login() {
+  $("gateErr").textContent = "";
+  const res = await fetch("/api/auth/login", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: $("email").value.trim(), password: $("pw").value }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    $("gateErr").textContent = data.detail || "Login failed";
+    return;
+  }
+  if (data.role !== "admin") {
+    $("gateErr").textContent = "This account isn't an admin — owners use the main page.";
+    return;
+  }
+  AUTH = data;
+  localStorage.setItem("voxagent_auth", JSON.stringify(AUTH));
+  await showConsole();
+}
+
+async function showConsole() {
+  const res = await fetch("/api/admin/overview", { headers: authHeaders() });
+  if (!res.ok) { localStorage.removeItem("voxagent_auth"); AUTH = null; return; }
+  const data = await res.json();
+  $("gate").classList.add("hidden");
+  $("console").classList.remove("hidden");
+  $("logoutBtn").classList.remove("hidden");
+
+  $("tClients").textContent = data.totals.clients;
+  $("tCalls").textContent = data.totals.calls;
+  $("tMinutes").textContent = data.totals.minutes;
+  $("tBookings").textContent = data.totals.bookings;
+  $("tLeads").textContent = data.totals.leads;
+
+  const cb = $("clientsBox"); cb.innerHTML = "";
+  if (!data.clients.length) {
+    cb.appendChild(el("div", "empty", "No businesses yet — onboard the first one from the client portal."));
+  } else {
+    const t = el("table");
+    const tr = el("tr");
+    ["Business", "Plan", "Calls", "Minutes", "Bookings", "Leads", "Last activity", ""].forEach(h => tr.appendChild(el("th", "", h)));
+    t.appendChild(tr);
+    for (const c of data.clients) {
+      const row = el("tr");
+      const name = el("td", "name", c.business_name);
+      const idLine = el("div", "dim", c.client_id); idLine.style.fontSize = ".76rem"; idLine.style.fontWeight = "400";
+      name.appendChild(idLine);
+      row.appendChild(name);
+      const plan = el("td");
+      const planPill = el("span", "pill " + (c.active ? (c.plan === "paid" ? "booked" : "") : "lead"),
+        c.plan === "free" ? "free" :
+        c.active ? c.plan + " · till " + c.paid_until : "⏸ ended " + c.paid_until);
+      plan.appendChild(planPill);
+      if (c.renewal_requested) {
+        const claim = el("span", "pill lead", "💰 payment claimed");
+        claim.title = "The owner says they've paid (" + fmtWhen(c.renewal_requested) +
+                      ") — confirm the money arrived, then press +1 month.";
+        claim.style.marginLeft = "6px";
+        plan.appendChild(claim);
+      }
+      const act = el("button", "btn", "+1 month");
+      act.style.cssText = "margin-left:8px;padding:4px 10px;font-size:.75rem;";
+      act.onclick = () => activate(c.client_id);
+      plan.appendChild(act);
+      row.appendChild(plan);
+      [c.calls, c.minutes, c.bookings, c.leads].forEach(v => row.appendChild(el("td", "", String(v))));
+      row.appendChild(el("td", "dim", fmtWhen(c.last_activity)));
+      const link = el("td");
+      const a = el("a", "portal-link", "View portal →"); a.href = "/?as=admin"; a.target = "_blank";
+      a.title = "Owner login code: " + c.access_key;
+      link.appendChild(a); row.appendChild(link);
+      t.appendChild(row);
+    }
+    cb.appendChild(t);
+  }
+
+  const sc = $("statusCard"); sc.innerHTML = "";
+  const items = [
+    ["Gemini AI key", data.status.gemini_key, "the agent's brain"],
+    ["Phone system (Twilio)", data.status.twilio, "add keys in .env — SETUP.md Part 3"],
+    ["Google Sheets", data.status.sheets, "optional — bookings fall back to CSV"],
+  ];
+  for (const [name, ok, hint] of items) {
+    const d = el("div", "", "");
+    d.style.cssText = "display:flex;align-items:center;gap:9px;font-size:.9rem;";
+    d.appendChild(el("span", "", ok ? "🟢" : "🔴"));
+    const label = el("span", "", name);
+    label.style.fontWeight = "650";
+    d.appendChild(label);
+    if (!ok) { const h = el("span", "dim", "· " + hint); h.style.fontSize = ".8rem"; d.appendChild(h); }
+    sc.appendChild(d);
+  }
+
+  const resets = data.password_resets || [];
+  $("resetsCard").classList.toggle("hidden", !resets.length);
+  if (resets.length) {
+    const rt = el("table");
+    const rtr = el("tr");
+    ["Account", "Reset code", "Expires"].forEach(h => rtr.appendChild(el("th", "", h)));
+    rt.appendChild(rtr);
+    for (const r of resets) {
+      const row = el("tr");
+      row.appendChild(el("td", "name", r.email));
+      const codeCell = el("td");
+      codeCell.appendChild(el("span", "pill", r.code));
+      row.appendChild(codeCell);
+      row.appendChild(el("td", "dim", fmtWhen(r.expires)));
+      rt.appendChild(row);
+    }
+    $("resetsBox").innerHTML = ""; $("resetsBox").appendChild(rt);
+  }
+
+  const pill = $("twilioPill");
+  pill.textContent = data.twilio_configured ? "phone system connected" : "not connected — add Twilio keys in .env";
+  pill.className = "pill " + (data.twilio_configured ? "booked" : "lead");
+  const sel = $("callClient"); sel.innerHTML = "";
+  for (const c of data.clients) {
+    const o = el("option", "", c.business_name); o.value = c.client_id; sel.appendChild(o);
+  }
+
+  const rb = $("recentBox"); rb.innerHTML = "";
+  if (!data.recent_calls.length) {
+    rb.appendChild(el("div", "empty", "No calls yet anywhere on the platform."));
+  } else {
+    const t = el("table");
+    const tr = el("tr");
+    ["When", "Business", "Channel", "Duration", "Outcome"].forEach(h => tr.appendChild(el("th", "", h)));
+    t.appendChild(tr);
+    for (const c of data.recent_calls) {
+      const row = el("tr");
+      row.appendChild(el("td", "dim", fmtWhen(c.started)));
+      row.appendChild(el("td", "name", c.business_name));
+      row.appendChild(el("td", "dim", c.channel));
+      row.appendChild(el("td", "dim", Math.floor(c.seconds / 60) + "m " + String(c.seconds % 60).padStart(2, "0") + "s"));
+      const outcome = el("td");
+      outcome.appendChild(el("span", "pill " + (c.booked ? "booked" : c.lead ? "lead" : ""),
+        c.booked ? "booked" : c.lead ? "lead" : "enquiry"));
+      row.appendChild(outcome);
+      t.appendChild(row);
+    }
+    rb.appendChild(t);
+  }
+}
+
+async function placeCall() {
+  const msg = $("callMsg");
+  msg.textContent = "Dialling…";
+  const res = await fetch("/api/admin/call", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ client_id: $("callClient").value, to: $("callTo").value.trim() }),
+  });
+  const data = await res.json().catch(() => ({}));
+  msg.textContent = res.ok
+    ? "✓ Ringing — the call will appear in the history when it ends. (SID " + data.call_sid + ")"
+    : "⚠ " + (data.detail || "Call failed");
+}
+$("callBtn").onclick = placeCall;
+
+async function activate(clientId) {
+  const res = await fetch("/api/admin/activate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ client_id: clientId, months: 1 }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) showConsole();
+  else alert(data.detail || "Activation failed");
+}
+
+$("loginBtn").onclick = login;
+$("pw").addEventListener("keydown", e => { if (e.key === "Enter") login(); });
+$("logoutBtn").onclick = () => { localStorage.removeItem("voxagent_auth"); location.reload(); };
+
+const saved = localStorage.getItem("voxagent_auth");
+if (saved) {
+  AUTH = JSON.parse(saved);
+  if (AUTH.role === "admin") showConsole();
+}
+</script>
+</body>
+</html>

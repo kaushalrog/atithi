@@ -1,0 +1,24 @@
+# Secrets — never commit these
+.env
+credentials.json
+
+# Booking data, call logs & transcripts (customer PII stays local)
+*.csv
+transcripts/
+calls/
+evals/results/
+
+# Python
+__pycache__/
+.venv/
+*.pyc
+
+# Downloaded tools
+cloudflared.exe
+ngrok.exe
+
+# Account data (emails + password hashes + session tokens)
+users.json
+tokens.json
+voxagent.db
+voxagent.db-*
