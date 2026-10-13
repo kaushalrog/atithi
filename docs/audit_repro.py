@@ -148,19 +148,22 @@ r = c.post("/api/tts", json={"text": "x" * 200_000})
 report("R5 /api/tts needs no auth and has no size bound", r.status_code == 200,
        f"unauthenticated 200 KB request -> HTTP {r.status_code}")
 
-# create a session via admin password, then send a 2 MB chat message
-os.environ["ADMIN_PASSWORD"] = "choose_a_strong_password"     # the .env.example placeholder
+# R6 + R7: admin endpoints and a 2 MB chat message
 server.ReceptionistAgent = lambda cid: ReceptionistAgent(cid, llm=FakeLLM())
 c500 = TestClient(server.app, raise_server_exceptions=False)
-r = c500.post("/api/admin/login", json={"password": "choose_a_strong_password"})
+STRONG = "audit-admin-password-ok"   # passes any password policy, so R6a/R7 test their own bug
+os.environ["ADMIN_PASSWORD"] = STRONG
+r = c500.post("/api/admin/login", json={"password": STRONG})
 report("R6a /api/admin/login crashes for every input", r.status_code == 500,
        f"POST /api/admin/login (correct password) -> HTTP {r.status_code}")
+os.environ["ADMIN_PASSWORD"] = "choose_a_strong_password"
 r = c.get("/api/admin/overview", headers={"X-Admin-Key": "choose_a_strong_password"})
 report("R6b .env.example placeholder admin password is accepted verbatim", r.status_code == 200,
        f"GET /api/admin/overview with the placeholder -> HTTP {r.status_code}; "
        f"response exposes access_keys: {'access_key' in r.text}")
+os.environ["ADMIN_PASSWORD"] = STRONG
 sid = c.post("/api/session", json={"client_id": "demo_clinic"},
-             headers={"X-Admin-Key": "choose_a_strong_password"}).json()["session_id"]
+             headers={"X-Admin-Key": STRONG}).json()["session_id"]
 r = c.post("/api/chat", json={"session_id": sid, "message": "A" * 2_000_000})
 report("R7 /api/chat accepts unbounded message size", r.status_code == 200,
        f"2 MB message -> HTTP {r.status_code}; it would be forwarded to the LLM on every later turn")

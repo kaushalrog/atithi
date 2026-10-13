@@ -481,7 +481,7 @@
     <div class="composer">
       <button class="btn mic" id="micBtn" title="Talk">
         <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="11.5" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3.5M8.5 21.5h7"/></svg></button>
-      <input type="text" id="msgInput" placeholder="Type as a customer…" autocomplete="off">
+      <input type="text" id="msgInput" placeholder="Type as a customer…" autocomplete="off" maxlength="2000">
       <button class="btn" id="sendBtn">
         <svg class="ic" viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg></button>
       <label class="toggle"><input type="checkbox" id="voiceToggle" checked>🔊</label>
@@ -944,7 +944,7 @@ async function sendText() {
 async function speak(text) {
   try {
     const res = await fetch("/api/tts", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: SID, text: text.slice(0, 1000) }),
     });
     if (res.ok) new Audio(URL.createObjectURL(await res.blob())).play();
   } catch (e) { /* voice output must never break the chat */ }

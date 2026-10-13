@@ -19,6 +19,7 @@ owner enters code + new password, every old session is invalidated.
 
 import datetime as dt
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -140,6 +141,35 @@ def _hash(password: str, salt: str) -> str:
     ).hex()
 
 
+# The admin password unlocks every business's data and login codes, and the
+# admin header has no attempt limit yet (TODOS.md) — so a weak one is treated
+# as no password at all (admin disabled), never silently accepted. The
+# placeholders are the literal values shipped in .env.example (audit M3).
+ADMIN_PASSWORD_MIN = 12
+_PLACEHOLDER_PASSWORDS = {"choose_a_strong_password"}
+_PLACEHOLDER_EMAILS = {"you@example.com"}
+
+
+def admin_password_problem() -> str | None:
+    """Why ADMIN_PASSWORD can't be used, or None if it's fine."""
+    password = os.getenv("ADMIN_PASSWORD", "")
+    if not password:
+        return "Set ADMIN_PASSWORD in .env to use the admin console"
+    if password in _PLACEHOLDER_PASSWORDS:
+        return "ADMIN_PASSWORD is still the .env.example placeholder — change it"
+    if len(password) < ADMIN_PASSWORD_MIN:
+        return f"ADMIN_PASSWORD must be at least {ADMIN_PASSWORD_MIN} characters"
+    return None
+
+
+def admin_password_matches(candidate: str | None) -> bool:
+    """Constant-time check of a supplied admin key; always False while the
+    configured password is missing, a placeholder or too short."""
+    if admin_password_problem() or not candidate:
+        return False
+    return hmac.compare_digest(candidate.encode(), os.getenv("ADMIN_PASSWORD", "").encode())
+
+
 def _check_password_strength(password: str):
     if len(password) < 6:
         raise ValueError("Password must be at least 6 characters")
@@ -151,7 +181,8 @@ def ensure_admin_seed():
     """Create/refresh the platform admin account from .env (idempotent)."""
     email = os.getenv("ADMIN_EMAIL", "").strip().lower()
     password = os.getenv("ADMIN_PASSWORD", "")
-    if not email or not password:
+    # Never create an admin from .env.example's sample values or a weak password.
+    if not email or email in _PLACEHOLDER_EMAILS or admin_password_problem():
         return
     with _db() as conn:
         row = conn.execute("SELECT salt FROM users WHERE email=?", (email,)).fetchone()
@@ -183,7 +214,8 @@ def login(email: str, password: str) -> dict:
     email = email.strip().lower()
     with _db() as conn:
         user = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
-    if user is None or _hash(password, user["salt"]) != user["password_hash"]:
+    if user is None or not hmac.compare_digest(_hash(password, user["salt"]),
+                                                user["password_hash"]):
         raise PermissionError("Wrong email or password")
     return issue_token(email)
 

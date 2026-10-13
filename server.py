@@ -15,6 +15,7 @@ Run:  python server.py            (opens http://127.0.0.1:8765)
 
 import argparse
 import datetime as dt
+import hmac
 import os
 import re
 import secrets
@@ -25,7 +26,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import auth
 import billing
@@ -51,6 +52,9 @@ def _warm_up():
     is on a live phone line — doesn't wait for it.
     """
     llm_module.warm_up()
+    problem = auth.admin_password_problem()
+    if problem:
+        print(f"  [admin] admin console disabled: {problem}")
 
 
 # The pages change only when we deploy, so serve them from memory — but
@@ -93,13 +97,22 @@ class SessionRequest(BaseModel):
     client_id: str = "demo_clinic"
 
 
+# Size limits (audit M5): a customer turn longer than this is not a real
+# turn, and every message is re-sent to the model on each later turn — so an
+# unbounded one costs quota and money for the rest of the conversation.
+MAX_CHAT_CHARS = 2000
+MAX_TTS_CHARS = 1000
+MAX_VOICE_BYTES = 5 * 1024 * 1024   # ~2.5 min of 16 kHz WAV; a turn is seconds
+
+
 class ChatRequest(BaseModel):
     session_id: str
-    message: str
+    message: str = Field(max_length=MAX_CHAT_CHARS)
 
 
 class TTSRequest(BaseModel):
-    text: str
+    session_id: str                 # only a live test call may use our TTS
+    text: str = Field(max_length=MAX_TTS_CHARS)
 
 
 class AdminLoginRequest(BaseModel):
@@ -172,6 +185,12 @@ def bearer_user(authorization: str | None) -> dict | None:
     return None
 
 
+def is_admin(user: dict | None) -> bool:
+    """Admin role counts only while ADMIN_PASSWORD passes the policy — so an
+    admin account seeded earlier from a placeholder password is disabled too."""
+    return bool(user and user["role"] == "admin" and not auth.admin_password_problem())
+
+
 def client_access_key(client_id: str) -> str | None:
     cfg = storage.read_client_config(client_id)
     return cfg.get("access_key") if cfg else None
@@ -180,13 +199,12 @@ def client_access_key(client_id: str) -> str | None:
 def authorize_client(client_id: str, client_key: str | None, admin_key: str | None,
                      authorization: str | None = None):
     user = bearer_user(authorization)
-    if user and (user["role"] == "admin" or user["client_id"] == client_id):
+    if is_admin(user) or (user and user["client_id"] == client_id):
         return
-    admin_password = os.getenv("ADMIN_PASSWORD", "")
-    if admin_password and admin_key == admin_password:
+    if auth.admin_password_matches(admin_key):
         return
     expected = client_access_key(client_id)
-    if expected and client_key == expected:
+    if expected and client_key and hmac.compare_digest(client_key, expected):
         return
     raise HTTPException(status_code=401, detail="Not authorized for this business")
 
@@ -245,19 +263,19 @@ def generate_slots(days: list[str], ranges: list[list[str]], gap_min: int) -> di
 
 def require_admin(x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
                   authorization: str | None = Header(default=None)):
-    user = bearer_user(authorization)
-    if user and user["role"] == "admin":
+    problem = auth.admin_password_problem()
+    if problem:
+        raise HTTPException(status_code=503, detail=problem)
+    if is_admin(bearer_user(authorization)) or auth.admin_password_matches(x_admin_key):
         return
-    admin_password = os.getenv("ADMIN_PASSWORD", "")
-    if not admin_password:
-        raise HTTPException(status_code=503, detail="Set ADMIN_PASSWORD in .env to use the admin console")
-    if x_admin_key != admin_password:
-        raise HTTPException(status_code=401, detail="Admin access only")
+    raise HTTPException(status_code=401, detail="Admin access only")
 
 
 @app.post("/api/admin/login")
 def admin_login(req: AdminLoginRequest):
-    require_admin(x_admin_key=req.password)
+    # Pass both arguments: called directly (not via Depends), the defaults
+    # would be FastAPI Header() objects, which crashed this endpoint (R6a).
+    require_admin(x_admin_key=req.password, authorization=None)
     return {"ok": True}
 
 
@@ -423,7 +441,7 @@ def portal_login(req: PortalLoginRequest):
     if code:
         for entry in storage.all_clients():
             cfg = entry["config"]
-            if cfg.get("access_key") and cfg["access_key"] == code:
+            if cfg.get("access_key") and hmac.compare_digest(str(cfg["access_key"]), code):
                 return {"client_id": entry["client_id"],
                         "business_name": cfg.get("business_name", entry["client_id"])}
     raise HTTPException(status_code=401, detail="That code doesn't match any business")
@@ -436,9 +454,8 @@ def create_business(req: BusinessRequest,
     # Admin can create any number of businesses; a signed-up owner exactly one
     # (their own — it gets linked to their account and starts a free trial).
     user = bearer_user(authorization)
-    is_admin = (user and user["role"] == "admin") or (
-        os.getenv("ADMIN_PASSWORD", "") and x_admin_key == os.getenv("ADMIN_PASSWORD"))
-    if not is_admin:
+    as_admin = is_admin(user) or auth.admin_password_matches(x_admin_key)
+    if not as_admin:
         if user is None:
             raise HTTPException(status_code=401, detail="Sign in to create your business")
         if user["client_id"]:
@@ -476,7 +493,7 @@ def create_business(req: BusinessRequest,
     }
     # Through storage so the config caches invalidate with the write.
     storage.write_client_config(client_id, config)
-    if not is_admin:
+    if not as_admin:
         auth.attach_client(user["email"], client_id)
     return {"client_id": client_id, "business_name": config["business_name"],
             "access_key": config["access_key"]}
@@ -531,8 +548,11 @@ def chat(req: ChatRequest):
 def voice(session_id: str = Form(...), audio: UploadFile = File(...)):
     """Browser-recorded audio in -> transcript + agent reply out."""
     session = get_session(session_id)
+    data = audio.file.read(MAX_VOICE_BYTES + 1)
+    if len(data) > MAX_VOICE_BYTES:
+        raise HTTPException(status_code=413, detail="Recording too long — keep a turn under a minute")
     mime = MIME_FIX.get(audio.content_type, audio.content_type) or "audio/wav"
-    heard = session["agent"].llm.transcribe(audio.file.read(), mime_type=mime)
+    heard = session["agent"].llm.transcribe(data, mime_type=mime)
     if not heard:
         return {"heard": "", "reply": "", "tools": []}
     return {"heard": heard, **run_turn(session, heard)}
@@ -540,7 +560,12 @@ def voice(session_id: str = Form(...), audio: UploadFile = File(...)):
 
 @app.post("/api/tts")
 def speak(req: TTSRequest):
-    """Reply text in -> mp3 speech out (voice auto-picked by script, see tts.py)."""
+    """Reply text in -> mp3 speech out (voice auto-picked by script, see tts.py).
+
+    Requires a live test-call session: without one this endpoint was a free,
+    unlimited text-to-speech proxy for anyone who found the URL (audit M4).
+    """
+    get_session(req.session_id)
     clean = re.sub(r"[*_#`]", "", req.text)
     # Straight from the network into the response — no temp file round trip.
     return Response(content=tts.synthesize_bytes(clean), media_type="audio/mpeg")

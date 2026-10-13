@@ -161,6 +161,13 @@ def main():
         print("in .env once its checklist passes.")
         sys.exit(1)
 
+    import auth
+    problem = auth.admin_password_problem()
+    if problem:
+        # The tunnel publishes /admin too; never with a weak or sample password.
+        print(f"Not going live: {problem}.")
+        sys.exit(1)
+
     missing = [k for k in ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_NUMBER")
                if not os.getenv(k)]
     if missing:

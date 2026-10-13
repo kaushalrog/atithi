@@ -168,3 +168,19 @@ def test_lead_rejects_short_phone(tmp_storage, fake_llm):
     agent = make_agent(fake_llm, [])
     assert agent._save_lead("K", "12", "x", "")["status"] == "failed"
     assert list(storage.read_leads("demo_clinic")) == []
+
+
+# ---- the LLM provider seam ----------------------------------------------------------
+
+def test_gemini_client_is_built_with_a_request_timeout(monkeypatch):
+    """Audit M6: generate_content had no timeout, so a stalled request hung
+    the caller's turn forever. No network: the client constructor is a spy."""
+    import llm
+
+    built = []
+    monkeypatch.setattr(llm.genai, "Client", lambda **kw: built.append(kw) or object())
+    monkeypatch.setattr(llm, "_clients", {})
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-real")
+    monkeypatch.setenv("GEMINI_TIMEOUT_S", "12")
+    llm.shared_client()
+    assert built[0]["http_options"].timeout == 12_000      # milliseconds
