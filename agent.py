@@ -141,11 +141,10 @@ class ReceptionistAgent:
     def __init__(self, client_id: str, llm=None):
         self.client_id = client_id
         self.config = self._load_config(client_id)
-        # This conversation's own view of what's free. Never the shared cached
-        # config — booking a slot removes it here only.
-        self.slots = scheduling.available_slots(
-            self.config, storage.booked_pairs(client_id)
-        )
+        # What's free right now. Refreshed from the bookings database on every
+        # availability check and booking (see _refresh_slots), so a slot that
+        # another conversation booked a minute ago is never offered here.
+        self.slots = self._refresh_slots()
         self.system_prompt = self._render_system_prompt()
         self.llm = llm or default_llm()
         self.history: list[dict] = []
@@ -263,6 +262,19 @@ class ReceptionistAgent:
             )
         return {"error": f"Unknown tool: {name}"}
 
+    def _refresh_slots(self) -> dict:
+        """Opening hours minus every confirmed booking in the database.
+
+        WHY not a snapshot taken when the conversation started (as before):
+        two calls running at once each held their own snapshot, so both could
+        offer — and book — the same slot (audit H2). One indexed query per
+        tool call is cheap; a double-booked patient in the waiting room is not.
+        """
+        self.slots = scheduling.available_slots(
+            self.config, storage.booked_pairs(self.client_id)
+        )
+        return self.slots
+
     def _check_availability(self, date: str) -> dict:
         """What's actually free on a date, computed from the business's hours.
 
@@ -275,7 +287,7 @@ class ReceptionistAgent:
         Later stages replace this body with a real calendar lookup — the tool's
         name and schema stay the same, so the agent doesn't change at all.
         """
-        slots = self.slots.get(date)
+        slots = self._refresh_slots().get(date)
         if slots is None:
             horizon = sorted(self.slots)
             return {
@@ -295,7 +307,7 @@ class ReceptionistAgent:
     def _book_appointment(self, customer_name, phone, service, date, time) -> dict:
         # Validate BEFORE writing anything. The error messages are written for
         # the model: it reads them and fixes its own mistake in the next turn.
-        available = self.slots.get(date) or []
+        available = self._refresh_slots().get(date) or []
         if time not in available:
             return {
                 "status": "failed",
@@ -316,9 +328,20 @@ class ReceptionistAgent:
             dt.datetime.now().isoformat(timespec="seconds"),
             self.client_id, customer_name, phone, service, date, time, "confirmed",
         ]
-        saved_to = storage.save_booking(row)
-        # Consume the slot so the same time can't be double-booked.
-        self.slots[date].remove(time)
+        saved_to = storage.reserve_booking(row)
+        if saved_to is None:
+            # Another conversation booked this exact slot between our check
+            # and our write. The database refused the second booking; tell
+            # the model so it offers the customer what is still free.
+            return {
+                "status": "failed",
+                "error": (
+                    f"{time} on {date} was just booked by someone else. "
+                    "Apologise and offer the customer one of the available slots."
+                ),
+                "available_slots": self._refresh_slots().get(date) or [],
+            }
+        self.slots[date].remove(time)   # keep this view current without a re-query
         print(
             f"\n  ✅ BOOKING CONFIRMED — {customer_name} | {phone} | {service} "
             f"| {date} {time}\n     saved to: {saved_to}\n"

@@ -9,11 +9,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 for k in ("GEMINI_API_KEY", "SHEET_ID", "TWILIO_AUTH_TOKEN", "ADMIN_PASSWORD", "ADMIN_EMAIL"):
     os.environ.pop(k, None)
+os.environ["VOXAGENT_ENV"] = "test"   # storage refuses real-data writes (post-Phase-0.5 code)
 
 import storage, auth, scheduling  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="vox_audit_"))
 storage.BOOKINGS_CSV = TMP / "bookings.csv"
+storage.BOOKINGS_DB = TMP / "bookings.db"   # ignored by pre-Phase-0.5 code
 storage.LEADS_CSV = TMP / "leads.csv"
 storage.CALLS_DIR = TMP / "calls"
 auth.DB_FILE = TMP / "voxagent.db"
@@ -30,6 +32,16 @@ class FakeLLM:
         return self.script.pop(0) if self.script else {"text": "ok", "tool_calls": []}
     def transcribe(self, *a, **k):
         return ""
+
+
+def reset_bookings():
+    """Fresh, empty booking storage for the next scenario (CSV era and DB era)."""
+    for p in list(TMP.glob("*.csv")) + list(TMP.glob("bookings.db*")):
+        p.unlink()
+    if hasattr(storage, "_db_prepared"):
+        storage._db_prepared.clear()
+        storage._db_local.conn = None
+    storage.clear_caches()
 
 
 def report(name, reproduced, evidence):
@@ -55,26 +67,33 @@ report("R1 double-booking across concurrent conversations", r1 == r2 == "confirm
        f"agent1={r1}, agent2={r2}, confirmed rows for {d} {t}: {len(rows)}")
 
 # R2: when Sheets is the booking store, availability and dashboard never see the booking.
-for p in TMP.glob("*.csv"):
-    p.unlink()
-storage.clear_caches()
-orig = storage._save_to_google_sheet
-storage._save_to_google_sheet = lambda row: "Google Sheet"     # simulate a working Sheet
+reset_bookings()
+if hasattr(storage, "_save_to_google_sheet"):                 # pre-Phase-0.5 code
+    orig = ("_save_to_google_sheet", storage._save_to_google_sheet)
+    storage._save_to_google_sheet = lambda row: "Google Sheet"   # simulate a working Sheet
+else:                                                            # Sheets is now a copy
+    class _FakeSheet:
+        def append_row(self, row): pass
+    orig = ("_sheet_handle", storage._sheet_handle)
+    storage._sheet_handle = lambda *a: _FakeSheet()
+    storage.in_test_mode = lambda: False   # lift test mode for the mirror; paths are TMP
+    os.environ["GOOGLE_SHEETS_CREDENTIALS_PATH"] = __file__
+    os.environ["SHEET_ID"] = "fake"
 a = ReceptionistAgent("demo_clinic", llm=FakeLLM())
 res = a._book_appointment("Asha", "9876543210", "Cleaning", d, t)
 fresh = ReceptionistAgent("demo_clinic", llm=FakeLLM())
 still_offered = t in fresh._check_availability(d)["available_slots"]
 report("R2 Sheets bookings invisible to availability + dashboard",
-       res["saved_to"] == "Google Sheet" and still_offered and storage.read_bookings("demo_clinic") == [],
+       "Google Sheet" in res.get("saved_to", "") and still_offered
+       and storage.read_bookings("demo_clinic") == [],
        f"saved_to={res['saved_to']!r}; new conversation still offers {d} {t}: {still_offered}; "
        f"dashboard bookings={len(storage.read_bookings('demo_clinic'))}")
-storage._save_to_google_sheet = orig
+setattr(storage, *orig)
+os.environ.pop("SHEET_ID", None)
 
 # R3: conversion metric counts FAILED booking attempts as conversions.
 import server  # noqa: E402
-for p in TMP.glob("*.csv"):
-    p.unlink()
-storage.clear_caches()
+reset_bookings()
 a = ReceptionistAgent("demo_clinic", llm=FakeLLM([
     {"text": None, "tool_calls": [{"name": "book_appointment", "args": {
         "customer_name": "X", "phone": "123", "service": "Cleaning", "date": d, "time": t}}]},
@@ -91,9 +110,7 @@ report("R3 conversion counts failed booking attempts", stats["conversion"] == 10
 import telephony  # noqa: E402
 import shutil
 shutil.rmtree(storage.CALLS_DIR, ignore_errors=True)
-for p in TMP.glob("*.csv"):
-    p.unlink()
-storage.clear_caches()
+reset_bookings()
 
 
 class FakeLive:

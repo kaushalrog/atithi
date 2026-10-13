@@ -123,6 +123,39 @@ def test_double_booking_same_slot_fails(tmp_storage, fake_llm):
     assert agent._book_appointment("B", "9876543211", "X", date, slot)["status"] == "failed"
 
 
+def test_two_conversations_cannot_book_the_same_slot(tmp_storage, fake_llm):
+    """Audit H2 (reproduced as R1): both agents are built BEFORE either books,
+    so each started out believing the slot was free."""
+    date = open_day()
+    slot = open_times(date=date)[0]
+    first, second = make_agent(fake_llm, []), make_agent(fake_llm, [])
+    assert first._book_appointment("Asha", "9876543210", "X", date, slot)["status"] == "confirmed"
+    result = second._book_appointment("Bala", "9876543211", "X", date, slot)
+    assert result["status"] == "failed"
+    assert slot not in result["available_slots"]       # the model gets real alternatives
+    assert result["available_slots"]                   # ...and there are some
+    assert len(storage.read_bookings("demo_clinic")) == 1
+
+
+def test_availability_sees_other_conversations_bookings(tmp_storage, fake_llm):
+    date = open_day()
+    slot = open_times(date=date)[0]
+    waiting = make_agent(fake_llm, [])
+    assert slot in waiting._check_availability(date)["available_slots"]
+    make_agent(fake_llm, [])._book_appointment("Asha", "9876543210", "X", date, slot)
+    assert slot not in waiting._check_availability(date)["available_slots"]
+
+
+def test_losing_the_database_race_is_reported_to_the_model(tmp_storage, fake_llm, monkeypatch):
+    """The slot looked free when checked, but another writer committed first."""
+    agent = make_agent(fake_llm, [])
+    date = open_day()
+    slot = open_times(date=date)[0]
+    monkeypatch.setattr(storage, "reserve_booking", lambda row: None)
+    result = agent._book_appointment("Asha", "9876543210", "X", date, slot)
+    assert result["status"] == "failed" and "just booked" in result["error"]
+
+
 def test_save_lead(tmp_storage, fake_llm):
     agent = make_agent(fake_llm, [])
     result = agent._save_lead("Kiran", "9998887776", "braces price", "call after 6pm")

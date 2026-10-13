@@ -7,19 +7,26 @@ in Telugu, and never breaks character. Run it after any prompt/model change:
     .venv\\Scripts\\python evals\\run_evals.py
 
 Uses the real Gemini API (~30 requests; a few minutes on the free tier).
-Storage is redirected to a scratch folder, so real bookings/leads are untouched.
+Storage is redirected to a scratch folder and VOXAGENT_ENV=test is forced, so
+the Google Sheets copy is off and real bookings/leads cannot be written.
 Note: LLM output varies — one flaky failure means "read the transcript",
 repeated failure means "fix the prompt". This is a thermometer, not a unit test.
 """
 
 import datetime as dt
 import json
+import os
 import re
 import sys
 import tempfile
 from pathlib import Path
 
 import yaml
+
+# Test mode BEFORE importing storage: evals book real-looking appointments, so
+# the Google Sheets copy must be off and any write to the business's real data
+# files must fail — never trust that every path below was redirected.
+os.environ["VOXAGENT_ENV"] = "test"
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -73,6 +80,7 @@ def run_scenario(scenario: dict, workdir: Path) -> tuple[list, list]:
     # Fresh, isolated storage per scenario so counts are deterministic.
     sdir = workdir / scenario["name"]
     sdir.mkdir(parents=True, exist_ok=True)
+    storage.BOOKINGS_DB = sdir / "bookings.db"
     storage.BOOKINGS_CSV = sdir / "bookings.csv"
     storage.LEADS_CSV = sdir / "leads.csv"
     storage.CALLS_DIR = sdir / "calls"

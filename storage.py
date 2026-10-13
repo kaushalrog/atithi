@@ -7,9 +7,24 @@ that touches disk (or Sheets) lives here, and nothing else knows file paths.
 When real scale demands a database, THIS is the only file that changes.
 
 What we store:
-    bookings  -> Google Sheet if configured, bookings.csv fallback
+    bookings  -> bookings.db (SQLite) — the ONLY source of truth for bookings.
+                 Google Sheets, if configured, gets a one-way copy after the
+                 booking commits and is never read back.
     leads     -> leads.csv        (callers who didn't book — follow-up gold)
     calls     -> calls/<client_id>/<call_id>.json  (one file per conversation)
+
+WHY bookings moved from CSV to SQLite (audit H2/H3): two conversations used to
+be able to book the same slot, because each checked its own snapshot of
+availability and then appended to a file nothing could lock. And in Sheets
+mode the booking went to the Sheet while availability was read from the CSV,
+so a booked slot kept being offered. Now one database owns bookings, and a
+UNIQUE index makes "one confirmed booking per slot" a rule the database
+enforces, not a hope the code maintains. The old bookings.csv is imported
+once on first open and then left untouched.
+
+TEST MODE: VOXAGENT_ENV=test (set by tests/conftest.py and evals/) switches
+off the Sheets copy entirely and makes every write to the repo's real data
+files raise — tests and evals can never touch a business's real bookings.
 
 CACHING (the reason this file is fast): parsing YAML cost ~5.7 ms and the
 dashboard re-read every CSV and every call-log JSON on each of its requests.
@@ -27,6 +42,7 @@ import csv
 import datetime as dt
 import json
 import os
+import sqlite3
 import threading
 from pathlib import Path
 
@@ -36,10 +52,32 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
-BOOKINGS_CSV = BASE_DIR / "bookings.csv"
+BOOKINGS_DB = BASE_DIR / "bookings.db"
+BOOKINGS_CSV = BASE_DIR / "bookings.csv"   # legacy: read once by the import, never written
 LEADS_CSV = BASE_DIR / "leads.csv"
 CALLS_DIR = BASE_DIR / "calls"
 CLIENTS_DIR = BASE_DIR / "clients"
+
+# The real data locations, captured before tests repoint the paths above.
+_REAL_DATA = (BOOKINGS_DB, BOOKINGS_CSV, LEADS_CSV, CALLS_DIR, CLIENTS_DIR)
+
+
+def in_test_mode() -> bool:
+    return os.getenv("VOXAGENT_ENV", "").strip().lower() == "test"
+
+
+def _guard_write(path: Path):
+    """Fail closed: in test mode, refuse to write any real business data."""
+    if not in_test_mode():
+        return
+    target = Path(path).resolve()
+    for real in _REAL_DATA:
+        real = real.resolve()
+        if target == real or real in target.parents:
+            raise RuntimeError(
+                f"VOXAGENT_ENV=test refuses to write real data at {target}. "
+                "Point storage paths at a temp folder first (see tests/conftest.py)."
+            )
 
 BOOKING_HEADER = [
     "timestamp", "client_id", "name", "phone", "service", "date", "time", "status",
@@ -104,7 +142,13 @@ def data_version(client_id: str | None = None) -> str:
     no body instead of re-serialising every transcript.
     """
     parts = [str(_version)]
-    for path in (BOOKINGS_CSV, LEADS_CSV):
+    # Open (and, first time, create) the database BEFORE stamping it, or the
+    # first request stamps "no file" and the next one sees a new file — a
+    # spurious change. The stamps catch bookings written by another process
+    # (e.g. main.py in a terminal); the -wal file is where SQLite writes land
+    # first, so it changes on every booking even before the main file does.
+    _bookings_db()
+    for path in (BOOKINGS_DB, Path(str(BOOKINGS_DB) + "-wal"), LEADS_CSV):
         parts.append(str(_stamp(path)))
     if client_id:
         parts.append(str(_stamp(CLIENTS_DIR / f"{client_id}.yaml")))
@@ -122,55 +166,146 @@ def clear_caches():
 
 # ---- bookings ------------------------------------------------------------------
 
-def save_booking(row: list) -> str:
-    """Persist one booking row. Returns a human-readable 'where it went'."""
-    where = _save_to_google_sheet(row)
-    if where is None:
-        _append_csv(BOOKINGS_CSV, BOOKING_HEADER, row)
-        where = "bookings.csv (local fallback)"
-    else:
-        _invalidate(BOOKINGS_CSV)  # keep the dashboard's counters honest
-    return where
+_BOOKINGS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS bookings (
+    id INTEGER PRIMARY KEY,
+    timestamp TEXT NOT NULL, client_id TEXT NOT NULL, name TEXT, phone TEXT,
+    service TEXT, date TEXT NOT NULL, time TEXT NOT NULL, status TEXT NOT NULL);
+-- The double-booking guard: at most ONE confirmed booking per slot per
+-- business. A cancelled row doesn't count, so a cancelled slot can be rebooked.
+CREATE UNIQUE INDEX IF NOT EXISTS one_confirmed_booking_per_slot
+    ON bookings(client_id, date, time) WHERE status = 'confirmed';
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+"""
+
+# One connection per thread (SQLite connections must not be shared across
+# threads; FastAPI serves sync endpoints from a thread pool) — same pattern
+# as auth.py. Schema + the one-time CSV import run once per database file.
+_db_local = threading.local()
+_db_prepared: set[str] = set()
+_db_prepare_lock = threading.Lock()
+
+
+def _bookings_db() -> sqlite3.Connection:
+    path = str(BOOKINGS_DB)                  # tests repoint BOOKINGS_DB at a tmp file
+    conn = getattr(_db_local, "conn", None)
+    if conn is not None and getattr(_db_local, "path", None) == path:
+        return conn
+    if conn is not None:
+        conn.close()
+    _guard_write(BOOKINGS_DB)                # opening creates the file
+    # isolation_level=None: autocommit. Every write below is ONE statement,
+    # and a single INSERT is atomic in SQLite — no transaction juggling needed.
+    conn = sqlite3.connect(path, timeout=10, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    with _db_prepare_lock:
+        if path not in _db_prepared:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.executescript(_BOOKINGS_SCHEMA)
+            _import_legacy_csv(conn)
+            _db_prepared.add(path)
+    _db_local.conn = conn
+    _db_local.path = path
+    return conn
+
+
+def _import_legacy_csv(conn: sqlite3.Connection):
+    """Copy bookings.csv into the database exactly once, then never touch it.
+
+    INSERT OR IGNORE because the old CSV can already hold two confirmed rows
+    for one slot (the very bug this database prevents) — the first is kept,
+    the rest are counted and reported instead of aborting the upgrade.
+    """
+    if conn.execute("SELECT 1 FROM meta WHERE key='csv_imported'").fetchone():
+        return
+    imported = skipped = 0
+    if BOOKINGS_CSV.exists():
+        with open(BOOKINGS_CSV, newline="", encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                if not (r.get("client_id") and r.get("date") and r.get("time")):
+                    skipped += 1
+                    continue
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO bookings "
+                    "(timestamp, client_id, name, phone, service, date, time, status) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    tuple(r.get(k, "") or "" for k in BOOKING_HEADER),
+                )
+                imported += cur.rowcount
+                skipped += 1 - cur.rowcount
+        print(f"  [storage] imported {imported} booking(s) from bookings.csv"
+              + (f"; skipped {skipped} duplicate/invalid row(s)" if skipped else ""))
+    conn.execute("INSERT INTO meta VALUES ('csv_imported', ?)",
+                 (dt.datetime.now().isoformat(timespec="seconds"),))
+
+
+def reserve_booking(row: list) -> str | None:
+    """Atomically book one slot. Returns where it was saved, or None if that
+    slot already has a confirmed booking (another conversation won the race).
+
+    `row` follows BOOKING_HEADER. The UNIQUE index decides the race inside the
+    database, so two callers can never both succeed — no check-then-write gap.
+    """
+    try:
+        _bookings_db().execute(
+            "INSERT INTO bookings "
+            "(timestamp, client_id, name, phone, service, date, time, status) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            tuple(row),
+        )
+    except sqlite3.IntegrityError:
+        return None
+    _invalidate(BOOKINGS_DB)   # keep the dashboard's counters and ETag honest
+    if _mirror_to_google_sheet(row):
+        return "bookings.db + Google Sheet copy"
+    return "bookings.db"
 
 
 def read_bookings(client_id: str) -> list[dict]:
-    """READ-ONLY list of this client's bookings (indexed, no file scan)."""
-    return _by_client(BOOKINGS_CSV).get(client_id) or []
+    """This client's bookings, oldest first, as {header: value} dicts."""
+    rows = _bookings_db().execute(
+        "SELECT timestamp, client_id, name, phone, service, date, time, status "
+        "FROM bookings WHERE client_id=? ORDER BY id", (client_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def booked_pairs(client_id: str) -> set[tuple[str, str]]:
-    """{(date, time)} already taken — what the agent needs to avoid offering.
+    """{(date, time)} already confirmed — what the agent must not offer."""
+    rows = _bookings_db().execute(
+        "SELECT date, time FROM bookings WHERE client_id=? AND status='confirmed'",
+        (client_id,),
+    ).fetchall()
+    return {(r["date"], r["time"]) for r in rows}
 
-    Precomputed with the CSV parse so building an agent is a dict lookup
-    instead of a scan of every booking ever made.
+
+def _mirror_to_google_sheet(row: list) -> bool:
+    """Best-effort copy of a COMMITTED booking to the owner's Google Sheet.
+
+    The booking is already safe in bookings.db, so a missing credentials file
+    or a flaky network only costs the Sheet a row (logged), never the booking.
+    The Sheet is never read back: edits made in the Sheet do not reach
+    VoxAgent. Off entirely in test mode, whatever SHEET_ID says.
     """
-    return _booked_index(BOOKINGS_CSV).get(client_id, frozenset())
-
-
-def _save_to_google_sheet(row: list) -> str | None:
-    """Returns 'Google Sheet' on success, None to trigger the CSV fallback.
-
-    WHY the fallback: a live demo must never die because of a missing
-    credentials file or a flaky network. Losing the booking is the only
-    unacceptable failure.
-    """
+    if in_test_mode():
+        return False
     creds_path = os.getenv("GOOGLE_SHEETS_CREDENTIALS_PATH", "")
     sheet_id = os.getenv("SHEET_ID", "")
     if not creds_path or not sheet_id:
-        return None
+        return False
     if not Path(creds_path).is_absolute():
         creds_path = str(BASE_DIR / creds_path)
     if not os.path.exists(creds_path):
-        print(f"  [warning] {creds_path} not found — using bookings.csv.")
-        return None
+        print(f"  [warning] {creds_path} not found — booking saved, Sheet not updated.")
+        return False
     try:
         worksheet = _sheet_handle(creds_path, sheet_id)
         worksheet.append_row(row)
-        return "Google Sheet"
+        return True
     except Exception as e:
         _reset_sheet_handle()
-        print(f"  [warning] Google Sheets failed ({e}) — using bookings.csv.")
-        return None
+        print(f"  [warning] Google Sheets copy failed ({e}) — booking saved, Sheet not updated.")
+        return False
 
 
 _sheet = None  # authorised worksheet, reused across bookings
@@ -238,6 +373,7 @@ def log_call_from_agent(agent, channel: str, started: dt.datetime,
     }
     folder = CALLS_DIR / agent.client_id
     path = folder / f"{call_id}.json"
+    _guard_write(path)
     with _write_lock:
         folder.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
@@ -284,6 +420,7 @@ def read_client_config(client_id: str) -> dict | None:
 
 def write_client_config(client_id: str, cfg: dict):
     path = CLIENTS_DIR / f"{client_id}.yaml"
+    _guard_write(path)
     with _write_lock, open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
     _invalidate(path)
@@ -333,6 +470,7 @@ def client_for_number(number: str) -> str | None:
 # ---- shared CSV helpers ----------------------------------------------------------
 
 def _append_csv(path: Path, header: list, row: list):
+    _guard_write(path)
     with _write_lock:
         is_new = not path.exists()
         with open(path, "a", newline="", encoding="utf-8") as f:
@@ -354,28 +492,6 @@ def _group_csv(path: Path) -> dict[str, list[dict]]:
         for row in csv.DictReader(f):
             grouped.setdefault(row.get("client_id", ""), []).append(row)
     return grouped
-
-
-def _booked_index(path: Path) -> dict[str, frozenset]:
-    """{client_id: {(date, time)}} for confirmed bookings, cached alongside."""
-    key = str(path) + "#booked"
-    stamp = _stamp(path)
-    if stamp is None:
-        return {}
-    with _cache_lock:
-        hit = _cache.get(key)
-        if hit is not None and hit[0] == stamp:
-            return hit[1]
-    index = {
-        client_id: frozenset(
-            (r.get("date", ""), r.get("time", ""))
-            for r in rows if r.get("status") == "confirmed"
-        )
-        for client_id, rows in _by_client(path).items()
-    }
-    with _cache_lock:
-        _cache[key] = (stamp, index)
-    return index
 
 
 def _read_csv(path: Path) -> list[dict]:

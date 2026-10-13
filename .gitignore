@@ -22,3 +22,6 @@ users.json
 tokens.json
 voxagent.db
 voxagent.db-*
+# Bookings (customer names + phone numbers) — the single source of truth
+bookings.db
+bookings.db-*
