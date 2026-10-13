@@ -215,6 +215,7 @@ def phone(tmp_storage, fake_llm, monkeypatch):
     storage.clear_caches()
     monkeypatch.setattr(telephony, "_used_tickets", {})
     monkeypatch.setattr(telephony, "_active_calls", 0)
+    monkeypatch.setattr(telephony, "_pending_tickets", {})
     SpyLive.created = []
     monkeypatch.setattr(llm, "GeminiLive", SpyLive)
     agents = []
@@ -322,18 +323,36 @@ def good_ticket(**overrides):
     return params
 
 
-@pytest.mark.parametrize("name,params,call_sid", [
-    ("no ticket", {}, "CA1"),
-    ("tampered business", good_ticket(client_id="lakshmi_beauty_salon"), "CA1"),
-    ("tampered signature", good_ticket(ticket="0" * 64), "CA1"),
-    ("another call's ticket", good_ticket(), "CA_OTHER"),
-    ("expired", telephony.mint_stream_ticket("CA1", "demo_clinic", "", now=time.time() - 3600), "CA1"),
-    ("unknown business", telephony.mint_stream_ticket("CA1", "no_such_biz", ""), "CA1"),
-    ("inactive plan", telephony.mint_stream_ticket("CA1", "expired_biz", ""), "CA1"),
-])
-def test_stream_rejects_before_allocating_anything(phone, name, params, call_sid):
-    assert stream(phone["client"], params, call_sid=call_sid) == 1008, name
-    assert SpyLive.created == [] and phone["agents"] == [], name
+@pytest.mark.parametrize("make_params,call_sid,reason", [
+    (lambda: {}, "CA1", "missing ticket"),
+    (lambda: good_ticket(client_id="lakshmi_beauty_salon"), "CA1", "bad ticket signature"),
+    (lambda: good_ticket(ticket="0" * 64), "CA1", "bad ticket signature"),
+    (lambda: good_ticket(ticket="\u00e9" * 64), "CA1", "bad ticket signature"),  # non-ASCII
+    (lambda: good_ticket(), "CA_OTHER", "different call"),
+    (lambda: telephony.mint_stream_ticket("CA1", "demo_clinic", "",
+                                          now=time.time() - 3600), "CA1", "expired"),
+    (lambda: telephony.mint_stream_ticket("CA1", "no_such_biz", ""), "CA1", "unknown business"),
+    (lambda: telephony.mint_stream_ticket("CA1", "expired_biz", ""), "CA1", "plan inactive"),
+], ids=["no-ticket", "tampered-business", "tampered-signature", "non-ascii-ticket",
+        "other-call", "expired", "unknown-business", "inactive-plan"])
+def test_stream_rejects_before_allocating_anything(phone, capsys, make_params, call_sid, reason):
+    # Tickets are minted inside the test (not at collection time), and each
+    # case asserts ITS gate's reason — so a case can't pass because an
+    # earlier, unrelated gate (e.g. expiry on a slow run) rejected it.
+    assert stream(phone["client"], make_params(), call_sid=call_sid) == 1008
+    assert reason in capsys.readouterr().out
+    assert SpyLive.created == [] and phone["agents"] == []
+
+
+def test_stream_without_a_start_message_is_rejected(phone):
+    headers = {"x-twilio-signature": sign(telephony.stream_url())}
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with phone["client"].websocket_connect("/twilio/stream", headers=headers) as ws:
+            for _ in range(telephony.MAX_PRE_START_MESSAGES):
+                ws.send_json({"event": "connected"})
+            ws.receive_text()
+    assert closed.value.code == 1008
+    assert SpyLive.created == [] and phone["agents"] == []
 
 
 @pytest.mark.parametrize("signature", ["", "forged"])
@@ -362,3 +381,74 @@ def test_call_slot_is_released_when_the_model_fails_to_connect(phone, monkeypatc
     with pytest.raises(ConnectionError):
         stream(phone["client"], good_ticket())
     assert telephony._active_calls == 0
+
+
+# ---- review fixes: stream robustness and call-slot accounting (D2 #8, D3 #11) -------
+
+def test_malformed_frame_before_start_is_a_clean_rejection(phone):
+    """#8: a non-JSON frame used to escape as an unhandled exception."""
+    headers = {"x-twilio-signature": sign(telephony.stream_url())}
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with phone["client"].websocket_connect("/twilio/stream", headers=headers) as ws:
+            ws.send_text("this is not json")
+            ws.receive_text()
+    assert closed.value.code == 1008 and SpyLive.created == []
+
+
+def test_silent_socket_is_closed_after_the_start_timeout(phone, monkeypatch):
+    """#8: a socket that never sends 'start' used to stay open forever."""
+    monkeypatch.setattr(telephony, "PRE_START_TIMEOUT_S", 0.2)
+    headers = {"x-twilio-signature": sign(telephony.stream_url())}
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with phone["client"].websocket_connect("/twilio/stream", headers=headers) as ws:
+            ws.receive_text()                    # we send nothing at all
+    assert closed.value.code == 1008 and SpyLive.created == []
+
+
+def test_issued_tickets_hold_a_call_slot_until_used(phone, monkeypatch):
+    """#11: a burst of calls all passed the webhook check, then the extras
+    were dropped silently at the stream. Issued tickets now reserve a slot."""
+    monkeypatch.setenv("MAX_CONCURRENT_CALLS", "1")
+    first = post_voice(phone["client"], {"To": "+1", "From": "+2", "CallSid": "CA1"})
+    assert "<Stream" in first.text
+    second = post_voice(phone["client"], {"To": "+1", "From": "+3", "CallSid": "CA2"})
+    assert "busy" in second.text and "<Stream" not in second.text
+    assert stream(phone["client"], ticket_from_twiml(first.text)) == 1000   # slot used, freed
+    third = post_voice(phone["client"], {"To": "+1", "From": "+4", "CallSid": "CA3"})
+    assert "<Stream" in third.text
+
+
+def test_a_forged_ticket_cannot_free_another_calls_slot(phone, monkeypatch):
+    monkeypatch.setenv("MAX_CONCURRENT_CALLS", "1")
+    post_voice(phone["client"], {"To": "+1", "From": "+2", "CallSid": "CA1"})
+    stream(phone["client"], {"call_sid": "CA1", "client_id": "demo_clinic", "caller": "",
+                             "exp": "9999999999", "ticket": "0" * 64}, call_sid="CA1")
+    res = post_voice(phone["client"], {"To": "+1", "From": "+3", "CallSid": "CA2"})
+    assert "busy" in res.text                      # CA1's slot is still reserved
+
+
+def test_an_unused_ticket_frees_its_slot_when_it_expires(phone, monkeypatch):
+    monkeypatch.setenv("MAX_CONCURRENT_CALLS", "1")
+    post_voice(phone["client"], {"To": "+1", "From": "+2", "CallSid": "CA1"})
+    later = time.time() + telephony.STREAM_TICKET_TTL_S + 1
+    monkeypatch.setattr(telephony.time, "time", lambda: later)
+    res = post_voice(phone["client"], {"To": "+1", "From": "+3", "CallSid": "CA2"})
+    assert "<Stream" in res.text
+
+
+@pytest.mark.parametrize("why", ["lines-full", "plan-inactive"])
+def test_outbound_call_refused_before_dialling(phone, monkeypatch, why):
+    """#11: the business must not ring a customer it cannot then serve."""
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC1")
+    monkeypatch.setenv("TWILIO_NUMBER", "+15550001111")
+    dialled = []
+    import twilio.rest
+    monkeypatch.setattr(twilio.rest, "Client", lambda *a: dialled.append(a))
+    client_id = "demo_clinic"
+    if why == "lines-full":
+        monkeypatch.setattr(telephony, "_active_calls", 3)
+    else:
+        client_id = "expired_biz"
+    with pytest.raises(RuntimeError):
+        telephony.start_outbound_call(client_id, "+919876543210")
+    assert dialled == []

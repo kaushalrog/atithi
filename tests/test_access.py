@@ -9,6 +9,12 @@ import server
 
 @pytest.fixture
 def client(tmp_storage, monkeypatch):
+    import auth
+    # Accounts DB in the temp folder too: the admin console reads it, and an
+    # earlier version of this fixture created a real voxagent.db in the repo.
+    monkeypatch.setattr(auth, "DB_FILE", tmp_storage / "voxagent.db")
+    monkeypatch.setattr(auth, "LEGACY_USERS", tmp_storage / "no_users.json")
+    monkeypatch.setattr(auth, "LEGACY_TOKENS", tmp_storage / "no_tokens.json")
     monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-pw")
     return TestClient(server.app)
 
@@ -150,3 +156,86 @@ def test_placeholder_admin_email_is_never_seeded(client, tmp_path, monkeypatch):
     res = client.post("/api/auth/login", json={"email": "you@example.com",
                                                "password": "test-admin-pw"})
     assert res.status_code == 401
+
+
+# ---- review fixes: auth + behaviour (approved D2 #5-#7, D3 #9, #10, #12) -------------
+
+def test_non_ascii_or_numeric_credentials_are_rejected_not_crashed(client, monkeypatch):
+    """#5: hmac.compare_digest raises on non-ASCII str (and str-vs-int); that
+    surfaced as HTTP 500 at three credential checks (QA probe 003/004)."""
+    c = TestClient(server.app, raise_server_exceptions=False)
+    assert c.get("/api/stats?client_id=demo_clinic",
+                 headers={"X-Client-Key": b"VX-\xe9"}).status_code == 401
+    assert c.post("/api/portal/login", json={"access_key": "VX-é"}).status_code == 401
+    monkeypatch.setattr(server, "client_access_key", lambda cid: 482913)  # YAML int
+    assert c.get("/api/stats?client_id=demo_clinic",
+                 headers={"X-Client-Key": "482913"}).status_code == 200
+
+
+def login_admin(client, email):
+    return client.post("/api/auth/login", json={"email": email,
+                                               "password": "test-admin-pw"}).json()["token"]
+
+
+def test_admin_role_only_counts_for_the_current_admin_email(client, monkeypatch):
+    """#6: an admin account seeded under an old ADMIN_EMAIL kept admin rights."""
+    monkeypatch.setenv("ADMIN_EMAIL", "old@test.com")
+    auth._invalidate_cache()
+    old_token = login_admin(client, "old@test.com")
+    monkeypatch.setenv("ADMIN_EMAIL", "new@test.com")
+    auth._invalidate_cache()
+    bearer = {"Authorization": f"Bearer {old_token}"}
+    assert client.get("/api/admin/overview", headers=bearer).status_code == 401
+    new_token = login_admin(client, "new@test.com")
+    assert client.get("/api/admin/overview",
+                      headers={"Authorization": f"Bearer {new_token}"}).status_code == 200
+
+
+def test_admin_503_does_not_explain_the_misconfiguration(client, monkeypatch, capsys):
+    """#7: anonymous callers must not learn why admin is off; the log says it."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "choose_a_strong_password")
+    res = client.get("/api/admin/overview")
+    assert res.status_code == 503
+    assert "placeholder" not in res.text and "characters" not in res.text
+    assert "placeholder" in capsys.readouterr().out
+
+
+def test_admin_console_reports_live_calls_switch(client, monkeypatch):
+    """#9: keys present but ENABLE_LIVE_CALLS off must not read as 'connected'."""
+    for k, v in {"TWILIO_ACCOUNT_SID": "AC1", "TWILIO_AUTH_TOKEN": "t",
+                 "PUBLIC_BASE_URL": "https://x.test"}.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("ENABLE_LIVE_CALLS", raising=False)
+    data = client.get("/api/admin/overview", headers={"X-Admin-Key": "test-admin-pw"}).json()
+    assert data["twilio_configured"] is False and data["status"]["twilio"] is False
+    assert data["status"]["live_calls"] is False
+    monkeypatch.setenv("ENABLE_LIVE_CALLS", "true")
+    data = client.get("/api/admin/overview", headers={"X-Admin-Key": "test-admin-pw"}).json()
+    assert data["twilio_configured"] is True
+
+
+def test_voice_transcript_is_capped_like_typed_chat(client, session, monkeypatch):
+    """#10: speech-to-text output bypassed the 2000-char chat limit."""
+    monkeypatch.setattr(FakeLLM, "transcribe",
+                        lambda self, data, mime_type: "word " * 1000, raising=False)
+    res = client.post("/api/voice", data={"session_id": session},
+                      files={"audio": ("a.wav", b"\0" * 100, "audio/wav")})
+    assert res.status_code == 200
+    assert len(res.json()["heard"]) <= server.MAX_CHAT_CHARS
+    agent = server.sessions[session]["agent"]
+    assert all(len(m["text"]) <= server.MAX_CHAT_CHARS
+               for m in agent.history if m["role"] == "user")
+
+
+def test_oversized_request_bodies_are_refused_before_parsing(client, session, monkeypatch):
+    """#12: the 5 MB voice check ran only after the whole upload was spooled."""
+    parsed = []
+    monkeypatch.setattr(FakeLLM, "transcribe",
+                        lambda self, data, mime_type: parsed.append(1) or "", raising=False)
+    big = b"\0" * (server.MAX_BODY_BYTES + 1)
+    res = client.post("/api/voice", data={"session_id": session},
+                      files={"audio": ("a.wav", big, "audio/wav")})
+    assert res.status_code == 413 and parsed == []
+    res = client.post("/api/chat", content=b"{" + b" " * server.MAX_BODY_BYTES + b"}",
+                      headers={"Content-Type": "application/json"})
+    assert res.status_code == 413

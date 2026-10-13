@@ -40,6 +40,34 @@
 **Priority:** P2
 **Depends on:** Retention policy decision by the owner.
 
+## Cost control
+
+### Per-session budgets for test calls
+
+**What:** Cap each portal test-call session: number/characters of `/api/tts` syntheses, number of chat turns, and enforce the 2-hour idle limit inside `get_session` (today it's only purged when a new session is created).
+
+**Why:** Found in the Phase 0.5 review (Red Team + adversarial): a session holder can make unlimited 1000-char TTS calls, and each chat turn re-sends the whole history, so one session's model cost keeps growing. Anyone can sign up and get a session.
+
+**Context:** `server.py` `create_session`, `get_session`, `/api/tts`, `/api/chat`. Needs a product decision on the limits (what a fair demo costs). Pair with the credential rate limits above.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** Decision on per-session limits.
+
+## Dashboard
+
+### Change detection that doesn't rely on file timestamps
+
+**What:** Replace the dashboard ETag's file stamps for bookings (`bookings.db` / `-wal` mtime+size) with a database-side change counter (e.g. a `meta` row bumped on every write, or `PRAGMA data_version`).
+
+**Why:** Found in the Phase 0.5 adversarial review: when another process (e.g. `main.py`) books, the server only notices via the WAL file's timestamp. On a filesystem with coarse timestamps, the WAL's size can stay the same and the dashboard could return a stale 304 until the next change. The server's own writes are unaffected.
+
+**Context:** `storage.py` `data_version`. Low urgency for a single laptop/VM (APFS/ext4 have fine timestamps).
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
 ## Metrics
 
 ### Compute call metrics from structured history, not transcript substrings

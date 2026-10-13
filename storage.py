@@ -49,6 +49,8 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
+import scheduling
+
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -175,6 +177,7 @@ CREATE TABLE IF NOT EXISTS bookings (
 -- business. A cancelled row doesn't count, so a cancelled slot can be rebooked.
 CREATE UNIQUE INDEX IF NOT EXISTS one_confirmed_booking_per_slot
     ON bookings(client_id, date, time) WHERE status = 'confirmed';
+CREATE INDEX IF NOT EXISTS bookings_by_client ON bookings(client_id, id);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
@@ -186,6 +189,11 @@ _db_prepared: set[str] = set()
 _db_prepare_lock = threading.Lock()
 
 
+class BookingsUnavailable(RuntimeError):
+    """New bookings are paused: a configured Google Sheet still holds bookings
+    this database hasn't imported, so booking now could double-book one."""
+
+
 def _bookings_db() -> sqlite3.Connection:
     path = str(BOOKINGS_DB)                  # tests repoint BOOKINGS_DB at a tmp file
     conn = getattr(_db_local, "conn", None)
@@ -194,8 +202,8 @@ def _bookings_db() -> sqlite3.Connection:
     if conn is not None:
         conn.close()
     _guard_write(BOOKINGS_DB)                # opening creates the file
-    # isolation_level=None: autocommit. Every write below is ONE statement,
-    # and a single INSERT is atomic in SQLite — no transaction juggling needed.
+    # isolation_level=None: autocommit. Normal writes are ONE statement (atomic
+    # on its own); the one-time imports below open explicit transactions.
     conn = sqlite3.connect(path, timeout=10, isolation_level=None)
     conn.row_factory = sqlite3.Row
     with _db_prepare_lock:
@@ -203,40 +211,120 @@ def _bookings_db() -> sqlite3.Connection:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_BOOKINGS_SCHEMA)
             _import_legacy_csv(conn)
+            _ensure_sheet_imported(conn)     # a failure pauses bookings, not reads
             _db_prepared.add(path)
     _db_local.conn = conn
     _db_local.path = path
     return conn
 
 
-def _import_legacy_csv(conn: sqlite3.Connection):
-    """Copy bookings.csv into the database exactly once, then never touch it.
+_INSERT_BOOKING = ("INSERT INTO bookings "
+                   "(timestamp, client_id, name, phone, service, date, time, status) "
+                   "VALUES (?,?,?,?,?,?,?,?)")
 
-    INSERT OR IGNORE because the old CSV can already hold two confirmed rows
-    for one slot (the very bug this database prevents) — the first is kept,
-    the rest are counted and reported instead of aborting the upgrade.
-    """
-    if conn.execute("SELECT 1 FROM meta WHERE key='csv_imported'").fetchone():
+
+def _normalize_row(r: dict) -> tuple | None:
+    """A legacy row (CSV or Sheet) in BOOKING_HEADER order, cleaned so the
+    slot guard can see it: trimmed, status lowercased, time as HH:MM.
+    None if it can't be a booking (no business, unreadable date/time)."""
+    vals = {k: str(r.get(k) if r.get(k) is not None else "").strip() for k in BOOKING_HEADER}
+    # A row with no status is treated as booked: blocking a free slot is the
+    # recoverable mistake; double-booking a customer is not.
+    vals["status"] = vals["status"].lower() or "confirmed"
+    time_of_day = scheduling.parse_time(vals["time"])
+    try:
+        dt.date.fromisoformat(vals["date"])
+    except ValueError:
+        return None
+    if not vals["client_id"] or time_of_day is None:
+        return None
+    vals["time"] = time_of_day.strftime("%H:%M")
+    return tuple(vals[k] for k in BOOKING_HEADER)
+
+
+def _import_rows(conn: sqlite3.Connection, rows) -> tuple[int, int, int]:
+    """Insert legacy rows; returns (imported, conflicts, invalid).
+
+    A second confirmed booking for an already-booked slot is the old
+    double-booking bug's leftover: a REAL customer. It's kept with status
+    'conflict' (visible on the dashboard, not counted as taking the slot),
+    never silently dropped."""
+    imported = conflicts = invalid = 0
+    for r in rows:
+        row = _normalize_row(r)
+        if row is None:
+            invalid += 1
+            continue
+        try:
+            conn.execute(_INSERT_BOOKING, row)
+            imported += 1
+        except sqlite3.IntegrityError:
+            conn.execute(_INSERT_BOOKING, row[:-1] + ("conflict",))
+            conflicts += 1
+    return imported, conflicts, invalid
+
+
+def _import_once(conn: sqlite3.Connection, marker: str, load_rows) -> tuple[int, int, int] | None:
+    """Run one import exactly once, across threads AND processes.
+
+    BEGIN IMMEDIATE takes the database's write lock, so a second process
+    (main.py next to server.py) waits here, then sees the marker and skips.
+    One transaction means a crash mid-import leaves no rows behind, so the
+    retry can't duplicate anything. Returns None if it was already done."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if conn.execute("SELECT 1 FROM meta WHERE key=?", (marker,)).fetchone():
+            conn.execute("COMMIT")
+            return None
+        counts = _import_rows(conn, load_rows())
+        conn.execute("INSERT OR IGNORE INTO meta VALUES (?, ?)",
+                     (marker, dt.datetime.now().isoformat(timespec="seconds")))
+        conn.execute("COMMIT")
+        return counts
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def _report_import(source: str, counts):
+    if not counts or not any(counts):
         return
-    imported = skipped = 0
-    if BOOKINGS_CSV.exists():
+    imported, conflicts, invalid = counts
+    print(f"  [storage] imported {imported} booking(s) from {source}"
+          + (f"; {conflicts} double-booked row(s) kept as status 'conflict' — "
+             "check them on the dashboard" if conflicts else "")
+          + (f"; skipped {invalid} unreadable row(s)" if invalid else ""))
+
+
+def _import_legacy_csv(conn: sqlite3.Connection):
+    """Copy bookings.csv into the database exactly once, then never touch it."""
+    def load():
+        if not BOOKINGS_CSV.exists():
+            return []
         with open(BOOKINGS_CSV, newline="", encoding="utf-8") as f:
-            for r in csv.DictReader(f):
-                if not (r.get("client_id") and r.get("date") and r.get("time")):
-                    skipped += 1
-                    continue
-                cur = conn.execute(
-                    "INSERT OR IGNORE INTO bookings "
-                    "(timestamp, client_id, name, phone, service, date, time, status) "
-                    "VALUES (?,?,?,?,?,?,?,?)",
-                    tuple(r.get(k, "") or "" for k in BOOKING_HEADER),
-                )
-                imported += cur.rowcount
-                skipped += 1 - cur.rowcount
-        print(f"  [storage] imported {imported} booking(s) from bookings.csv"
-              + (f"; skipped {skipped} duplicate/invalid row(s)" if skipped else ""))
-    conn.execute("INSERT INTO meta VALUES ('csv_imported', ?)",
-                 (dt.datetime.now().isoformat(timespec="seconds"),))
+            return list(csv.DictReader(f))
+    _report_import("bookings.csv", _import_once(conn, "csv_imported", load))
+
+
+def _ensure_sheet_imported(conn: sqlite3.Connection) -> bool:
+    """Bookings that only ever lived in the Google Sheet (the old code wrote
+    them there INSTEAD of the CSV) must be in the database before a new
+    booking is taken. True when done or not needed; False if the configured
+    Sheet couldn't be read (the caller fails closed)."""
+    target = _sheets_target()
+    if target is None:
+        return True
+    if conn.execute("SELECT 1 FROM meta WHERE key='sheet_imported'").fetchone():
+        return True
+    try:
+        records = _sheet_handle(*target).get_all_records()
+    except Exception as e:
+        _reset_sheet_handle()
+        print(f"  [warning] can't read the Google Sheet to import its bookings ({e}); "
+              "new bookings are paused until it can be read.")
+        return False
+    _report_import("the Google Sheet", _import_once(conn, "sheet_imported", lambda: records))
+    return True
 
 
 def reserve_booking(row: list) -> str | None:
@@ -245,20 +333,43 @@ def reserve_booking(row: list) -> str | None:
 
     `row` follows BOOKING_HEADER. The UNIQUE index decides the race inside the
     database, so two callers can never both succeed — no check-then-write gap.
+    Raises BookingsUnavailable while a configured Sheet's bookings can't be
+    imported (retried on every attempt).
     """
-    try:
-        _bookings_db().execute(
-            "INSERT INTO bookings "
-            "(timestamp, client_id, name, phone, service, date, time, status) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            tuple(row),
+    conn = _bookings_db()
+    if not _ensure_sheet_imported(conn):
+        raise BookingsUnavailable(
+            "Bookings are paused for a moment — apologise and offer to have the "
+            "front desk call the customer back to confirm a slot."
         )
+    try:
+        conn.execute(_INSERT_BOOKING, tuple(row))
     except sqlite3.IntegrityError:
         return None
     _invalidate(BOOKINGS_DB)   # keep the dashboard's counters and ETag honest
     if _mirror_to_google_sheet(row):
         return "bookings.db + Google Sheet copy"
     return "bookings.db"
+
+
+def export_bookings_csv(path, force: bool = False) -> int:
+    """Write every booking to a CSV in the old bookings.csv format.
+
+    The rollback path: the pre-database code reads bookings.csv, so run
+    `python storage.py export-csv bookings.csv --force` before reverting,
+    or every booking made since the upgrade would vanish from it."""
+    path = Path(path)
+    if path.exists() and not force:
+        raise FileExistsError(f"{path} exists — pass force=True (--force) to overwrite it")
+    _guard_write(path)
+    rows = _bookings_db().execute(
+        "SELECT timestamp, client_id, name, phone, service, date, time, status "
+        "FROM bookings ORDER BY id").fetchall()
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(BOOKING_HEADER)
+        writer.writerows([tuple(r) for r in rows])
+    return len(rows)
 
 
 def read_bookings(client_id: str) -> list[dict]:
@@ -271,10 +382,13 @@ def read_bookings(client_id: str) -> list[dict]:
 
 
 def booked_pairs(client_id: str) -> set[tuple[str, str]]:
-    """{(date, time)} already confirmed — what the agent must not offer."""
+    """{(date, time)} already confirmed from today on — what the agent must not
+    offer. Past dates are never offered anyway, so they're not even read: this
+    runs on every availability check, and history only grows."""
     rows = _bookings_db().execute(
-        "SELECT date, time FROM bookings WHERE client_id=? AND status='confirmed'",
-        (client_id,),
+        "SELECT date, time FROM bookings "
+        "WHERE client_id=? AND status='confirmed' AND date >= ?",
+        (client_id, dt.date.today().isoformat()),
     ).fetchall()
     return {(r["date"], r["time"]) for r in rows}
 
@@ -287,25 +401,34 @@ def _mirror_to_google_sheet(row: list) -> bool:
     The Sheet is never read back: edits made in the Sheet do not reach
     VoxAgent. Off entirely in test mode, whatever SHEET_ID says.
     """
-    if in_test_mode():
-        return False
-    creds_path = os.getenv("GOOGLE_SHEETS_CREDENTIALS_PATH", "")
-    sheet_id = os.getenv("SHEET_ID", "")
-    if not creds_path or not sheet_id:
-        return False
-    if not Path(creds_path).is_absolute():
-        creds_path = str(BASE_DIR / creds_path)
-    if not os.path.exists(creds_path):
-        print(f"  [warning] {creds_path} not found — booking saved, Sheet not updated.")
+    target = _sheets_target()
+    if target is None:
         return False
     try:
-        worksheet = _sheet_handle(creds_path, sheet_id)
+        worksheet = _sheet_handle(*target)
         worksheet.append_row(row)
         return True
     except Exception as e:
         _reset_sheet_handle()
         print(f"  [warning] Google Sheets copy failed ({e}) — booking saved, Sheet not updated.")
         return False
+
+
+def _sheets_target() -> tuple[str, str] | None:
+    """(credentials path, sheet id) when a Google Sheet is configured and
+    usable; None otherwise. Always None in test mode, whatever SHEET_ID says."""
+    if in_test_mode():
+        return None
+    creds_path = os.getenv("GOOGLE_SHEETS_CREDENTIALS_PATH", "")
+    sheet_id = os.getenv("SHEET_ID", "")
+    if not creds_path or not sheet_id:
+        return None
+    if not Path(creds_path).is_absolute():
+        creds_path = str(BASE_DIR / creds_path)
+    if not os.path.exists(creds_path):
+        print(f"  [warning] {creds_path} not found — Google Sheet not used.")
+        return None
+    return creds_path, sheet_id
 
 
 _sheet = None  # authorised worksheet, reused across bookings
@@ -500,3 +623,16 @@ def _read_csv(path: Path) -> list[dict]:
         return []
     with open(path, newline="", encoding="utf-8") as f:
         return list(csv.DictReader(f))
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="VoxAgent storage tools")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    export = sub.add_parser("export-csv", help="write all bookings to a CSV (rollback path)")
+    export.add_argument("path")
+    export.add_argument("--force", action="store_true", help="overwrite an existing file")
+    args = parser.parse_args()
+    if args.cmd == "export-csv":
+        print(f"exported {export_bookings_csv(args.path, force=args.force)} booking(s) to {args.path}")

@@ -944,7 +944,7 @@ async function sendText() {
 async function speak(text) {
   try {
     const res = await fetch("/api/tts", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: SID, text: text.slice(0, 1000) }),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: SID, text: text.slice(0, 1000) }),  // 1000 = MAX_TTS_CHARS in server.py
     });
     if (res.ok) new Audio(URL.createObjectURL(await res.blob())).play();
   } catch (e) { /* voice output must never break the chat */ }

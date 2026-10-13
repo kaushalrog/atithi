@@ -40,6 +40,34 @@ from tts import EdgeTTS
 BASE_DIR = Path(__file__).resolve().parent
 
 app = FastAPI(title="VoxAgent")
+
+
+class BodySizeLimit:
+    """Refuse oversized requests by their Content-Length header, BEFORE any
+    body is read. The per-endpoint checks (e.g. the 5 MB voice limit) only run
+    after Starlette has already spooled the whole upload to disk.
+
+    Limit: a client that sends no Content-Length (chunked upload) isn't
+    caught here; browsers' fetch() always sends one. Put a reverse proxy's
+    body limit in front of any public deployment as well."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            length = dict(scope.get("headers") or []).get(b"content-length", b"0")
+            if not length.isdigit() or int(length) > MAX_BODY_BYTES:
+                body = b'{"detail":"Request too large"}'
+                await send({"type": "http.response.start", "status": 413,
+                            "headers": [(b"content-type", b"application/json"),
+                                        (b"content-length", str(len(body)).encode())]})
+                await send({"type": "http.response.body", "body": body})
+                return
+        await self.inner(scope, receive, send)
+
+
+app.add_middleware(BodySizeLimit)
 app.include_router(telephony.router)  # /twilio/voice + /twilio/stream (phone calls)
 tts = EdgeTTS()
 
@@ -101,8 +129,9 @@ class SessionRequest(BaseModel):
 # turn, and every message is re-sent to the model on each later turn — so an
 # unbounded one costs quota and money for the rest of the conversation.
 MAX_CHAT_CHARS = 2000
-MAX_TTS_CHARS = 1000
-MAX_VOICE_BYTES = 5 * 1024 * 1024   # ~2.5 min of 16 kHz WAV; a turn is seconds
+MAX_TTS_CHARS = 1000                # mirrored in web/index.html speak()
+MAX_VOICE_BYTES = 5 * 1024 * 1024   # ~55 s of the portal's 48 kHz WAV; a turn is seconds
+MAX_BODY_BYTES = 6 * 1024 * 1024    # whole request, checked before it is parsed
 
 
 class ChatRequest(BaseModel):
@@ -185,10 +214,22 @@ def bearer_user(authorization: str | None) -> dict | None:
     return None
 
 
+def same_secret(supplied, expected) -> bool:
+    """Constant-time comparison that never crashes. hmac.compare_digest raises
+    on non-ASCII str and on str-vs-int (a hand-edited YAML code like 482913),
+    which surfaced as HTTP 500 instead of a rejection — so compare bytes."""
+    if supplied is None or expected is None:
+        return False
+    return hmac.compare_digest(str(supplied).encode(), str(expected).encode())
+
+
 def is_admin(user: dict | None) -> bool:
-    """Admin role counts only while ADMIN_PASSWORD passes the policy — so an
-    admin account seeded earlier from a placeholder password is disabled too."""
-    return bool(user and user["role"] == "admin" and not auth.admin_password_problem())
+    """Admin role counts only for the CURRENT ADMIN_EMAIL, and only while
+    ADMIN_PASSWORD passes the policy. So an admin account seeded earlier (from
+    a placeholder password, or under an old email) has no admin rights."""
+    if not (user and user["role"] == "admin") or auth.admin_password_problem():
+        return False
+    return user["email"] == os.getenv("ADMIN_EMAIL", "").strip().lower()
 
 
 def client_access_key(client_id: str) -> str | None:
@@ -204,7 +245,7 @@ def authorize_client(client_id: str, client_key: str | None, admin_key: str | No
     if auth.admin_password_matches(admin_key):
         return
     expected = client_access_key(client_id)
-    if expected and client_key and hmac.compare_digest(client_key, expected):
+    if expected and client_key and same_secret(client_key, expected):
         return
     raise HTTPException(status_code=401, detail="Not authorized for this business")
 
@@ -265,7 +306,10 @@ def require_admin(x_admin_key: str | None = Header(default=None, alias="X-Admin-
                   authorization: str | None = Header(default=None)):
     problem = auth.admin_password_problem()
     if problem:
-        raise HTTPException(status_code=503, detail=problem)
+        # The reason goes to the server log, not to whoever is knocking: an
+        # anonymous caller shouldn't learn that admin is misconfigured or how.
+        print(f"  [admin] admin console disabled: {problem}")
+        raise HTTPException(status_code=503, detail="Admin console unavailable")
     if is_admin(bearer_user(authorization)) or auth.admin_password_matches(x_admin_key):
         return
     raise HTTPException(status_code=401, detail="Admin access only")
@@ -327,10 +371,12 @@ def admin_overview():
     } for c in all_calls[:12]]
     return {"totals": totals, "clients": clients, "recent_calls": recent,
             "password_resets": auth.pending_resets(),
-            "twilio_configured": telephony.is_configured(),
+            # "connected" only when calls can actually be answered.
+            "twilio_configured": telephony.is_configured() and telephony.live_calls_enabled(),
             "status": {
                 "gemini_key": bool(os.getenv("GEMINI_API_KEY")),
-                "twilio": telephony.is_configured(),
+                "twilio": telephony.is_configured() and telephony.live_calls_enabled(),
+                "live_calls": telephony.live_calls_enabled(),
                 "sheets": bool(os.getenv("SHEET_ID")),
             }}
 
@@ -441,7 +487,7 @@ def portal_login(req: PortalLoginRequest):
     if code:
         for entry in storage.all_clients():
             cfg = entry["config"]
-            if cfg.get("access_key") and hmac.compare_digest(str(cfg["access_key"]), code):
+            if cfg.get("access_key") and same_secret(code, cfg["access_key"]):
                 return {"client_id": entry["client_id"],
                         "business_name": cfg.get("business_name", entry["client_id"])}
     raise HTTPException(status_code=401, detail="That code doesn't match any business")
@@ -552,7 +598,8 @@ def voice(session_id: str = Form(...), audio: UploadFile = File(...)):
     if len(data) > MAX_VOICE_BYTES:
         raise HTTPException(status_code=413, detail="Recording too long — keep a turn under a minute")
     mime = MIME_FIX.get(audio.content_type, audio.content_type) or "audio/wav"
-    heard = session["agent"].llm.transcribe(data, mime_type=mime)
+    # Same bound as a typed turn: the transcript is re-sent every later turn.
+    heard = session["agent"].llm.transcribe(data, mime_type=mime)[:MAX_CHAT_CHARS]
     if not heard:
         return {"heard": "", "reply": "", "tools": []}
     return {"heard": heard, **run_turn(session, heard)}

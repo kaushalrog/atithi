@@ -61,8 +61,8 @@ from urllib.parse import quote
 from xml.sax.saxutils import escape, quoteattr
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
-from starlette.websockets import WebSocketState
 from fastapi.responses import Response
+from starlette.websockets import WebSocketState
 
 import billing
 import storage
@@ -115,8 +115,22 @@ def stream_url() -> str:
 
 _STREAM_SECRET = secrets.token_bytes(32)
 STREAM_TICKET_TTL_S = 120
+# Twilio sends "connected" then "start"; a few spare messages is generous.
+MAX_PRE_START_MESSAGES = 5
 _used_tickets: dict[str, float] = {}   # call_sid -> ticket expiry (replay guard)
 _active_calls = 0                      # event-loop only, so a plain int is safe
+# Tickets handed to Twilio but not yet used: each holds a call slot until its
+# stream arrives or it expires. Without this, a burst of calls all passed the
+# webhook's limit check and the extras were dropped silently at the stream.
+_pending_tickets: dict[str, float] = {}   # call_sid -> ticket expiry
+
+
+def _calls_in_flight(now: float | None = None) -> int:
+    """Calls connected plus calls promised a slot (unexpired tickets)."""
+    now = now or time.time()
+    for sid in [s for s, e in _pending_tickets.items() if e < now]:
+        del _pending_tickets[sid]
+    return _active_calls + len(_pending_tickets)
 
 
 def _ticket_signature(call_sid: str, client_id: str, caller: str, exp: str) -> str:
@@ -138,15 +152,17 @@ def check_stream_ticket(params: dict, start_call_sid: str,
     """None if the ticket is good (and consumes it); otherwise why not."""
     now = now or time.time()
     fields = [str(params.get(k, "")) for k in ("call_sid", "client_id", "caller", "exp")]
-    call_sid, client_id, caller, exp = fields
+    call_sid, client_id, _caller, exp = fields
     ticket = str(params.get("ticket", ""))
     if not (ticket and call_sid and client_id and exp):
         return "missing ticket"
-    if not hmac.compare_digest(ticket, _ticket_signature(*fields)):
+    # Compare bytes: compare_digest raises on non-ASCII str, and these values
+    # come from the (unsigned) start message.
+    if not hmac.compare_digest(ticket.encode(), _ticket_signature(*fields).encode()):
         return "bad ticket signature"
     if not exp.isdigit() or int(exp) < now:
         return "ticket expired"
-    if not hmac.compare_digest(call_sid, start_call_sid or ""):
+    if not hmac.compare_digest(call_sid.encode(), (start_call_sid or "").encode()):
         return "ticket is for a different call"
     for sid in [s for s, e in _used_tickets.items() if e < now]:
         del _used_tickets[sid]                          # forget expired entries
@@ -319,9 +335,10 @@ async def twilio_voice(request: Request, client_id: str | None = None):
     if not billing.client_active(client):          # also False for an unknown business
         # Unpaid/expired business: apologize to the caller instead of answering.
         return _say("Sorry, this number is temporarily unavailable. Please try again later.")
-    if _active_calls >= max_concurrent_calls():
+    if _calls_in_flight() >= max_concurrent_calls():
         return _say("Sorry, all our lines are busy right now. Please call again in a few minutes.")
     ticket = mint_stream_ticket(form.get("CallSid", ""), client, caller)
+    _pending_tickets[ticket["call_sid"]] = float(ticket["exp"])
     # Every attribute value is XML-escaped: From and client_id arrive from
     # outside, and an f-string used to let them inject TwiML (audit L2).
     params = "\n".join(
@@ -340,6 +357,17 @@ async def twilio_voice(request: Request, client_id: str | None = None):
 
 
 # ---- WebSocket: the live audio of one phone call -------------------------------------
+
+PRE_START_TIMEOUT_S = 10
+
+
+async def _read_start(ws: WebSocket) -> dict | None:
+    for _ in range(MAX_PRE_START_MESSAGES):
+        msg = json.loads(await ws.receive_text())
+        if isinstance(msg, dict) and msg.get("event") == "start":
+            return msg
+    return None
+
 
 async def _reject(ws: WebSocket, reason: str):
     print(f"  [phone] stream rejected: {reason}")
@@ -367,17 +395,25 @@ async def twilio_stream(ws: WebSocket):
     holds_slot = False
     try:
         # Twilio sends "connected" then "start" (which carries our ticket).
-        start_msg = None
-        for _ in range(5):
-            msg = json.loads(await ws.receive_text())
-            if msg.get("event") == "start":
-                start_msg = msg
-                break
+        # Bounded in messages AND time: nothing has been checked yet, so an
+        # idle or garbage-sending socket must not be able to sit here forever.
+        try:
+            start_msg = await asyncio.wait_for(_read_start(ws), timeout=PRE_START_TIMEOUT_S)
+        except TimeoutError:
+            return await _reject(ws, "no start message in time")
+        except (ValueError, TypeError, AttributeError):
+            return await _reject(ws, "malformed message before start")
         if start_msg is None:
             return await _reject(ws, "no start message")
         start = start_msg.get("start") or {}
         params = start.get("customParameters") or {}
-        problem = check_stream_ticket(params, start.get("callSid", ""))
+        if not isinstance(start, dict) or not isinstance(params, dict):
+            return await _reject(ws, "malformed start message")
+        problem = check_stream_ticket(params, str(start.get("callSid", "")))
+        if problem not in ("missing ticket", "bad ticket signature"):
+            # A genuine ticket (signature checked): its reserved slot is now
+            # either used below or given up. Unsigned input can't free slots.
+            _pending_tickets.pop(str(params.get("call_sid", "")), None)
         if problem:
             return await _reject(ws, problem)
         # Identity comes from the signed ticket, never from unsigned input.
@@ -386,7 +422,7 @@ async def twilio_stream(ws: WebSocket):
             return await _reject(ws, f"unknown business {client_id!r}")
         if not billing.client_active(client_id):    # the plan may have lapsed since the webhook
             return await _reject(ws, f"plan inactive for {client_id!r}")
-        if _active_calls >= max_concurrent_calls():
+        if _calls_in_flight() >= max_concurrent_calls():
             return await _reject(ws, "concurrent call limit reached")
         _active_calls += 1
         holds_slot = True
@@ -453,6 +489,12 @@ def start_outbound_call(client_id: str, to_number: str) -> str:
             "TWILIO_AUTH_TOKEN, TWILIO_NUMBER and PUBLIC_BASE_URL in .env "
             "(see SETUP.md, Part 3)."
         )
+    # Check BEFORE dialling: once the customer picks up, it's too late to find
+    # out the business can't serve them.
+    if not billing.client_active(client_id):
+        raise RuntimeError(f"'{client_id}' has no active plan — not calling.")
+    if _calls_in_flight() >= max_concurrent_calls():
+        raise RuntimeError("All call slots are in use — try again in a few minutes.")
     client_cfg = storage.read_client_config(client_id) or {}
     from_number = client_cfg.get("twilio_number") or cfg["number"]
     if not from_number:

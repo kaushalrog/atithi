@@ -5,6 +5,8 @@ old suite pinned a literal date, which drifted into the past and let a total
 booking outage pass every test for two months.
 """
 
+import pytest
+
 import storage
 from agent import ReceptionistAgent
 from conftest import open_day, open_times
@@ -184,3 +186,11 @@ def test_gemini_client_is_built_with_a_request_timeout(monkeypatch):
     monkeypatch.setenv("GEMINI_TIMEOUT_S", "12")
     llm.shared_client()
     assert built[0]["http_options"].timeout == 12_000      # milliseconds
+
+
+@pytest.mark.parametrize("raw,ms", [("abc", 30_000), ("0", 1_000), ("-5", 1_000), ("2.5", 2_500)])
+def test_gemini_timeout_setting_is_guarded(monkeypatch, raw, ms):
+    import llm
+
+    monkeypatch.setenv("GEMINI_TIMEOUT_S", raw)
+    assert llm._timeout_ms() == ms

@@ -20,7 +20,7 @@ How the tests stay safe:
 
 | Risk | What stops it |
 |---|---|
-| Writing a business's real bookings, leads, call logs or client files | `tests/conftest.py` sets `VOXAGENT_ENV=test` before anything is imported and points every storage path at a temp folder. In test mode, `storage.py` **raises** on any write to the repo's real data files, so a test that forgot to redirect fails loudly instead of corrupting data. |
+| Writing a business's real bookings, leads, call logs, client files or accounts | `tests/conftest.py` sets `VOXAGENT_ENV=test` before anything is imported and points every storage path at a temp folder. In test mode, `storage.py` **raises** on any write to the repo's real data files, and `auth.py` refuses to open the real `voxagent.db`, so a test that forgot to redirect fails loudly instead of touching real data. (This guard caught one such test during review.) |
 | Copying test bookings into a business's Google Sheet | Test mode switches the Sheets copy off entirely, whatever `SHEET_ID` says. Mirror tests use a fake worksheet object, never a network connection. |
 | Calling Gemini | Tests use `FakeLLM` / `SpyLive`. The one LLM test only checks how the client is constructed. |
 | Calling Twilio | No test creates a Twilio client. Signatures are computed locally with Twilio's validator and a made-up token. Stream tests use a fake model session. |
@@ -95,6 +95,13 @@ upgrade. VoxAgent checks it against the exact `wss://…/twilio/stream` URL from
 its TwiML with no parameters, and **rejects the call if that doesn't match**
 (fail closed, decision D4).
 
+What this check is worth: for the media stream, Twilio's signature covers a
+fixed URL, so it's the same value on every call for a given deployment, a
+constant rather than a per-call proof. Anyone who sees one (e.g. in the ngrok
+inspector) could reuse it. **The real lock is the one-time ticket** (signed with
+a key that never leaves the server process, bound to one call, two-minute life,
+single use). The signature is a second fence, not the boundary.
+
 So on the first test call, from your own verified phone:
 - **Agent answers:** the assumption holds. Note it in `docs/AUDIT.md`.
 - **Call connects then drops immediately,** and the server prints
@@ -105,7 +112,17 @@ So on the first test call, from your own verified phone:
 Other things only a real call can show: audio quality over the phone line,
 latency the caller hears, and Twilio trial-account messages.
 
-## 6. Known gaps (tracked, not fixed yet)
+## 6. Checking the Google Sheets copy by hand
+
+Tests never touch Google. To check the real connection once, with a **throwaway** Sheet:
+
+1. Create a new blank Sheet, share it with the service account (SETUP.md Part 2), and put its ID in `.env` as `SHEET_ID` along with `GOOGLE_SHEETS_CREDENTIALS_PATH`.
+2. Make sure `VOXAGENT_ENV` is **not** set to `test` (test mode switches the copy off).
+3. `python main.py --client demo_clinic` and book a slot.
+4. Expect `saved to: bookings.db + Google Sheet copy` in the terminal and the row in the Sheet.
+5. Put the real `SHEET_ID` back. VoxAgent has no cancel flow yet, so the test booking stays in `bookings.db` and blocks that slot; do this with a test business, or remove the row yourself with the `sqlite3` tool.
+
+## 7. Known gaps (tracked, not fixed yet)
 
 From `docs/AUDIT.md` and `TODOS.md`. All matter before a paying client goes live:
 - If the Gemini stream dies mid-call, the caller hears silence until they hang up (M7).

@@ -2,8 +2,14 @@
 Run from the repo root:  python docs/audit_repro.py
 (never touches project data files: storage + auth DB point at a temp dir)
 Each check prints REPRODUCED / NOT REPRODUCED with the observed evidence."""
-import asyncio, datetime as dt, os, sys, tempfile
+import asyncio, datetime as dt, os, shutil, sys, tempfile
 from pathlib import Path
+
+import dotenv
+
+# The project's modules call load_dotenv() at import; a real .env would put
+# SHEET_ID/keys back after we clear them below. Disable it before any import.
+dotenv.load_dotenv = lambda *a, **k: False
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -19,8 +25,10 @@ storage.BOOKINGS_DB = TMP / "bookings.db"   # ignored by pre-Phase-0.5 code
 storage.LEADS_CSV = TMP / "leads.csv"
 storage.CALLS_DIR = TMP / "calls"
 auth.DB_FILE = TMP / "voxagent.db"
+# Client configs: a temp COPY, so nothing here can write the real clients/.
+shutil.copytree(storage.CLIENTS_DIR, TMP / "clients")
+storage.CLIENTS_DIR = TMP / "clients"
 storage.clear_caches()
-storage.load_dotenv = lambda *a, **k: None
 
 from agent import ReceptionistAgent  # noqa: E402
 
@@ -72,11 +80,13 @@ if hasattr(storage, "_save_to_google_sheet"):                 # pre-Phase-0.5 co
     orig = ("_save_to_google_sheet", storage._save_to_google_sheet)
     storage._save_to_google_sheet = lambda row: "Google Sheet"   # simulate a working Sheet
 else:                                                            # Sheets is now a copy
-    class _FakeSheet:
+    class _FakeSheet:                     # a readable, empty Sheet (nothing to migrate)
         def append_row(self, row): pass
+        def get_all_records(self): return []
     orig = ("_sheet_handle", storage._sheet_handle)
     storage._sheet_handle = lambda *a: _FakeSheet()
-    storage.in_test_mode = lambda: False   # lift test mode for the mirror; paths are TMP
+    _real_in_test_mode = storage.in_test_mode
+    storage.in_test_mode = lambda: False   # lift test mode for the mirror only; restored below
     os.environ["GOOGLE_SHEETS_CREDENTIALS_PATH"] = __file__
     os.environ["SHEET_ID"] = "fake"
 a = ReceptionistAgent("demo_clinic", llm=FakeLLM())
@@ -89,6 +99,8 @@ report("R2 Sheets bookings invisible to availability + dashboard",
        f"saved_to={res['saved_to']!r}; new conversation still offers {d} {t}: {still_offered}; "
        f"dashboard bookings={len(storage.read_bookings('demo_clinic'))}")
 setattr(storage, *orig)
+if "in_test_mode" in vars(storage):
+    storage.in_test_mode = _real_in_test_mode     # re-arm the real-data write guard
 os.environ.pop("SHEET_ID", None)
 
 # R3: conversion metric counts FAILED booking attempts as conversions.
@@ -200,7 +212,7 @@ report("R8b TwiML injection through unescaped From (signed request)",
 # R9: the phone websocket has no auth and skips the billing check done in /twilio/voice.
 cfg = dict(storage.read_client_config("demo_clinic"))
 import billing  # noqa: E402
-expired_dir = TMP / "clients"; expired_dir.mkdir(exist_ok=True)
+expired_dir = TMP / "clients"   # the temp copy made at the top
 import yaml  # noqa: E402
 cfg["billing"] = {"plan": "trial", "paid_until": "2000-01-01"}
 (expired_dir / "expired_biz.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")

@@ -258,8 +258,10 @@ async function showConsole() {
   const sc = $("statusCard"); sc.innerHTML = "";
   const items = [
     ["Gemini AI key", data.status.gemini_key, "the agent's brain"],
-    ["Phone system (Twilio)", data.status.twilio, "add keys in .env — SETUP.md Part 3"],
-    ["Google Sheets", data.status.sheets, "optional — bookings fall back to CSV"],
+    ["Phone system (Twilio)", data.status.twilio,
+     data.status.live_calls ? "add keys in .env — SETUP.md Part 3"
+                            : "live calls OFF — see docs/SAFE_TESTING.md, then ENABLE_LIVE_CALLS=true"],
+    ["Google Sheets", data.status.sheets, "optional — gets a copy of each booking"],
   ];
   for (const [name, ok, hint] of items) {
     const d = el("div", "", "");
@@ -292,7 +294,9 @@ async function showConsole() {
   }
 
   const pill = $("twilioPill");
-  pill.textContent = data.twilio_configured ? "phone system connected" : "not connected — add Twilio keys in .env";
+  pill.textContent = data.twilio_configured ? "phone system connected"
+    : (data.status.live_calls ? "not connected — add Twilio keys in .env"
+                              : "live calls disabled (ENABLE_LIVE_CALLS)");
   pill.className = "pill " + (data.twilio_configured ? "booked" : "lead");
   const sel = $("callClient"); sel.innerHTML = "";
   for (const c of data.clients) {

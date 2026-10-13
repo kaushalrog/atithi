@@ -35,6 +35,8 @@ DB_FILE = BASE_DIR / "voxagent.db"
 LEGACY_USERS = BASE_DIR / "users.json"
 LEGACY_TOKENS = BASE_DIR / "tokens.json"
 
+_REAL_DB_FILE = DB_FILE   # captured before tests repoint DB_FILE
+
 TOKEN_DAYS = 30
 RESET_MINUTES = 60
 
@@ -79,6 +81,11 @@ def _db() -> sqlite3.Connection:
         return conn
     if conn is not None:
         conn.close()
+    # Same fail-closed rule as storage.py: tests and evals (VOXAGENT_ENV=test)
+    # may never open the real accounts database.
+    if (os.getenv("VOXAGENT_ENV", "").strip().lower() == "test"
+            and Path(path).resolve() == _REAL_DB_FILE.resolve()):
+        raise RuntimeError(f"VOXAGENT_ENV=test refuses to open the real accounts DB at {path}")
     conn = sqlite3.connect(path, timeout=10)
     conn.row_factory = sqlite3.Row
     with _prepare_lock:

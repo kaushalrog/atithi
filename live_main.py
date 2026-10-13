@@ -82,7 +82,12 @@ async def run(client_id: str, half_duplex: bool):
                 results = []
                 for call in event["calls"]:
                     print(f"  [tool] {call['name']}({call['args']})")
-                    result = agent._execute_tool(call["name"], call["args"])
+                    # A tool failure (e.g. bookings.db busy) must not end the
+                    # call — report it to the model like the phone bridge does.
+                    try:
+                        result = agent._execute_tool(call["name"], call["args"])
+                    except Exception as e:
+                        result = {"error": f"{type(e).__name__}: {e}"}
                     results.append({"id": call["id"], "name": call["name"], "result": result})
                 await live.send_tool_results(results)
             elif kind == "turn_complete":
