@@ -194,3 +194,17 @@ def test_gemini_timeout_setting_is_guarded(monkeypatch, raw, ms):
 
     monkeypatch.setenv("GEMINI_TIMEOUT_S", raw)
     assert llm._timeout_ms() == ms
+
+
+# ---- channels -------------------------------------------------------------------
+
+def test_live_call_tool_error_is_reported_not_fatal():
+    """Cycle-1 fix with no test (cycle-2 finding): a tool failure (e.g.
+    bookings paused) must come back to the model as an error, not end the call."""
+    import live_main
+
+    class Broken:
+        def _execute_tool(self, name, args):
+            raise storage.BookingsUnavailable("paused")
+    result = live_main.run_tool(Broken(), {"name": "book_appointment", "args": {}})
+    assert result == {"error": "BookingsUnavailable: paused"}

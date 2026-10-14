@@ -192,12 +192,21 @@ def ensure_admin_seed():
     if not email or email in _PLACEHOLDER_EMAILS or admin_password_problem():
         return
     with _db() as conn:
-        row = conn.execute("SELECT salt FROM users WHERE email=?", (email,)).fetchone()
+        row = conn.execute("SELECT salt, password_hash, role FROM users WHERE email=?",
+                           (email,)).fetchone()
         salt = row["salt"] if row else secrets.token_hex(16)
+        new_hash = _hash(password, salt)
+        if row is not None and (row["role"] != "admin" or row["password_hash"] != new_hash):
+            # The row is being promoted, or the admin password changed: every
+            # session issued under the old identity/password must die. Without
+            # this, someone who signed up as ADMIN_EMAIL before the owner's
+            # first login kept a token that became an admin token.
+            conn.execute("DELETE FROM tokens WHERE email=?", (email,))
         conn.execute(
             "INSERT INTO users VALUES (?,?,?,?,NULL,?) "
-            "ON CONFLICT(email) DO UPDATE SET password_hash=excluded.password_hash, role='admin'",
-            (email, _hash(password, salt), salt, "admin", _now()),
+            "ON CONFLICT(email) DO UPDATE SET password_hash=excluded.password_hash, "
+            "salt=excluded.salt, role='admin', client_id=NULL",
+            (email, new_hash, salt, "admin", _now()),
         )
     _invalidate_cache()
 
@@ -207,9 +216,14 @@ def signup(email: str, password: str) -> dict:
     if not EMAIL_RE.match(email):
         raise ValueError("That doesn't look like an email address")
     _check_password_strength(password)
+    # The admin's email can never be claimed by a signup (same message as an
+    # existing account, so it doesn't reveal which email is the admin's).
+    taken = LookupError("An account with this email already exists — sign in instead")
+    if email == os.getenv("ADMIN_EMAIL", "").strip().lower():
+        raise taken
     with _db() as conn:
         if conn.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
-            raise LookupError("An account with this email already exists — sign in instead")
+            raise taken
         salt = secrets.token_hex(16)
         conn.execute("INSERT INTO users VALUES (?,?,?,?,NULL,?)",
                      (email, _hash(password, salt), salt, "owner", _now()))

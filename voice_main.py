@@ -85,7 +85,7 @@ def main():
                 speak(tts, reply)
             except Exception as e:
                 # Voice output must never kill the conversation — same philosophy
-                # as the bookings CSV fallback.
+                # as the best-effort Google Sheets copy in storage.py.
                 print(f"  [warning] voice output failed ({e}) — continuing text-only.")
 
     if agent.history:

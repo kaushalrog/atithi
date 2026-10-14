@@ -449,6 +449,110 @@ def test_outbound_call_refused_before_dialling(phone, monkeypatch, why):
         monkeypatch.setattr(telephony, "_active_calls", 3)
     else:
         client_id = "expired_biz"
-    with pytest.raises(RuntimeError):
+    reason = "call slots" if why == "lines-full" else "no active plan"
+    with pytest.raises(RuntimeError, match=reason):
         telephony.start_outbound_call(client_id, "+919876543210")
+    assert dialled == []
+
+
+# ---- review cycle 2 (approved D6 #3-#4, D7 #5-#7, cycle-2 test gaps) --------------------
+
+def test_every_call_slot_table_access_holds_the_lock(phone, monkeypatch):
+    """#3: outbound calls touch the slot table from a worker thread while the
+    event loop prunes it. The race ('dictionary changed size during
+    iteration') is too rare under CPython's GIL to reproduce reliably in a
+    test, so this checks the contract instead: every access holds the lock."""
+    import threading as th
+    real, held = th.Lock(), []
+
+    class RecordingLock:
+        def __enter__(self):
+            real.acquire()
+            held.append(True)
+
+        def __exit__(self, *exc):
+            real.release()
+    monkeypatch.setattr(telephony, "_slots_lock", RecordingLock())
+    telephony._reserve_slot("CA1", time.time() + 30)
+    telephony._calls_in_flight()
+    telephony._release_slot("CA1")
+    post_voice(phone["client"], {"To": "+1", "From": "+2", "CallSid": "CA2"})
+    assert len(held) >= 5                       # 3 direct + webhook check and reserve
+
+
+def test_idle_pre_start_sockets_are_capped(phone, monkeypatch):
+    """#4: a replayed handshake signature allowed unlimited idle sockets."""
+    monkeypatch.setattr(telephony, "MAX_PRE_START_SOCKETS", 1)
+    headers = {"x-twilio-signature": sign(telephony.stream_url())}
+    with phone["client"].websocket_connect("/twilio/stream", headers=headers):
+        with pytest.raises(WebSocketDisconnect) as closed:
+            with phone["client"].websocket_connect("/twilio/stream", headers=headers) as second:
+                second.receive_text()
+        assert closed.value.code == 1008
+
+
+def test_reserved_slot_lasts_30_seconds_not_the_ticket_lifetime(phone, monkeypatch):
+    """#5: a stream rejected before 'start' held its slot for 2 minutes."""
+    monkeypatch.setenv("MAX_CONCURRENT_CALLS", "1")
+    post_voice(phone["client"], {"To": "+1", "From": "+2", "CallSid": "CA1"})
+    later = time.time() + telephony.PENDING_SLOT_S + 1
+    assert later < time.time() + telephony.STREAM_TICKET_TTL_S
+    monkeypatch.setattr(telephony.time, "time", lambda: later)
+    res = post_voice(phone["client"], {"To": "+1", "From": "+3", "CallSid": "CA2"})
+    assert "<Stream" in res.text
+
+
+def test_answered_outbound_call_never_hears_busy(phone, monkeypatch):
+    """#6: lines were checked when dialling; on answer the customer must not
+    hear 'all our lines are busy'. #7: the caller number is the dialled one."""
+    monkeypatch.setenv("MAX_CONCURRENT_CALLS", "0")
+    data = {"To": "+919876543210", "From": "+15550001111", "CallSid": "CA9",
+            "Direction": "outbound-api"}
+    res = post_voice(phone["client"], data, query="?client_id=demo_clinic")
+    assert "<Stream" in res.text and "busy" not in res.text
+    assert ticket_from_twiml(res.text)["caller"] == "+919876543210"
+
+
+@pytest.mark.parametrize("frame", ['{"event": "start", "start": "x"}',
+                                   '{"event": "start", "start": ["x"]}', "[1, 2]"])
+def test_odd_start_messages_are_clean_rejections(phone, frame):
+    """Cycle-2 finding: the 'malformed start' guard ran one line too late."""
+    headers = {"x-twilio-signature": sign(telephony.stream_url())}
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with phone["client"].websocket_connect("/twilio/stream", headers=headers) as ws:
+            ws.send_text(frame)
+            ws.send_text(frame)
+            ws.receive_text()
+    assert closed.value.code == 1008
+
+
+def test_binary_frame_before_start_is_a_clean_rejection(phone):
+    headers = {"x-twilio-signature": sign(telephony.stream_url())}
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with phone["client"].websocket_connect("/twilio/stream", headers=headers) as ws:
+            ws.send_bytes(b"\x00\x01")
+            ws.receive_text()
+    assert closed.value.code == 1008
+
+
+def test_a_signed_ticket_for_the_wrong_call_still_gives_back_its_slot(phone, monkeypatch):
+    """Documented intent: once a GENUINE ticket is presented, its reserved slot
+    is used or given up, whatever the outcome (only unsigned input can't free one)."""
+    monkeypatch.setenv("MAX_CONCURRENT_CALLS", "1")
+    first = post_voice(phone["client"], {"To": "+1", "From": "+2", "CallSid": "CA1"})
+    assert stream(phone["client"], ticket_from_twiml(first.text), call_sid="CA_OTHER") == 1008
+    res = post_voice(phone["client"], {"To": "+1", "From": "+3", "CallSid": "CA2"})
+    assert "<Stream" in res.text
+
+
+def test_outbound_refused_while_slots_are_reserved_by_pending_tickets(phone, monkeypatch):
+    monkeypatch.setenv("MAX_CONCURRENT_CALLS", "1")
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC1")
+    monkeypatch.setenv("TWILIO_NUMBER", "+15550001111")
+    dialled = []
+    import twilio.rest
+    monkeypatch.setattr(twilio.rest, "Client", lambda *a: dialled.append(a))
+    post_voice(phone["client"], {"To": "+1", "From": "+2", "CallSid": "CA1"})   # holds the slot
+    with pytest.raises(RuntimeError, match="call slots"):
+        telephony.start_outbound_call("demo_clinic", "+919876543210")
     assert dialled == []

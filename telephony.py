@@ -55,6 +55,7 @@ import hmac
 import json
 import os
 import secrets
+import threading
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -122,15 +123,37 @@ _active_calls = 0                      # event-loop only, so a plain int is safe
 # Tickets handed to Twilio but not yet used: each holds a call slot until its
 # stream arrives or it expires. Without this, a burst of calls all passed the
 # webhook's limit check and the extras were dropped silently at the stream.
-_pending_tickets: dict[str, float] = {}   # call_sid -> ticket expiry
+_pending_tickets: dict[str, float] = {}   # call_sid -> reservation expiry
+# A reservation is short: Twilio opens the stream within about a second of our
+# TwiML, so a stream that never arrives (caller hung up, rejected before its
+# 'start' message) gives its slot back after 30 s, not the ticket's 2 minutes.
+PENDING_SLOT_S = 30
+# The table is also touched from a worker thread (outbound calls run in
+# FastAPI's thread pool), so every access holds this lock.
+_slots_lock = threading.Lock()
+# Accepted streams still waiting for 'start'. The handshake signature is the
+# same on every call (it can be replayed), so cap how many can wait at once.
+MAX_PRE_START_SOCKETS = 20
+_pre_start_sockets = 0
 
 
-def _calls_in_flight(now: float | None = None) -> int:
-    """Calls connected plus calls promised a slot (unexpired tickets)."""
-    now = now or time.time()
-    for sid in [s for s, e in _pending_tickets.items() if e < now]:
-        del _pending_tickets[sid]
-    return _active_calls + len(_pending_tickets)
+def _reserve_slot(call_sid: str, expires_at: float):
+    with _slots_lock:
+        _pending_tickets[call_sid] = expires_at
+
+
+def _release_slot(call_sid: str):
+    with _slots_lock:
+        _pending_tickets.pop(call_sid, None)
+
+
+def _calls_in_flight() -> int:
+    """Calls connected plus calls promised a slot (unexpired reservations)."""
+    now = time.time()
+    with _slots_lock:
+        for sid in [s for s, e in _pending_tickets.items() if e < now]:
+            _pending_tickets.pop(sid, None)
+        return _active_calls + len(_pending_tickets)
 
 
 def _ticket_signature(call_sid: str, client_id: str, caller: str, exp: str) -> str:
@@ -331,14 +354,18 @@ async def twilio_voice(request: Request, client_id: str | None = None):
     if not _validate_signature(request, form):
         raise HTTPException(status_code=403, detail="Invalid Twilio signature")
     client = resolve_client(form.get("To", ""), client_id)
-    caller = form.get("From", "")
+    # A call the business placed (from /admin) is answered by the customer:
+    # their number is "To", and the lines were already checked when dialling,
+    # so they must never hear "all our lines are busy" on picking up.
+    outbound = form.get("Direction", "").startswith("outbound")
+    caller = form.get("To", "") if outbound else form.get("From", "")
     if not billing.client_active(client):          # also False for an unknown business
         # Unpaid/expired business: apologize to the caller instead of answering.
         return _say("Sorry, this number is temporarily unavailable. Please try again later.")
-    if _calls_in_flight() >= max_concurrent_calls():
+    if not outbound and _calls_in_flight() >= max_concurrent_calls():
         return _say("Sorry, all our lines are busy right now. Please call again in a few minutes.")
     ticket = mint_stream_ticket(form.get("CallSid", ""), client, caller)
-    _pending_tickets[ticket["call_sid"]] = float(ticket["exp"])
+    _reserve_slot(ticket["call_sid"], time.time() + PENDING_SLOT_S)
     # Every attribute value is XML-escaped: From and client_id arrive from
     # outside, and an f-string used to let them inject TwiML (audit L2).
     params = "\n".join(
@@ -364,7 +391,9 @@ PRE_START_TIMEOUT_S = 10
 async def _read_start(ws: WebSocket) -> dict | None:
     for _ in range(MAX_PRE_START_MESSAGES):
         msg = json.loads(await ws.receive_text())
-        if isinstance(msg, dict) and msg.get("event") == "start":
+        if not isinstance(msg, dict):           # Twilio frames are always objects
+            raise ValueError("frame is not a JSON object")
+        if msg.get("event") == "start":
             return msg
     return None
 
@@ -376,7 +405,7 @@ async def _reject(ws: WebSocket, reason: str):
 
 @router.websocket("/twilio/stream")
 async def twilio_stream(ws: WebSocket):
-    global _active_calls
+    global _active_calls, _pre_start_sockets
     # Gates 1-2 run before the websocket is even accepted.
     if not live_calls_enabled():
         return await _reject(ws, "live calls disabled")
@@ -387,6 +416,8 @@ async def twilio_stream(ws: WebSocket):
     # docs/SAFE_TESTING.md. Fail closed either way.
     if not _signature_ok(stream_url(), {}, ws.headers.get("x-twilio-signature", "")):
         return await _reject(ws, "bad or missing x-twilio-signature")
+    if _pre_start_sockets >= MAX_PRE_START_SOCKETS:
+        return await _reject(ws, "too many streams waiting to start")
     await ws.accept()
     from llm import GeminiLive  # imported here so tests can fake it easily
 
@@ -397,23 +428,29 @@ async def twilio_stream(ws: WebSocket):
         # Twilio sends "connected" then "start" (which carries our ticket).
         # Bounded in messages AND time: nothing has been checked yet, so an
         # idle or garbage-sending socket must not be able to sit here forever.
+        _pre_start_sockets += 1
         try:
             start_msg = await asyncio.wait_for(_read_start(ws), timeout=PRE_START_TIMEOUT_S)
         except TimeoutError:
             return await _reject(ws, "no start message in time")
-        except (ValueError, TypeError, AttributeError):
+        except (ValueError, TypeError, AttributeError, KeyError):
+            # KeyError: starlette's receive_text() on a binary frame.
             return await _reject(ws, "malformed message before start")
+        finally:
+            _pre_start_sockets -= 1
         if start_msg is None:
             return await _reject(ws, "no start message")
-        start = start_msg.get("start") or {}
+        start = start_msg.get("start")
+        if not isinstance(start, dict):
+            return await _reject(ws, "malformed start message")
         params = start.get("customParameters") or {}
-        if not isinstance(start, dict) or not isinstance(params, dict):
+        if not isinstance(params, dict):
             return await _reject(ws, "malformed start message")
         problem = check_stream_ticket(params, str(start.get("callSid", "")))
         if problem not in ("missing ticket", "bad ticket signature"):
             # A genuine ticket (signature checked): its reserved slot is now
             # either used below or given up. Unsigned input can't free slots.
-            _pending_tickets.pop(str(params.get("call_sid", "")), None)
+            _release_slot(str(params.get("call_sid", "")))
         if problem:
             return await _reject(ws, problem)
         # Identity comes from the signed ticket, never from unsigned input.

@@ -256,17 +256,22 @@ async function showConsole() {
   }
 
   const sc = $("statusCard"); sc.innerHTML = "";
+  // Live calls switched off with keys present is the SAFE DEFAULT, not an
+  // outage: show it neutral (⚪), and only red when something is missing.
+  const keys = data.status.twilio_keys, live = data.status.live_calls;
+  const phoneHint = !keys
+    ? "add keys in .env — SETUP.md Part 3" + (live ? "" : ", then ENABLE_LIVE_CALLS=true")
+    : "off by design — read docs/SAFE_TESTING.md, then set ENABLE_LIVE_CALLS=true";
   const items = [
     ["Gemini AI key", data.status.gemini_key, "the agent's brain"],
-    ["Phone system (Twilio)", data.status.twilio,
-     data.status.live_calls ? "add keys in .env — SETUP.md Part 3"
-                            : "live calls OFF — see docs/SAFE_TESTING.md, then ENABLE_LIVE_CALLS=true"],
+    ["Phone system (Twilio)", data.status.twilio, phoneHint, keys && !live ? "⚪" : "🔴"],
     ["Google Sheets", data.status.sheets, "optional — gets a copy of each booking"],
+    ["New bookings", !data.status.bookings_paused, "PAUSED — " + data.status.bookings_paused],
   ];
-  for (const [name, ok, hint] of items) {
+  for (const [name, ok, hint, offIcon] of items) {
     const d = el("div", "", "");
     d.style.cssText = "display:flex;align-items:center;gap:9px;font-size:.9rem;";
-    d.appendChild(el("span", "", ok ? "🟢" : "🔴"));
+    d.appendChild(el("span", "", ok ? "🟢" : (offIcon || "🔴")));
     const label = el("span", "", name);
     label.style.fontWeight = "650";
     d.appendChild(label);
@@ -298,6 +303,9 @@ async function showConsole() {
     : (data.status.live_calls ? "not connected — add Twilio keys in .env"
                               : "live calls disabled (ENABLE_LIVE_CALLS)");
   pill.className = "pill " + (data.twilio_configured ? "booked" : "lead");
+  // Don't offer a button that can only fail.
+  $("callBtn").disabled = !data.twilio_configured;
+  $("callBtn").title = data.twilio_configured ? "" : pill.textContent;
   const sel = $("callClient"); sel.innerHTML = "";
   for (const c of data.clients) {
     const o = el("option", "", c.business_name); o.value = c.client_id; sel.appendChild(o);

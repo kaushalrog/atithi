@@ -74,8 +74,10 @@ AI receptionist for Indian small service businesses (clinics, salons, coaching i
 - Persistence: storage.py (ALL disk I/O: bookings.db SQLite, leads.csv,
   calls/<client_id>/*.json). Nothing else touches paths. bookings.db is the
   single source of truth for bookings; a partial UNIQUE index allows one
-  confirmed booking per slot (the double-booking guard). Google Sheets only
-  receives a copy and is never read. Every file is
+  confirmed booking per slot (the double-booking guard). Google Sheets
+  receives a copy of each booking; it is read only once, by the explicit
+  `python storage.py import-sheet` upgrade step (new bookings pause until
+  then if SHEET_ID is set). Rollback: `python storage.py export-csv`. Every file is
   parsed once and cached until it changes (our writes invalidate exactly;
   outside edits are caught by an mtime+size check). **Cached values are
   shared — treat them as read-only and copy before mutating.**

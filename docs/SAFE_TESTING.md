@@ -118,6 +118,9 @@ Tests never touch Google. To check the real connection once, with a **throwaway*
 
 1. Create a new blank Sheet, share it with the service account (SETUP.md Part 2), and put its ID in `.env` as `SHEET_ID` along with `GOOGLE_SHEETS_CREDENTIALS_PATH`.
 2. Make sure `VOXAGENT_ENV` is **not** set to `test` (test mode switches the copy off).
+   Then run `python storage.py import-sheet`: with `SHEET_ID` set, new bookings stay
+   paused until the Sheet's existing rows have been imported once (a blank Sheet
+   imports nothing). This also proves the credentials can *read* the Sheet.
 3. `python main.py --client demo_clinic` and book a slot.
 4. Expect `saved to: bookings.db + Google Sheet copy` in the terminal and the row in the Sheet.
 5. Put the real `SHEET_ID` back. VoxAgent has no cancel flow yet, so the test booking stays in `bookings.db` and blocks that slot; do this with a test business, or remove the row yourself with the `sqlite3` tool.
@@ -127,6 +130,8 @@ Tests never touch Google. To check the real connection once, with a **throwaway*
 From `docs/AUDIT.md` and `TODOS.md`. All matter before a paying client goes live:
 - If the Gemini stream dies mid-call, the caller hears silence until they hang up (M7).
 - A booking's Google Sheets copy runs inside the async call loop and can stall other live calls (M8).
+- The media-stream race on the call-slot table is guarded by a lock; the test checks the lock is
+  always held, because the race itself can't be reproduced reliably under CPython's GIL.
 - Login, business-code and reset endpoints have no attempt limit (M9).
 - Personal data (names, phone numbers, transcripts) has no retention or deletion policy (M11).
 - Dashboard conversion counts failed booking attempts, and phone bookings aren't counted (M1/M2).

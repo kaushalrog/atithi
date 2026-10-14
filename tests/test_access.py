@@ -209,6 +209,8 @@ def test_admin_console_reports_live_calls_switch(client, monkeypatch):
     data = client.get("/api/admin/overview", headers={"X-Admin-Key": "test-admin-pw"}).json()
     assert data["twilio_configured"] is False and data["status"]["twilio"] is False
     assert data["status"]["live_calls"] is False
+    assert data["status"]["twilio_keys"] is True          # keys present: "off by design"
+    assert data["status"]["bookings_paused"] is None
     monkeypatch.setenv("ENABLE_LIVE_CALLS", "true")
     data = client.get("/api/admin/overview", headers={"X-Admin-Key": "test-admin-pw"}).json()
     assert data["twilio_configured"] is True
@@ -239,3 +241,40 @@ def test_oversized_request_bodies_are_refused_before_parsing(client, session, mo
     res = client.post("/api/chat", content=b"{" + b" " * server.MAX_BODY_BYTES + b"}",
                       headers={"Content-Type": "application/json"})
     assert res.status_code == 413
+
+
+# ---- review cycle 2 (approved D6 #1, #2) ------------------------------------------------
+
+def test_admin_email_cannot_be_claimed_by_signup(client, monkeypatch):
+    """#1: anyone could sign up as ADMIN_EMAIL before the owner's first login."""
+    monkeypatch.setenv("ADMIN_EMAIL", "sai@test.com")
+    res = client.post("/api/auth/signup", json={"email": "SAI@test.com", "password": "attacker1"})
+    assert res.status_code in (403, 409) and "token" not in res.text
+
+
+def test_admin_seeding_revokes_tokens_of_a_preclaimed_account(client, monkeypatch):
+    """#1: an account that already held ADMIN_EMAIL (signed up before this fix)
+    keeps no session once it is promoted; and seeding happens at startup."""
+    monkeypatch.setenv("ADMIN_EMAIL", "")                 # signup open for this setup step
+    attacker = client.post("/api/auth/signup", json={"email": "sai@test.com",
+                                                      "password": "attacker1"}).json()["token"]
+    monkeypatch.setenv("ADMIN_EMAIL", "sai@test.com")
+    auth._invalidate_cache()
+    bearer = {"Authorization": f"Bearer {attacker}"}
+    with TestClient(server.app) as started:               # runs the startup hook (seeds admin)
+        assert started.get("/api/admin/overview", headers=bearer).status_code == 401
+    # The real owner logs in (seeding again) — the pre-claimed session must stay dead.
+    assert client.post("/api/auth/login", json={"email": "sai@test.com",
+                                                "password": "test-admin-pw"}).status_code == 200
+    assert client.get("/api/admin/overview", headers=bearer).status_code == 401
+    assert client.post("/api/auth/login", json={"email": "sai@test.com",
+                                                "password": "attacker1"}).status_code == 401
+
+
+def test_body_without_content_length_is_refused(client):
+    """#2: a chunked upload (no Content-Length) bypassed the 6 MB check."""
+    def chunks():
+        yield b'{"session_id": "x", '
+        yield b'"message": "hi"}'
+    res = client.post("/api/chat", content=chunks(), headers={"Content-Type": "application/json"})
+    assert res.status_code == 411

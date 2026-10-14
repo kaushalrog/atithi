@@ -82,8 +82,8 @@ class FakeWorksheet:
     def __init__(self, fail=False):
         self.rows, self.fail = [], fail
 
-    def get_all_records(self):
-        return []                      # an empty Sheet: nothing to migrate
+    def get_all_values(self):
+        return [list(storage.BOOKING_HEADER)]   # header only: nothing to migrate
 
     def append_row(self, row):
         if self.fail:
@@ -101,8 +101,10 @@ def sheets_on(tmp_storage, monkeypatch):
     monkeypatch.setenv("SHEET_ID", "fake-sheet")
     monkeypatch.setattr(storage, "in_test_mode", lambda: False)
 
-    def use(sheet):
+    def use(sheet, imported=True):
         monkeypatch.setattr(storage, "_sheet_handle", lambda *a: sheet)
+        if imported:                       # most tests start after the one-time step
+            storage.import_sheet(skip=True)
         return sheet
     return use
 
@@ -226,20 +228,21 @@ def reopen():
 
 
 def test_csv_import_is_all_or_nothing(tmp_storage, monkeypatch):
-    """#1: a crash mid-import must leave nothing behind, so the retry can't
-    duplicate the rows that had already gone in."""
+    """#1: a crash mid-import (after the first row went in) must leave nothing
+    behind, so the retry can't duplicate the rows that had already gone in."""
     write_legacy_csv([booking(name="A", status="cancelled"),
                       booking(time="10:00", name="B", status="cancelled")])
-    real_reader = csv.DictReader
+    real, calls = storage._normalize_row, []
 
-    def exploding_reader(f):
-        rows = real_reader(f)
-        yield next(rows)
-        raise ValueError("crash mid-import")
-    monkeypatch.setattr(storage.csv, "DictReader", exploding_reader)
-    with pytest.raises(ValueError):
-        storage.read_bookings("clinic_a")
-    monkeypatch.setattr(storage.csv, "DictReader", real_reader)
+    def crash_on_second(r):
+        calls.append(r)
+        if len(calls) == 2:
+            raise ValueError("crash after the first insert")
+        return real(r)
+    monkeypatch.setattr(storage, "_normalize_row", crash_on_second)
+    storage.read_bookings("clinic_a")          # reads still work; the import failed
+    assert storage.read_bookings("clinic_a") == []          # first insert rolled back
+    monkeypatch.setattr(storage, "_normalize_row", real)
     reopen()
     assert sorted(r["name"] for r in storage.read_bookings("clinic_a")) == ["A", "B"]
 
@@ -260,11 +263,15 @@ def test_second_process_waits_for_an_import_in_progress(tmp_storage):
     def finish_later():
         _time.sleep(0.3)
         other.execute("COMMIT")
-    threading.Thread(target=finish_later).start()
-    reopen()
-    rows = storage.read_bookings("clinic_a")      # must not raise
-    assert [r["name"] for r in rows] == ["A"]     # imported exactly once
-    other.close()
+    finisher = threading.Thread(target=finish_later)
+    finisher.start()
+    try:
+        reopen()
+        rows = storage.read_bookings("clinic_a")      # must not raise
+        assert [r["name"] for r in rows] == ["A"]     # imported exactly once
+    finally:
+        finisher.join()
+        other.close()
 
 
 def test_legacy_double_bookings_are_kept_as_conflicts(tmp_storage):
@@ -285,45 +292,119 @@ def test_legacy_rows_are_normalised_on_import(tmp_storage):
 
 
 class SheetWithHistory(FakeWorksheet):
-    def __init__(self, records=(), unreadable=False):
+    def __init__(self, rows=()):
         super().__init__()
-        self.records, self.unreadable = list(records), unreadable
+        self.values = [list(storage.BOOKING_HEADER)] + [list(r) for r in rows]
 
-    def get_all_records(self):
-        if self.unreadable:
-            raise ConnectionError("Sheets API down")
-        return [dict(r) for r in self.records]
+    def get_all_values(self):
+        return [list(r) for r in self.values]
 
 
-def test_bookings_that_only_lived_in_the_sheet_are_imported_once(sheets_on):
-    """#3: in Sheets mode the old code wrote bookings ONLY to the Sheet."""
-    sheets_on(SheetWithHistory([dict(zip(storage.BOOKING_HEADER, booking(name="FromSheet")))]))
-    assert storage.booked_pairs("clinic_a") == {(FUTURE, "09:30")}
-    assert storage.reserve_booking(booking(name="Late")) is None   # slot is taken
-    reopen()
-    assert [r["name"] for r in storage.read_bookings("clinic_a")] == ["FromSheet"]
-
-
-def test_bookings_pause_while_a_configured_sheet_cannot_be_read(sheets_on):
-    """#3 fail closed: until the Sheet's bookings are in, a new booking could
-    double-book one of them — so refuse, and retry on the next attempt."""
-    sheet = sheets_on(SheetWithHistory([dict(zip(storage.BOOKING_HEADER,
-                                                 booking(name="FromSheet")))], unreadable=True))
+def test_bookings_pause_until_the_sheet_import_has_run(sheets_on):
+    """D5: SHEET_ID set and its old bookings not yet imported -> new bookings
+    pause (they could double-book one of them); reads keep working; the
+    reason is visible for /admin. No network call is ever made here."""
+    sheets_on(SheetWithHistory([booking(name="FromSheet")]), imported=False)
     with pytest.raises(storage.BookingsUnavailable):
         storage.reserve_booking(booking(time="11:00", name="New"))
-    sheet.unreadable = False
-    assert storage.reserve_booking(booking(time="11:00", name="New")) is not None
-    assert {r["name"] for r in storage.read_bookings("clinic_a")} == {"FromSheet", "New"}
+    assert storage.read_bookings("clinic_a") == []
+    assert "import-sheet" in storage.bookings_paused_reason()
 
 
-def test_export_csv_writes_every_booking_for_rollback(tmp_storage):
-    """#4: the way back to the CSV-era code without losing bookings."""
+def test_import_sheet_brings_in_sheet_only_bookings_with_text_intact(sheets_on):
+    """D5: the old code wrote bookings ONLY to the Sheet. Values are read as
+    text (get_all_values), so '+91...' phone numbers survive."""
+    row = booking(name="FromSheet")
+    row[3] = "+919876543210"
+    sheets_on(SheetWithHistory([row]), imported=False)
+    assert storage.import_sheet()[0] == 1
+    assert storage.bookings_paused_reason() is None
+    got = storage.read_bookings("clinic_a")
+    assert [(r["name"], r["phone"]) for r in got] == [("FromSheet", "+919876543210")]
+    assert storage.reserve_booking(booking(name="Late")) is None      # slot is taken
+    assert storage.import_sheet() is None                              # already done
+
+
+def test_import_sheet_skip_resumes_bookings_without_importing(sheets_on):
+    sheets_on(SheetWithHistory([booking(name="FromSheet")]), imported=False)
+    storage.import_sheet(skip=True)
+    assert storage.reserve_booking(booking(name="New")) is not None
+    assert [r["name"] for r in storage.read_bookings("clinic_a")] == ["New"]
+
+
+def test_missing_credentials_keep_bookings_paused(sheets_on, monkeypatch):
+    """Cycle-2 finding: missing credentials.json used to let bookings through."""
+    sheets_on(SheetWithHistory([booking(name="FromSheet")]), imported=False)
+    monkeypatch.setenv("GOOGLE_SHEETS_CREDENTIALS_PATH", "/nonexistent/credentials.json")
+    with pytest.raises(storage.BookingsUnavailable):
+        storage.reserve_booking(booking(name="New"))
+    with pytest.raises(RuntimeError, match="credentials"):
+        storage.import_sheet()
+
+
+def test_export_csv_backs_up_and_round_trips(tmp_storage):
+    """Rollback path: export every booking (all columns); never lose an
+    existing file — it is backed up before being replaced."""
     storage.reserve_booking(booking(name="A"))
     storage.reserve_booking(booking(time="10:00", name="B"))
     out = tmp_storage / "export.csv"
-    assert storage.export_bookings_csv(out) == 2
-    with open(out, newline="", encoding="utf-8") as f:
-        assert [r["name"] for r in csv.DictReader(f)] == ["A", "B"]
+    out.write_text("previous contents")
     with pytest.raises(FileExistsError):
         storage.export_bookings_csv(out)                 # never overwrite silently
     assert storage.export_bookings_csv(out, force=True) == 2
+    backups = list(tmp_storage.glob("export.csv.bak-*"))
+    assert len(backups) == 1 and backups[0].read_text() == "previous contents"
+    with open(out, newline="", encoding="utf-8") as f:
+        assert list(csv.DictReader(f)) == storage.read_bookings("clinic_a")
+
+
+def test_roll_forward_after_rollback_picks_up_new_csv_rows(tmp_storage):
+    """Cycle-2 finding: after export -> old code appends to bookings.csv ->
+    upgrade again, those new bookings were never imported (marker)."""
+    storage.reserve_booking(booking(name="A"))
+    storage.export_bookings_csv(storage.BOOKINGS_CSV, force=True)
+    with open(storage.BOOKINGS_CSV, "a", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerow(booking(time="10:00", name="DuringRollback"))
+    reopen()
+    names = [r["name"] for r in storage.read_bookings("clinic_a")]
+    assert names == ["A", "DuringRollback"]           # new row in, A not duplicated
+    assert (FUTURE, "10:00") in storage.booked_pairs("clinic_a")
+
+
+def test_excel_saved_csv_still_imports(tmp_storage):
+    """Windows Excel saves CSV as cp1252, not UTF-8."""
+    with open(storage.BOOKINGS_CSV, "w", newline="", encoding="cp1252") as f:
+        w = csv.writer(f)
+        w.writerow(storage.BOOKING_HEADER)
+        w.writerow(booking(name="Ren\u00e9e"))
+    assert [r["name"] for r in storage.read_bookings("clinic_a")] == ["Ren\u00e9e"]
+
+
+def test_unreadable_csv_pauses_bookings_but_not_reads(tmp_storage, monkeypatch):
+    """Cycle-2 finding: a broken bookings.csv made the whole database unusable."""
+    write_legacy_csv([booking(name="A")])
+
+    def broken_reader(f):
+        raise csv.Error("line contains NUL")
+    monkeypatch.setattr(storage.csv, "DictReader", broken_reader)
+    assert storage.read_bookings("clinic_a") == []
+    assert "bookings.csv" in storage.bookings_paused_reason()
+    with pytest.raises(storage.BookingsUnavailable):
+        storage.reserve_booking(booking(time="11:00", name="New"))
+
+
+def test_unparseable_legacy_rows_are_kept_not_dropped(tmp_storage):
+    """A date Excel rewrote (10/07/2026) is still a real customer: keep the
+    row as status 'invalid' (visible, exported) instead of dropping it."""
+    write_legacy_csv([["t", "clinic_a", "Kiran", "9876543210", "Cleaning",
+                       "10/07/2026", "10:00", "confirmed"]])
+    rows = storage.read_bookings("clinic_a")
+    assert [(r["name"], r["status"], r["date"]) for r in rows] == [("Kiran", "invalid", "10/07/2026")]
+    assert storage.booked_pairs("clinic_a") == set()
+
+
+def test_legacy_dates_are_stored_in_canonical_form(tmp_storage):
+    compact = FUTURE.replace("-", "")                  # e.g. 20261113, valid ISO
+    write_legacy_csv([["t", "clinic_a", "Ravi", "9876543210", "Cleaning",
+                       compact, "09:30", "confirmed"]])
+    assert storage.booked_pairs("clinic_a") == {(FUTURE, "09:30")}

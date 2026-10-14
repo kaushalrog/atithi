@@ -47,23 +47,32 @@ class BodySizeLimit:
     body is read. The per-endpoint checks (e.g. the 5 MB voice limit) only run
     after Starlette has already spooled the whole upload to disk.
 
-    Limit: a client that sends no Content-Length (chunked upload) isn't
-    caught here; browsers' fetch() always sends one. Put a reverse proxy's
-    body limit in front of any public deployment as well."""
+    A body-carrying request with NO Content-Length (a chunked upload, whose
+    size isn't known up front) is refused with 411: browsers' fetch() and
+    Twilio always send the header. Still put a reverse proxy's body limit in
+    front of any public deployment."""
+
+    BODY_METHODS = {"POST", "PUT", "PATCH"}
 
     def __init__(self, inner):
         self.inner = inner
 
+    @staticmethod
+    async def _refuse(send, status: int, message: bytes):
+        body = b'{"detail":"' + message + b'"}'
+        await send({"type": "http.response.start", "status": status,
+                    "headers": [(b"content-type", b"application/json"),
+                                (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
-            length = dict(scope.get("headers") or []).get(b"content-length", b"0")
-            if not length.isdigit() or int(length) > MAX_BODY_BYTES:
-                body = b'{"detail":"Request too large"}'
-                await send({"type": "http.response.start", "status": 413,
-                            "headers": [(b"content-type", b"application/json"),
-                                        (b"content-length", str(len(body)).encode())]})
-                await send({"type": "http.response.body", "body": body})
-                return
+            length = dict(scope.get("headers") or []).get(b"content-length")
+            if length is None:
+                if scope.get("method") in self.BODY_METHODS:
+                    return await self._refuse(send, 411, b"Content-Length required")
+            elif not length.isdigit() or int(length) > MAX_BODY_BYTES:
+                return await self._refuse(send, 413, b"Request too large")
         await self.inner(scope, receive, send)
 
 
@@ -83,6 +92,12 @@ def _warm_up():
     problem = auth.admin_password_problem()
     if problem:
         print(f"  [admin] admin console disabled: {problem}")
+    # Seed (and, if needed, take back) the admin account now, not on the
+    # first login — so a signup can't race the owner for ADMIN_EMAIL.
+    auth.ensure_admin_seed()
+    paused = storage.bookings_paused_reason()
+    if paused:
+        print(f"  [bookings] NEW BOOKINGS ARE PAUSED: {paused}")
 
 
 # The pages change only when we deploy, so serve them from memory — but
@@ -377,6 +392,10 @@ def admin_overview():
                 "gemini_key": bool(os.getenv("GEMINI_API_KEY")),
                 "twilio": telephony.is_configured() and telephony.live_calls_enabled(),
                 "live_calls": telephony.live_calls_enabled(),
+                "twilio_keys": telephony.is_configured(),
+                # Why new bookings are paused (D5: Sheet not imported yet, or a
+                # broken bookings.csv), or null. Shown as its own status row.
+                "bookings_paused": storage.bookings_paused_reason(),
                 "sheets": bool(os.getenv("SHEET_ID")),
             }}
 

@@ -168,6 +168,11 @@ def main():
         print(f"Not going live: {problem}.")
         sys.exit(1)
 
+    import storage
+    paused = storage.bookings_paused_reason()
+    if paused:
+        print(f"Warning: new bookings are paused: {paused}.")
+
     missing = [k for k in ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_NUMBER")
                if not os.getenv(k)]
     if missing:

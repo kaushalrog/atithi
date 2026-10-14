@@ -83,12 +83,15 @@ else:                                                            # Sheets is now
     class _FakeSheet:                     # a readable, empty Sheet (nothing to migrate)
         def append_row(self, row): pass
         def get_all_records(self): return []
+        def get_all_values(self): return []
     orig = ("_sheet_handle", storage._sheet_handle)
     storage._sheet_handle = lambda *a: _FakeSheet()
     _real_in_test_mode = storage.in_test_mode
     storage.in_test_mode = lambda: False   # lift test mode for the mirror only; restored below
     os.environ["GOOGLE_SHEETS_CREDENTIALS_PATH"] = __file__
     os.environ["SHEET_ID"] = "fake"
+    if hasattr(storage, "import_sheet"):     # the one-time upgrade step (Phase 0.5 cycle 2)
+        storage.import_sheet()
 a = ReceptionistAgent("demo_clinic", llm=FakeLLM())
 res = a._book_appointment("Asha", "9876543210", "Cleaning", d, t)
 fresh = ReceptionistAgent("demo_clinic", llm=FakeLLM())
