@@ -37,6 +37,16 @@ SPEAKER_RATE = 24000   # what the Live API sends back
 MIC_CHUNK = 800        # 50 ms of mic audio per network packet
 
 
+def run_tool(agent, call: dict) -> dict:
+    """Run one tool call. A failure (bookings paused, database busy) must not
+    end the call: report it to the model, which apologises and offers a
+    callback — the same rule the phone bridge and agent.chat follow."""
+    try:
+        return agent._execute_tool(call["name"], call["args"])
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
 async def run(client_id: str, half_duplex: bool):
     agent = ReceptionistAgent(client_id)
     started = datetime.now()
@@ -82,7 +92,7 @@ async def run(client_id: str, half_duplex: bool):
                 results = []
                 for call in event["calls"]:
                     print(f"  [tool] {call['name']}({call['args']})")
-                    result = agent._execute_tool(call["name"], call["args"])
+                    result = run_tool(agent, call)
                     results.append({"id": call["id"], "name": call["name"], "result": result})
                 await live.send_tool_results(results)
             elif kind == "turn_complete":

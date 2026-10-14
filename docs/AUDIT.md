@@ -6,6 +6,58 @@
 
 ---
 
+## 0. Status after Phase 0.5 hardening (2026-10-13, branch `harden/phase-0.5`)
+
+Plan and decisions: `docs/HARDENING_PLAN.md` (eng review D2–D7). Safe testing and the live-call switch: `docs/SAFE_TESTING.md`. Deferred work: `TODOS.md`.
+
+**Evidence method.** The same `docs/audit_repro.py` was run against the baseline commit (`main` @ `ab8abbc`, in a temporary git worktree) and against the hardened branch. Phone checks R8/R9 run with live calls **enabled** and correctly signed requests (the attacker's best case), so they test the gates themselves, not just the off-by-default switch. For each fix, the fix was removed temporarily and at least one test failed ("mutation check").
+
+| Finding | Baseline | Hardened | Regression tests | Status |
+|---|---|---|---|---|
+| **H1** unauthenticated phone stream (R9) | REPRODUCED: accepted, 1 Gemini session | NOT REPRODUCED: closed 1008, 0 sessions | `tests/test_telephony.py` (20 new test cases, replacing 2 that relied on unsigned "local mode": ticket missing/tampered/expired/other call/replayed, unknown business, inactive plan, call limit, handshake signature missing/forged, live calls off, slot release) | **Fixed.** One part unverified, see below |
+| **H2** concurrent double-booking (R1) | REPRODUCED: 2 confirmed rows | NOT REPRODUCED: 2nd booking refused | `tests/test_storage.py` 20-thread race; `tests/test_agent.py` two conversations / race lost | **Fixed** |
+| **H3** Sheets bookings invisible (R2) | REPRODUCED: slot still offered, dashboard 0 | NOT REPRODUCED: slot gone, dashboard 1 | `tests/test_storage.py` mirror copy, mirror failure, test mode ignores SHEET_ID, real-data write guard, explicit Sheet import (pause until run, text-intact phones, skip, missing-credentials stays paused), CSV re-import on change, export with backup | **Fixed**: SQLite is the single source of truth; the Sheet gets a copy of each booking and is read only by the one-time `python storage.py import-sheet` upgrade step |
+| M3 placeholder admin password (R6b) | REPRODUCED: 200 + access keys | NOT REPRODUCED: 503 | `tests/test_access.py` placeholder / 11 / 12 chars, weak password disables admin bearer tokens, placeholder email not seeded | **Fixed** |
+| M4 open `/api/tts` (R5) | REPRODUCED: 200 for 200 KB | NOT REPRODUCED: 422 | session required (404 unknown), ≤1000 chars | **Fixed** |
+| M5 unbounded payloads (R7) | REPRODUCED: 2 MB → 200 | NOT REPRODUCED: 422 | chat ≤2000 chars, voice ≤5 MB (413, never sent to the model) | **Fixed** for chat/voice/TTS; other bodies not individually capped |
+| M6 no LLM timeout | static | client built with `HttpOptions(timeout=GEMINI_TIMEOUT_S·1000)` | `tests/test_agent.py` constructor spy | **Partly fixed**: requests are bounded (30 s default), but 429/5xx retries can still sleep up to ~75 s in total (`llm.py:_call_with_retry`); not exercised against a real stalled request |
+| M9 secrets / brute force | static | `hmac.compare_digest` for admin key, business codes, password hashes | covered by access tests | **Partly fixed**: no attempt rate limits yet (TODOS.md) |
+| L1 `/api/admin/login` 500 (R6a) | REPRODUCED: 500 | NOT REPRODUCED: 200/401 | `test_admin_login_endpoint_never_crashes` | **Fixed** |
+| L2 TwiML injection via `From` (R8b) | REPRODUCED (signed request) | NOT REPRODUCED | `test_twiml_attributes_are_escaped` | **Fixed** |
+| M1/M2 metrics (R3/R4) | REPRODUCED | REPRODUCED | none | **Open**: out of scope, TODOS.md |
+| M7 dead air, M8 blocking loop | static | unchanged | none | **Open**: TODOS.md |
+| M10 committed demo codes, M11 PII retention | static | unchanged (`bookings.db` now gitignored) | none | **Open**: M11 in TODOS.md |
+
+**Not fully verified:**
+1. **Media-stream handshake signature.** Twilio's documentation requires validating `x-twilio-signature` on Media Streams (lowercase header on websockets), but doesn't state the signed URL/parameters for the upgrade. VoxAgent checks the exact `wss://…/twilio/stream` URL from its TwiML with no parameters, and **rejects on mismatch** (decision D4). Correct behaviour is proven offline only against signatures we computed ourselves. The first real call is the verification step (`docs/SAFE_TESTING.md` §5). If Twilio signs differently, real calls are refused (fail closed), never silently accepted.
+2. **No real Twilio, Gemini or Google Sheets traffic was exercised.** No Twilio account or keys exist in this environment, and none were used.
+3. **Single-process assumption.** Stream tickets use a per-process key (decision D3); a multi-worker deploy would reject calls. Documented.
+
+**Results on the hardened branch (commit `2d432c1`):** `python -m pytest tests -q` → **152 passed** (baseline 58) on both Python 3.13.13 and 3.11.15. Per file: test_telephony 8→46, test_storage 4→33, test_agent 13→22, test_access 6→24; others unchanged. `bench.py` with 300 bookings: build an agent 0.09 ms, whole-window availability 0.09 ms, dashboard 0.25 ms.
+
+**Bug introduced and caught during the work:** the first SQLite version computed the dashboard ETag before the database file existed, so the second poll saw a "changed" file and returned 200 instead of 304. The existing `tests/test_dashboard.py` caught it. Fixed by opening the DB before stamping it.
+
+### `/review` and QA of the hardening (2026-10-14)
+
+**Review:** 3 fix cycles, the maximum, so the review is recorded as **not converged**. Cycles 1–2 ran the core checklist, 7 specialists (testing, maintainability, security, performance, data-migration, design, simplification), a red team and an adversarial pass. Cycle 3 ran in-session only, because the owner declined further reviewer agents, so it has less independent coverage. Codex (outside voice) is not installed. Every fix the owner approved has a regression test that was shown failing on the pre-fix code first. Main defects found **in this branch's own fixes** and then fixed:
+- Non-ASCII credential input caused HTTP 500 (`hmac.compare_digest` on `str`). Reproduced, now 401.
+- The legacy CSV import was not atomic and not safe across processes. Legacy double-bookings were silently dropped. Sheet-only bookings were not migrated.
+- The first Sheet-import design put Google's network on the call path and could silently pause every business. It was replaced by an explicit `python storage.py import-sheet` step that shows on `/admin` when pending.
+- Rolling forward after a rollback lost bookings. Imports are now idempotent and re-run when `bookings.csv` changes.
+- A test fixture wrote a real `voxagent.db` into the repo. It was caught by the new test-mode guard on the accounts DB, and the empty file was removed.
+- Pre-existing, found by the security specialist: **admin takeover by signing up as `ADMIN_EMAIL` first**. Fixed: signup refuses it, promotion revokes old sessions, and the admin is seeded at startup.
+- Call-slot accounting edge cases: burst calls, outbound calls while ringing, stale reservations, cross-thread access.
+
+**QA (browser + CLI):** the server ran from an isolated git worktree in a scratch folder with generated QA-only credentials and the built-in browser. It was then removed, leaving no files in this repo.
+- *Verified:* the admin console shows bookings PAUSED with the fix command when `SHEET_ID` is set and not yet imported. `import-sheet` without credentials gives a clear error and exit 1. `--skip` resumes bookings, and the running server sees this, even across processes. Signup with the admin email is refused (409). Non-ASCII business code → 401. TTS without a session → 404. A 2001-character chat message → 422. A body-less browser POST passes the 411 rule. Owner signup → onboarding → dashboard works, the ETag revalidates (304), and another business's data is refused (401). No console errors.
+- *Found and fixed in QA:* the disabled Call button still looked active (no `:disabled` style in admin.html). Google Sheets showed green with missing credentials. The storage CLI printed tracebacks.
+- *Not verified:* anything needing a Gemini key (the test-call widget, the spoken-reply note and clean truncation, paste-clip note), real Twilio traffic (including the websocket signature scheme), and real Google Sheets.
+- *Existing issue noted, not fixed:* starting a test call without `GEMINI_API_KEY` returns a bare 500 (same on baseline).
+
+The sections below are the original Phase 0 audit, unchanged, kept as the baseline record.
+
+---
+
 ## 1. Facts first
 
 ### 1.1 What this repository is

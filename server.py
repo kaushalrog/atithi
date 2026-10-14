@@ -15,6 +15,7 @@ Run:  python server.py            (opens http://127.0.0.1:8765)
 
 import argparse
 import datetime as dt
+import hmac
 import os
 import re
 import secrets
@@ -25,7 +26,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import auth
 import billing
@@ -39,6 +40,43 @@ from tts import EdgeTTS
 BASE_DIR = Path(__file__).resolve().parent
 
 app = FastAPI(title="VoxAgent")
+
+
+class BodySizeLimit:
+    """Refuse oversized requests by their Content-Length header, BEFORE any
+    body is read. The per-endpoint checks (e.g. the 5 MB voice limit) only run
+    after Starlette has already spooled the whole upload to disk.
+
+    A body-carrying request with NO Content-Length (a chunked upload, whose
+    size isn't known up front) is refused with 411: browsers' fetch() and
+    Twilio always send the header. Still put a reverse proxy's body limit in
+    front of any public deployment."""
+
+    BODY_METHODS = {"POST", "PUT", "PATCH"}
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    @staticmethod
+    async def _refuse(send, status: int, message: bytes):
+        body = b'{"detail":"' + message + b'"}'
+        await send({"type": "http.response.start", "status": status,
+                    "headers": [(b"content-type", b"application/json"),
+                                (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            length = dict(scope.get("headers") or []).get(b"content-length")
+            if length is None:
+                if scope.get("method") in self.BODY_METHODS:
+                    return await self._refuse(send, 411, b"Content-Length required")
+            elif not length.isdigit() or int(length) > MAX_BODY_BYTES:
+                return await self._refuse(send, 413, b"Request too large")
+        await self.inner(scope, receive, send)
+
+
+app.add_middleware(BodySizeLimit)
 app.include_router(telephony.router)  # /twilio/voice + /twilio/stream (phone calls)
 tts = EdgeTTS()
 
@@ -51,6 +89,19 @@ def _warm_up():
     is on a live phone line — doesn't wait for it.
     """
     llm_module.warm_up()
+    problem = auth.admin_password_problem()
+    if problem:
+        print(f"  [admin] admin console disabled: {problem}")
+    # Seed (and, if needed, take back) the admin account now, not on the
+    # first login — so a signup can't race the owner for ADMIN_EMAIL. A
+    # failure is logged, never fatal: the portal must still come up.
+    try:
+        auth.ensure_admin_seed()
+    except Exception as e:
+        print(f"  [admin] could not seed the admin account: {type(e).__name__}: {e}")
+    paused = storage.bookings_paused_reason()
+    if paused:
+        print(f"  [bookings] NEW BOOKINGS ARE PAUSED: {paused}")
 
 
 # The pages change only when we deploy, so serve them from memory — but
@@ -93,13 +144,23 @@ class SessionRequest(BaseModel):
     client_id: str = "demo_clinic"
 
 
+# Size limits (audit M5): a customer turn longer than this is not a real
+# turn, and every message is re-sent to the model on each later turn — so an
+# unbounded one costs quota and money for the rest of the conversation.
+MAX_CHAT_CHARS = 2000
+MAX_TTS_CHARS = 1000                # mirrored in web/index.html speak()
+MAX_VOICE_BYTES = 5 * 1024 * 1024   # ~55 s of the portal's 48 kHz WAV; a turn is seconds
+MAX_BODY_BYTES = 6 * 1024 * 1024    # whole request, checked before it is parsed
+
+
 class ChatRequest(BaseModel):
     session_id: str
-    message: str
+    message: str = Field(max_length=MAX_CHAT_CHARS)
 
 
 class TTSRequest(BaseModel):
-    text: str
+    session_id: str                 # only a live test call may use our TTS
+    text: str = Field(max_length=MAX_TTS_CHARS)
 
 
 class AdminLoginRequest(BaseModel):
@@ -172,6 +233,24 @@ def bearer_user(authorization: str | None) -> dict | None:
     return None
 
 
+def same_secret(supplied, expected) -> bool:
+    """Constant-time comparison that never crashes. hmac.compare_digest raises
+    on non-ASCII str and on str-vs-int (a hand-edited YAML code like 482913),
+    which surfaced as HTTP 500 instead of a rejection — so compare bytes."""
+    if supplied is None or expected is None:
+        return False
+    return hmac.compare_digest(str(supplied).encode(), str(expected).encode())
+
+
+def is_admin(user: dict | None) -> bool:
+    """Admin role counts only for the CURRENT ADMIN_EMAIL, and only while
+    ADMIN_PASSWORD passes the policy. So an admin account seeded earlier (from
+    a placeholder password, or under an old email) has no admin rights."""
+    if not (user and user["role"] == "admin") or auth.admin_password_problem():
+        return False
+    return user["email"] == os.getenv("ADMIN_EMAIL", "").strip().lower()
+
+
 def client_access_key(client_id: str) -> str | None:
     cfg = storage.read_client_config(client_id)
     return cfg.get("access_key") if cfg else None
@@ -180,13 +259,12 @@ def client_access_key(client_id: str) -> str | None:
 def authorize_client(client_id: str, client_key: str | None, admin_key: str | None,
                      authorization: str | None = None):
     user = bearer_user(authorization)
-    if user and (user["role"] == "admin" or user["client_id"] == client_id):
+    if is_admin(user) or (user and user["client_id"] == client_id):
         return
-    admin_password = os.getenv("ADMIN_PASSWORD", "")
-    if admin_password and admin_key == admin_password:
+    if auth.admin_password_matches(admin_key):
         return
     expected = client_access_key(client_id)
-    if expected and client_key == expected:
+    if expected and client_key and same_secret(client_key, expected):
         return
     raise HTTPException(status_code=401, detail="Not authorized for this business")
 
@@ -245,19 +323,22 @@ def generate_slots(days: list[str], ranges: list[list[str]], gap_min: int) -> di
 
 def require_admin(x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
                   authorization: str | None = Header(default=None)):
-    user = bearer_user(authorization)
-    if user and user["role"] == "admin":
+    problem = auth.admin_password_problem()
+    if problem:
+        # The reason goes to the server log, not to whoever is knocking: an
+        # anonymous caller shouldn't learn that admin is misconfigured or how.
+        print(f"  [admin] admin console disabled: {problem}")
+        raise HTTPException(status_code=503, detail="Admin console unavailable")
+    if is_admin(bearer_user(authorization)) or auth.admin_password_matches(x_admin_key):
         return
-    admin_password = os.getenv("ADMIN_PASSWORD", "")
-    if not admin_password:
-        raise HTTPException(status_code=503, detail="Set ADMIN_PASSWORD in .env to use the admin console")
-    if x_admin_key != admin_password:
-        raise HTTPException(status_code=401, detail="Admin access only")
+    raise HTTPException(status_code=401, detail="Admin access only")
 
 
 @app.post("/api/admin/login")
 def admin_login(req: AdminLoginRequest):
-    require_admin(x_admin_key=req.password)
+    # Pass both arguments: called directly (not via Depends), the defaults
+    # would be FastAPI Header() objects, which crashed this endpoint (R6a).
+    require_admin(x_admin_key=req.password, authorization=None)
     return {"ok": True}
 
 
@@ -309,11 +390,18 @@ def admin_overview():
     } for c in all_calls[:12]]
     return {"totals": totals, "clients": clients, "recent_calls": recent,
             "password_resets": auth.pending_resets(),
-            "twilio_configured": telephony.is_configured(),
+            # "connected" only when calls can actually be answered.
+            "twilio_configured": telephony.is_configured() and telephony.live_calls_enabled(),
             "status": {
                 "gemini_key": bool(os.getenv("GEMINI_API_KEY")),
-                "twilio": telephony.is_configured(),
-                "sheets": bool(os.getenv("SHEET_ID")),
+                "twilio": telephony.is_configured() and telephony.live_calls_enabled(),
+                "live_calls": telephony.live_calls_enabled(),
+                "twilio_keys": telephony.is_configured(),
+                # Why new bookings are paused (D5: Sheet not imported yet, or a
+                # broken bookings.csv), or null. Shown as its own status row.
+                "bookings_paused": storage.bookings_paused_reason(),
+                # Green only when the Sheet can actually be used (credentials present).
+                "sheets": storage.sheets_usable(),
             }}
 
 
@@ -423,7 +511,7 @@ def portal_login(req: PortalLoginRequest):
     if code:
         for entry in storage.all_clients():
             cfg = entry["config"]
-            if cfg.get("access_key") and cfg["access_key"] == code:
+            if cfg.get("access_key") and same_secret(code, cfg["access_key"]):
                 return {"client_id": entry["client_id"],
                         "business_name": cfg.get("business_name", entry["client_id"])}
     raise HTTPException(status_code=401, detail="That code doesn't match any business")
@@ -436,9 +524,8 @@ def create_business(req: BusinessRequest,
     # Admin can create any number of businesses; a signed-up owner exactly one
     # (their own — it gets linked to their account and starts a free trial).
     user = bearer_user(authorization)
-    is_admin = (user and user["role"] == "admin") or (
-        os.getenv("ADMIN_PASSWORD", "") and x_admin_key == os.getenv("ADMIN_PASSWORD"))
-    if not is_admin:
+    as_admin = is_admin(user) or auth.admin_password_matches(x_admin_key)
+    if not as_admin:
         if user is None:
             raise HTTPException(status_code=401, detail="Sign in to create your business")
         if user["client_id"]:
@@ -476,7 +563,7 @@ def create_business(req: BusinessRequest,
     }
     # Through storage so the config caches invalidate with the write.
     storage.write_client_config(client_id, config)
-    if not is_admin:
+    if not as_admin:
         auth.attach_client(user["email"], client_id)
     return {"client_id": client_id, "business_name": config["business_name"],
             "access_key": config["access_key"]}
@@ -531,8 +618,12 @@ def chat(req: ChatRequest):
 def voice(session_id: str = Form(...), audio: UploadFile = File(...)):
     """Browser-recorded audio in -> transcript + agent reply out."""
     session = get_session(session_id)
+    data = audio.file.read(MAX_VOICE_BYTES + 1)
+    if len(data) > MAX_VOICE_BYTES:
+        raise HTTPException(status_code=413, detail="Recording too long — keep a turn under a minute")
     mime = MIME_FIX.get(audio.content_type, audio.content_type) or "audio/wav"
-    heard = session["agent"].llm.transcribe(audio.file.read(), mime_type=mime)
+    # Same bound as a typed turn: the transcript is re-sent every later turn.
+    heard = session["agent"].llm.transcribe(data, mime_type=mime)[:MAX_CHAT_CHARS]
     if not heard:
         return {"heard": "", "reply": "", "tools": []}
     return {"heard": heard, **run_turn(session, heard)}
@@ -540,7 +631,12 @@ def voice(session_id: str = Form(...), audio: UploadFile = File(...)):
 
 @app.post("/api/tts")
 def speak(req: TTSRequest):
-    """Reply text in -> mp3 speech out (voice auto-picked by script, see tts.py)."""
+    """Reply text in -> mp3 speech out (voice auto-picked by script, see tts.py).
+
+    Requires a live test-call session: without one this endpoint was a free,
+    unlimited text-to-speech proxy for anyone who found the URL (audit M4).
+    """
+    get_session(req.session_id)
     clean = re.sub(r"[*_#`]", "", req.text)
     # Straight from the network into the response — no temp file round trip.
     return Response(content=tts.synthesize_bytes(clean), media_type="audio/mpeg")
@@ -569,7 +665,9 @@ DASHBOARD_CALL_LIMIT = 200
 def _phone_status(client_id: str) -> dict:
     cfg = storage.read_client_config(client_id) or {}
     number = cfg.get("twilio_number") or telephony.twilio_config()["number"] or None
-    return {"connected": telephony.is_configured() and bool(number), "number": number}
+    return {"connected": telephony.live_calls_enabled() and telephony.is_configured()
+                         and bool(number),
+            "number": number}
 
 
 @app.get("/api/dashboard")

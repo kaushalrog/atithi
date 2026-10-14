@@ -19,6 +19,7 @@ owner enters code + new password, every old session is invalidated.
 
 import datetime as dt
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -33,6 +34,8 @@ BASE_DIR = Path(__file__).resolve().parent
 DB_FILE = BASE_DIR / "voxagent.db"
 LEGACY_USERS = BASE_DIR / "users.json"
 LEGACY_TOKENS = BASE_DIR / "tokens.json"
+
+_REAL_DB_FILE = DB_FILE   # captured before tests repoint DB_FILE
 
 TOKEN_DAYS = 30
 RESET_MINUTES = 60
@@ -78,6 +81,11 @@ def _db() -> sqlite3.Connection:
         return conn
     if conn is not None:
         conn.close()
+    # Same fail-closed rule as storage.py: tests and evals (VOXAGENT_ENV=test)
+    # may never open the real accounts database.
+    if (os.getenv("VOXAGENT_ENV", "").strip().lower() == "test"
+            and Path(path).resolve() == _REAL_DB_FILE.resolve()):
+        raise RuntimeError(f"VOXAGENT_ENV=test refuses to open the real accounts DB at {path}")
     conn = sqlite3.connect(path, timeout=10)
     conn.row_factory = sqlite3.Row
     with _prepare_lock:
@@ -140,6 +148,35 @@ def _hash(password: str, salt: str) -> str:
     ).hex()
 
 
+# The admin password unlocks every business's data and login codes, and the
+# admin header has no attempt limit yet (TODOS.md) — so a weak one is treated
+# as no password at all (admin disabled), never silently accepted. The
+# placeholders are the literal values shipped in .env.example (audit M3).
+ADMIN_PASSWORD_MIN = 12
+_PLACEHOLDER_PASSWORDS = {"choose_a_strong_password"}
+_PLACEHOLDER_EMAILS = {"you@example.com"}
+
+
+def admin_password_problem() -> str | None:
+    """Why ADMIN_PASSWORD can't be used, or None if it's fine."""
+    password = os.getenv("ADMIN_PASSWORD", "")
+    if not password:
+        return "Set ADMIN_PASSWORD in .env to use the admin console"
+    if password in _PLACEHOLDER_PASSWORDS:
+        return "ADMIN_PASSWORD is still the .env.example placeholder — change it"
+    if len(password) < ADMIN_PASSWORD_MIN:
+        return f"ADMIN_PASSWORD must be at least {ADMIN_PASSWORD_MIN} characters"
+    return None
+
+
+def admin_password_matches(candidate: str | None) -> bool:
+    """Constant-time check of a supplied admin key; always False while the
+    configured password is missing, a placeholder or too short."""
+    if admin_password_problem() or not candidate:
+        return False
+    return hmac.compare_digest(candidate.encode(), os.getenv("ADMIN_PASSWORD", "").encode())
+
+
 def _check_password_strength(password: str):
     if len(password) < 6:
         raise ValueError("Password must be at least 6 characters")
@@ -151,15 +188,25 @@ def ensure_admin_seed():
     """Create/refresh the platform admin account from .env (idempotent)."""
     email = os.getenv("ADMIN_EMAIL", "").strip().lower()
     password = os.getenv("ADMIN_PASSWORD", "")
-    if not email or not password:
+    # Never create an admin from .env.example's sample values or a weak password.
+    if not email or email in _PLACEHOLDER_EMAILS or admin_password_problem():
         return
     with _db() as conn:
-        row = conn.execute("SELECT salt FROM users WHERE email=?", (email,)).fetchone()
+        row = conn.execute("SELECT salt, password_hash, role FROM users WHERE email=?",
+                           (email,)).fetchone()
         salt = row["salt"] if row else secrets.token_hex(16)
+        new_hash = _hash(password, salt)
+        if row is not None and (row["role"] != "admin" or row["password_hash"] != new_hash):
+            # The row is being promoted, or the admin password changed: every
+            # session issued under the old identity/password must die. Without
+            # this, someone who signed up as ADMIN_EMAIL before the owner's
+            # first login kept a token that became an admin token.
+            conn.execute("DELETE FROM tokens WHERE email=?", (email,))
         conn.execute(
             "INSERT INTO users VALUES (?,?,?,?,NULL,?) "
-            "ON CONFLICT(email) DO UPDATE SET password_hash=excluded.password_hash, role='admin'",
-            (email, _hash(password, salt), salt, "admin", _now()),
+            "ON CONFLICT(email) DO UPDATE SET password_hash=excluded.password_hash, "
+            "salt=excluded.salt, role='admin', client_id=NULL",
+            (email, new_hash, salt, "admin", _now()),
         )
     _invalidate_cache()
 
@@ -169,9 +216,14 @@ def signup(email: str, password: str) -> dict:
     if not EMAIL_RE.match(email):
         raise ValueError("That doesn't look like an email address")
     _check_password_strength(password)
+    # The admin's email can never be claimed by a signup (same message as an
+    # existing account, so it doesn't reveal which email is the admin's).
+    taken = LookupError("An account with this email already exists — sign in instead")
+    if email == os.getenv("ADMIN_EMAIL", "").strip().lower():
+        raise taken
     with _db() as conn:
         if conn.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
-            raise LookupError("An account with this email already exists — sign in instead")
+            raise taken
         salt = secrets.token_hex(16)
         conn.execute("INSERT INTO users VALUES (?,?,?,?,NULL,?)",
                      (email, _hash(password, salt), salt, "owner", _now()))
@@ -183,7 +235,8 @@ def login(email: str, password: str) -> dict:
     email = email.strip().lower()
     with _db() as conn:
         user = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
-    if user is None or _hash(password, user["salt"]) != user["password_hash"]:
+    if user is None or not hmac.compare_digest(_hash(password, user["salt"]),
+                                                user["password_hash"]):
         raise PermissionError("Wrong email or password")
     return issue_token(email)
 

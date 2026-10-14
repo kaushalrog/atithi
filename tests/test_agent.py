@@ -5,6 +5,8 @@ old suite pinned a literal date, which drifted into the past and let a total
 booking outage pass every test for two months.
 """
 
+import pytest
+
 import storage
 from agent import ReceptionistAgent
 from conftest import open_day, open_times
@@ -123,6 +125,39 @@ def test_double_booking_same_slot_fails(tmp_storage, fake_llm):
     assert agent._book_appointment("B", "9876543211", "X", date, slot)["status"] == "failed"
 
 
+def test_two_conversations_cannot_book_the_same_slot(tmp_storage, fake_llm):
+    """Audit H2 (reproduced as R1): both agents are built BEFORE either books,
+    so each started out believing the slot was free."""
+    date = open_day()
+    slot = open_times(date=date)[0]
+    first, second = make_agent(fake_llm, []), make_agent(fake_llm, [])
+    assert first._book_appointment("Asha", "9876543210", "X", date, slot)["status"] == "confirmed"
+    result = second._book_appointment("Bala", "9876543211", "X", date, slot)
+    assert result["status"] == "failed"
+    assert slot not in result["available_slots"]       # the model gets real alternatives
+    assert result["available_slots"]                   # ...and there are some
+    assert len(storage.read_bookings("demo_clinic")) == 1
+
+
+def test_availability_sees_other_conversations_bookings(tmp_storage, fake_llm):
+    date = open_day()
+    slot = open_times(date=date)[0]
+    waiting = make_agent(fake_llm, [])
+    assert slot in waiting._check_availability(date)["available_slots"]
+    make_agent(fake_llm, [])._book_appointment("Asha", "9876543210", "X", date, slot)
+    assert slot not in waiting._check_availability(date)["available_slots"]
+
+
+def test_losing_the_database_race_is_reported_to_the_model(tmp_storage, fake_llm, monkeypatch):
+    """The slot looked free when checked, but another writer committed first."""
+    agent = make_agent(fake_llm, [])
+    date = open_day()
+    slot = open_times(date=date)[0]
+    monkeypatch.setattr(storage, "reserve_booking", lambda row: None)
+    result = agent._book_appointment("Asha", "9876543210", "X", date, slot)
+    assert result["status"] == "failed" and "just booked" in result["error"]
+
+
 def test_save_lead(tmp_storage, fake_llm):
     agent = make_agent(fake_llm, [])
     result = agent._save_lead("Kiran", "9998887776", "braces price", "call after 6pm")
@@ -135,3 +170,41 @@ def test_lead_rejects_short_phone(tmp_storage, fake_llm):
     agent = make_agent(fake_llm, [])
     assert agent._save_lead("K", "12", "x", "")["status"] == "failed"
     assert list(storage.read_leads("demo_clinic")) == []
+
+
+# ---- the LLM provider seam ----------------------------------------------------------
+
+def test_gemini_client_is_built_with_a_request_timeout(monkeypatch):
+    """Audit M6: generate_content had no timeout, so a stalled request hung
+    the caller's turn forever. No network: the client constructor is a spy."""
+    import llm
+
+    built = []
+    monkeypatch.setattr(llm.genai, "Client", lambda **kw: built.append(kw) or object())
+    monkeypatch.setattr(llm, "_clients", {})
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-real")
+    monkeypatch.setenv("GEMINI_TIMEOUT_S", "12")
+    llm.shared_client()
+    assert built[0]["http_options"].timeout == 12_000      # milliseconds
+
+
+@pytest.mark.parametrize("raw,ms", [("abc", 30_000), ("0", 1_000), ("-5", 1_000), ("2.5", 2_500)])
+def test_gemini_timeout_setting_is_guarded(monkeypatch, raw, ms):
+    import llm
+
+    monkeypatch.setenv("GEMINI_TIMEOUT_S", raw)
+    assert llm._timeout_ms() == ms
+
+
+# ---- channels -------------------------------------------------------------------
+
+def test_live_call_tool_error_is_reported_not_fatal():
+    """Cycle-1 fix with no test (cycle-2 finding): a tool failure (e.g.
+    bookings paused) must come back to the model as an error, not end the call."""
+    import live_main
+
+    class Broken:
+        def _execute_tool(self, name, args):
+            raise storage.BookingsUnavailable("paused")
+    result = live_main.run_tool(Broken(), {"name": "book_appointment", "args": {}})
+    assert result == {"error": "BookingsUnavailable: paused"}

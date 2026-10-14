@@ -481,7 +481,7 @@
     <div class="composer">
       <button class="btn mic" id="micBtn" title="Talk">
         <svg class="ic" viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="11.5" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3.5M8.5 21.5h7"/></svg></button>
-      <input type="text" id="msgInput" placeholder="Type as a customer…" autocomplete="off">
+      <input type="text" id="msgInput" placeholder="Type as a customer…" autocomplete="off" maxlength="2000">
       <button class="btn" id="sendBtn">
         <svg class="ic" viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg></button>
       <label class="toggle"><input type="checkbox" id="voiceToggle" checked>🔊</label>
@@ -906,6 +906,7 @@ async function openTest() {
   try {
     const s = await api("/api/session", { client_id: CLIENT });
     SID = s.session_id;
+    voiceWarned = false;
     addBubble("note", "Test call started — it will appear in your call history.");
     $("msgInput").focus();
   } catch (e) {
@@ -941,12 +942,28 @@ async function sendText() {
   addBubble("user", text);
   await runTurn(() => api("/api/chat", { session_id: SID, message: text }));
 }
+// 1000 = MAX_TTS_CHARS in server.py. Cut at the last sentence (or word)
+// boundary so the voice never stops mid-word.
+function speakable(text, max = 1000) {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("? "), cut.lastIndexOf("! "),
+                       cut.lastIndexOf("। "));
+  return end > max / 2 ? cut.slice(0, end + 1) : cut.slice(0, cut.lastIndexOf(" ")) || cut;
+}
+let voiceWarned = false;   // one note per test call, never a stream of them
 async function speak(text) {
   try {
     const res = await fetch("/api/tts", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }),
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: SID, text: speakable(text) }),
     });
-    if (res.ok) new Audio(URL.createObjectURL(await res.blob())).play();
+    if (res.ok) { new Audio(URL.createObjectURL(await res.blob())).play(); return; }
+    if (!voiceWarned) {
+      voiceWarned = true;
+      addBubble("note", "🔇 Voice reply unavailable" +
+        (res.status === 404 ? " — this test call expired; start a new one." : "."));
+    }
   } catch (e) { /* voice output must never break the chat */ }
 }
 
@@ -1144,6 +1161,12 @@ $("createBtn").onclick = createBusiness;
 $("testBtn").onclick = () => { if (CLIENT) openTest(); };
 $("closeTest").onclick = closeTest;
 $("sendBtn").onclick = sendText;
+// maxlength silently drops the end of a long paste — say so (2000 = MAX_CHAT_CHARS).
+$("msgInput").addEventListener("paste", e => {
+  const pasted = (e.clipboardData || window.clipboardData).getData("text") || "";
+  if ($("msgInput").value.length + pasted.length > 2000)
+    addBubble("note", "✂ Message cut to 2000 characters — that's the limit for one turn.");
+});
 $("msgInput").addEventListener("keydown", e => { if (e.key === "Enter") sendText(); });
 $("micBtn").onclick = toggleMic;
 

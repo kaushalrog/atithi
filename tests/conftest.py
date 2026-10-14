@@ -6,11 +6,15 @@ the proof of architecture principle 6 — because the agent only knows the
 neutral message format, ANY provider fits behind the seam, including a fake.
 """
 
-import datetime as dt
+import os
 import sys
 from pathlib import Path
 
 import pytest
+
+# Test mode BEFORE importing storage: the Sheets copy is off and any write to
+# the repo's real data files raises (storage._guard_write). Fail closed.
+os.environ["VOXAGENT_ENV"] = "test"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -21,10 +25,11 @@ import storage  # noqa: E402
 @pytest.fixture
 def tmp_storage(tmp_path, monkeypatch):
     """Point every persistence path at a fresh temp folder."""
+    monkeypatch.setattr(storage, "BOOKINGS_DB", tmp_path / "bookings.db")
     monkeypatch.setattr(storage, "BOOKINGS_CSV", tmp_path / "bookings.csv")
     monkeypatch.setattr(storage, "LEADS_CSV", tmp_path / "leads.csv")
     monkeypatch.setattr(storage, "CALLS_DIR", tmp_path / "calls")
-    monkeypatch.setenv("SHEET_ID", "")  # force the CSV fallback
+    monkeypatch.setenv("SHEET_ID", "")  # belt and braces: test mode already disables Sheets
     # Caches are keyed by path, but a temp file can reuse a path from an
     # earlier test — start every test from a cold cache.
     storage.clear_caches()

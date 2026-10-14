@@ -65,6 +65,15 @@ def _api_key() -> str:
     return key
 
 
+def _timeout_ms() -> int:
+    """Per-request ceiling, GEMINI_TIMEOUT_S in .env (default 30 s)."""
+    try:
+        seconds = float(os.getenv("GEMINI_TIMEOUT_S", "30"))
+    except ValueError:
+        seconds = 30.0
+    return int(max(1.0, seconds) * 1000)
+
+
 def shared_client() -> genai.Client:
     key = _api_key()
     client = _clients.get(key)
@@ -72,7 +81,12 @@ def shared_client() -> genai.Client:
         with _clients_lock:
             client = _clients.get(key)          # another thread may have won
             if client is None:
-                client = genai.Client(api_key=key)
+                client = genai.Client(
+                    api_key=key,
+                    # Without a timeout a stalled request hung the caller's turn
+                    # forever (audit M6). google-genai takes milliseconds.
+                    http_options=types.HttpOptions(timeout=_timeout_ms()),
+                )
                 _clients[key] = client
     return client
 
