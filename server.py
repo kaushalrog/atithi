@@ -93,8 +93,12 @@ def _warm_up():
     if problem:
         print(f"  [admin] admin console disabled: {problem}")
     # Seed (and, if needed, take back) the admin account now, not on the
-    # first login — so a signup can't race the owner for ADMIN_EMAIL.
-    auth.ensure_admin_seed()
+    # first login — so a signup can't race the owner for ADMIN_EMAIL. A
+    # failure is logged, never fatal: the portal must still come up.
+    try:
+        auth.ensure_admin_seed()
+    except Exception as e:
+        print(f"  [admin] could not seed the admin account: {type(e).__name__}: {e}")
     paused = storage.bookings_paused_reason()
     if paused:
         print(f"  [bookings] NEW BOOKINGS ARE PAUSED: {paused}")

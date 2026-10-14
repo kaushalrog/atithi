@@ -556,3 +556,31 @@ def test_outbound_refused_while_slots_are_reserved_by_pending_tickets(phone, mon
     with pytest.raises(RuntimeError, match="call slots"):
         telephony.start_outbound_call("demo_clinic", "+919876543210")
     assert dialled == []
+
+
+# ---- review cycle 3 (in-session review) -------------------------------------------
+
+def test_dialled_customer_keeps_a_slot_while_ringing(phone, monkeypatch):
+    """Cycle 3: no slot was held while an outbound call rang, so inbound calls
+    could fill the lines and the answered call was then dropped at the stream."""
+    monkeypatch.setenv("MAX_CONCURRENT_CALLS", "1")
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC1")
+    monkeypatch.setenv("TWILIO_NUMBER", "+15550001111")
+
+    class FakeCalls:
+        def create(self, **kw):
+            return type("Call", (), {"sid": "CAOUT"})()
+
+    class FakeTwilio:
+        def __init__(self, *a):
+            self.calls = FakeCalls()
+    import twilio.rest
+    monkeypatch.setattr(twilio.rest, "Client", FakeTwilio)
+    assert telephony.start_outbound_call("demo_clinic", "+919876543210") == "CAOUT"
+    inbound = post_voice(phone["client"], {"To": "+1", "From": "+2", "CallSid": "CAIN"})
+    assert "busy" in inbound.text                       # the line is promised
+    answered = post_voice(phone["client"], {"To": "+919876543210", "From": "+15550001111",
+                                            "CallSid": "CAOUT", "Direction": "outbound-api"},
+                          query="?client_id=demo_clinic")
+    assert stream(phone["client"], ticket_from_twiml(answered.text), call_sid="CAOUT") == 1000
+    assert SpyLive.created and telephony._calls_in_flight() == 0

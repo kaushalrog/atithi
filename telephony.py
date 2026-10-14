@@ -128,6 +128,9 @@ _pending_tickets: dict[str, float] = {}   # call_sid -> reservation expiry
 # TwiML, so a stream that never arrives (caller hung up, rejected before its
 # 'start' message) gives its slot back after 30 s, not the ticket's 2 minutes.
 PENDING_SLOT_S = 30
+# An outbound call holds its slot from dialling until answered (Twilio rings
+# for up to ~30 s by default), so inbound calls can't take the line meanwhile.
+OUTBOUND_RING_S = 60
 # The table is also touched from a worker thread (outbound calls run in
 # FastAPI's thread pool), so every access holds this lock.
 _slots_lock = threading.Lock()
@@ -545,6 +548,7 @@ def start_outbound_call(client_id: str, to_number: str) -> str:
         url=f"{cfg['public_url']}/twilio/voice?client_id={quote(client_id)}",
         method="POST",
     )
+    _reserve_slot(call.sid, time.time() + OUTBOUND_RING_S)
     return call.sid
 
 
