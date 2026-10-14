@@ -500,7 +500,13 @@ def _mirror_to_google_sheet(row: list) -> bool:
         return False
 
 
-def _sheets_target() -> tuple[str, str] | None:
+def sheets_usable() -> bool:
+    """Is a Google Sheet configured AND its credentials file present? (For
+    /admin's status row — quiet, because the dashboard polls it.)"""
+    return _sheets_target(quiet=True) is not None
+
+
+def _sheets_target(quiet: bool = False) -> tuple[str, str] | None:
     """(credentials path, sheet id) when a Google Sheet is configured and
     usable; None otherwise. Always None in test mode, whatever SHEET_ID says."""
     if in_test_mode():
@@ -512,7 +518,8 @@ def _sheets_target() -> tuple[str, str] | None:
     if not Path(creds_path).is_absolute():
         creds_path = str(BASE_DIR / creds_path)
     if not os.path.exists(creds_path):
-        print(f"  [warning] {creds_path} not found — Google Sheet not used.")
+        if not quiet:
+            print(f"  [warning] {creds_path} not found — Google Sheet not used.")
         return None
     return creds_path, sheet_id
 
@@ -711,8 +718,12 @@ def _read_csv(path: Path) -> list[dict]:
         return list(csv.DictReader(f))
 
 
-if __name__ == "__main__":
+def main(argv=None) -> int:
+    """`python storage.py export-csv PATH [--force]` / `import-sheet [--skip]`.
+    Expected problems (no credentials, file exists) print one clear line and
+    exit 1 — an operator command shouldn't answer with a Python traceback."""
     import argparse
+    import sys
 
     parser = argparse.ArgumentParser(description="VoxAgent storage tools")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -724,9 +735,19 @@ if __name__ == "__main__":
                            help="one-time import of bookings from the configured Google Sheet")
     sheet.add_argument("--skip", action="store_true",
                        help="record that the Sheet has no bookings to import")
-    args = parser.parse_args()
-    if args.cmd == "export-csv":
-        print(f"exported {export_bookings_csv(args.path, force=args.force)} booking(s) to {args.path}")
-    elif args.cmd == "import-sheet":
-        import_sheet(skip=args.skip)
-        print("Sheet import " + ("skipped" if args.skip else "done") + "; new bookings are open.")
+    args = parser.parse_args(argv)
+    try:
+        if args.cmd == "export-csv":
+            count = export_bookings_csv(args.path, force=args.force)
+            print(f"exported {count} booking(s) to {args.path}")
+        elif args.cmd == "import-sheet":
+            import_sheet(skip=args.skip)
+            print("Sheet import " + ("skipped" if args.skip else "done") + "; new bookings are open.")
+    except (RuntimeError, FileExistsError, OSError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -400,7 +400,8 @@ def admin_overview():
                 # Why new bookings are paused (D5: Sheet not imported yet, or a
                 # broken bookings.csv), or null. Shown as its own status row.
                 "bookings_paused": storage.bookings_paused_reason(),
-                "sheets": bool(os.getenv("SHEET_ID")),
+                # Green only when the Sheet can actually be used (credentials present).
+                "sheets": storage.sheets_usable(),
             }}
 
 

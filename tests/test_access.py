@@ -211,6 +211,7 @@ def test_admin_console_reports_live_calls_switch(client, monkeypatch):
     assert data["status"]["live_calls"] is False
     assert data["status"]["twilio_keys"] is True          # keys present: "off by design"
     assert data["status"]["bookings_paused"] is None
+    assert data["status"]["sheets"] is False               # no SHEET_ID / credentials
     monkeypatch.setenv("ENABLE_LIVE_CALLS", "true")
     data = client.get("/api/admin/overview", headers={"X-Admin-Key": "test-admin-pw"}).json()
     assert data["twilio_configured"] is True

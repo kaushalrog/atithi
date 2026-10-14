@@ -408,3 +408,24 @@ def test_legacy_dates_are_stored_in_canonical_form(tmp_storage):
     write_legacy_csv([["t", "clinic_a", "Ravi", "9876543210", "Cleaning",
                        compact, "09:30", "confirmed"]])
     assert storage.booked_pairs("clinic_a") == {(FUTURE, "09:30")}
+
+
+# ---- QA findings (browser QA of the hardened branch) -----------------------------
+
+def test_storage_cli_reports_errors_without_a_traceback(sheets_on, monkeypatch, capsys):
+    """QA: `python storage.py import-sheet` without credentials printed a raw
+    Python traceback; an operator command should say what to fix."""
+    sheets_on(SheetWithHistory(), imported=False)
+    monkeypatch.setenv("GOOGLE_SHEETS_CREDENTIALS_PATH", "/nonexistent/credentials.json")
+    assert storage.main(["import-sheet"]) == 1
+    out = capsys.readouterr()
+    assert "Error:" in out.err and "credentials" in out.err and "Traceback" not in out.err
+    assert storage.main(["import-sheet", "--skip"]) == 0
+
+
+def test_sheets_usable_requires_the_credentials_file(sheets_on, monkeypatch):
+    """QA: /admin showed Google Sheets green with SHEET_ID set but no credentials."""
+    sheets_on(SheetWithHistory())
+    assert storage.sheets_usable() is True
+    monkeypatch.setenv("GOOGLE_SHEETS_CREDENTIALS_PATH", "/nonexistent/credentials.json")
+    assert storage.sheets_usable() is False
