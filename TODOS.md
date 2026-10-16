@@ -121,3 +121,17 @@
 **Effort:** M
 **Priority:** P3
 **Depends on:** A builder request.
+
+## voxcheck build gate (CEO re-review D2, 2026-10-17)
+
+### Build voxcheck (Lane B: E4, E5, E6, E8) once outreach is sent
+
+**What:** Implement the voxcheck checker exactly as approved in `docs/IMPLEMENTATION_PLAN.md` (eng review D2, D5, D6): `inputs.py`, `checks.py`, `outputs.py`, `__main__.py`, the fixtures, and the recall and false-positive suite.
+
+**Why:** The design's Sequencing step 1 puts outreach before checker code. The checker is the speculative half of the bet, and builder answers should shape it. Lane A (receptionist traces, M2) is built regardless.
+
+**Context:** The design is fully approved; only the start is gated. **Trigger:** the founder confirms the 10 Assignment messages were sent. Then E9's README and end-to-end parts follow.
+
+**Effort:** L (human ~3 days / CC ~2.5 hrs)
+**Priority:** P1 once triggered
+**Depends on:** Founder sends the Assignment messages; Lane A landed (E1, E3 provide real traces).

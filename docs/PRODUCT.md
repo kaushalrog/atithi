@@ -53,6 +53,8 @@ All targets, none of them results yet. Definitions are in `docs/METRICS.md`.
 
 ## Demand test and kill rule
 
+**Day 1 is the date the founder sends the 10 Assignment messages** (CEO re-review D3, 2026-10-17). Real dates are written here that day. The same event unlocks the checker build (D2); receptionist trace work (Lane A) proceeds now.
+
 1. **Day 1:** send one question to at least 10 builders (all contacted by day 3):
 
    > "In the last month, did your agent tell a caller something was booked or done that wasn't? How did you find out?"

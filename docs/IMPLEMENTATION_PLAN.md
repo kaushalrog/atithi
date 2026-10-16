@@ -516,18 +516,185 @@ None in this review.
 - **Parallelization:** 2 lanes, 2 parallel / 1 sequential merge step (E9).
 - **Lake Score:** 2/2 (D7 and D8 were coverage-scored; both picked the 10/10 option).
 
+## CEO re-review (2026-10-17)
+
+/plan-ceo-review, run again at the founder's request (eng-review D9). The working plan is this file, and the reviewed inputs are unchanged since the eng review (`4970b4a`). Depth: strategy and scope. The eng review already settled the implementation design.
+
+### Pre-review audit
+
+- Since the first CEO review (`860f438`), only docs have changed: the routing rules in CLAUDE.md (`5e74e56`) and the eng-review docs (`4970b4a`). No code changed, there are no stashes, and `AGENTS.md` is still untracked (not ours).
+- **Active decisions honoured, none reopened:**
+  - CEO REDUCTION (check 5, 2b and redact deferred; compare kept; traces subfolder)
+  - eng D2–D8 (4 modules, run_tool, per-turn buffer, guarded off-loop finish, pydantic, voxcheck)
+- **Landscape:** reused the 2026-10-14 searches (3 days old, `docs/COMPETITIVE_ANALYSIS.md`). No new search was run; nothing in scope depends on fresher market data.
+
+### 0A. Premise challenge (what changed since the first CEO review)
+
+- **The plan now costs about 5 human-days / about 4 CC-hours (E1–E9).** That's ~19 changed files, including 6 test files and a fixture folder.
+- **The demand clock has no real dates.**
+  - The design says "Day 1: send the Assignment messages before writing checker code" (design doc, Sequencing step 1). Day 3 means 10 builders contacted; day 10 is the checkpoint.
+  - None of these days is anchored to a calendar date.
+  - The design was approved on 2026-10-14. If that was day 1, day 3 (2026-10-16) has already passed.
+  - Nothing in the repo shows whether any message was sent. That is the founder's action, and I can't see it.
+- **The two lanes have different value:**
+  - **Lane A** (E1, E2, E3, E7: receptionist traces, the M2 fix, the hang-up guard) pays off whether or not demand exists.
+  - **Lane B** (E4, E5, E6, E8: the voxcheck checker) is the speculative bet. The design gates it behind the outreach.
+- **Do-nothing cost:** building Lane B before any builder has been asked risks exactly the "solution in search of a problem" pattern that office hours warned about. Waiting to build Lane A only delays the M2 fix.
+
+### 0B. Existing code leverage
+
+No change from the eng review's "What already exists" (storage.py:566 single logging point, agent.py:209-226 history, FakeLLM/FakeLive). Reality rows:
+
+| Premise | Claim | Receipt | Verdict |
+|---|---|---|---|
+| C1 | Sequencing requires outreach before checker code | docs/designs/claim-vs-records-checker.md "Sequencing" step 1 | verified |
+| C2 | Day 1 is not anchored to a date | same section; design header "Generated … on 2026-10-14" | verified |
+| C3 | Outreach has been sent | none in repo | unverified (founder action) |
+| C4 | Lane A pays off independent of demand | audit M2 (docs/AUDIT.md:178); TODOS "Compute call metrics…" | verified |
+
+`unverified=1`
+
+```
+REALITY: premise-table finding unverified=1 (C3 outreach sent?); demand clock not dated docs/designs/claim-vs-records-checker.md:164
+REALITY: already-done pass no code since 7333c4b; only docs commits 5e74e56 4970b4a 4970b4a
+REALITY: surface-check pass voxcheck CLI is planned, not existing; storage.py main() unchanged storage.py:721
+REALITY: binding-decisions pass CEO D2-D7 and eng D2-D8 honoured; none reintroduced docs/IMPLEMENTATION_PLAN.md:114
+REALITY: numbers finding E1-E9 effort ~5 human-days / ~4 CC-hours [estimated]; 19 files [estimated] docs/IMPLEMENTATION_PLAN.md:420
+REALITY: deferred-asks pass deferrals unchanged (TODOS) TODOS.md:1
+REALITY: pr-count pass one local branch, no remote 4970b4a
+```
+
+### 0C. Dream state
+
+Unchanged from the first CEO review. This plan moves toward it **if** Lane B is built against real builder answers rather than in a vacuum.
+
+### 0D. Approach
+
+The approach is settled (office-hours D3, CEO D2–D7, eng D2–D8). No new approach decision is needed.
+
+### Decision ledger (re-review)
+
+| ID and owner | Contract and evidence | Current | Proposed | Status | Exact approval and scope |
+|---|---|---|---|---|---|
+| MODE2 (Sai) | 0E | none | SCOPE REDUCTION | approved | D1 answer 2026-10-17: "SCOPE REDUCTION (recommended)"; mode only |
+| CUT-B Lane B timing (Sai) | design Sequencing step 1 (outreach before checker code); C3 unverified | Lane B gated on outreach (TODOS.md) | — | deferred | D2 answer 2026-10-17: "Defer to TODOS.md (recommended)"; Lane B (E4, E5, E6, E8) starts when the founder confirms the Assignment messages were sent; Lane A and its approvals unchanged; E9 splits (bench with Lane A, README/end-to-end after Lane B) |
+
+#### Answered: CUT-B (D2)
+Commitment comparison:
+Commitment | Source/approval or pending | Current | A Defer | B Keep
+Lane A (E1, E2, E3, E7) | eng D3, D4, D7, D8 | build now | build now (unchanged) | build now
+Lane B (E4, E5, E6, E8) | eng D2, D5, D6 | build now | starts once the founder confirms the Assignment messages went out; TODOS entry with that trigger | build now
+E9 (bench, README, end-to-end) | eng plan | after both lanes | bench part with Lane A; README/end-to-end after Lane B | after both lanes
+Design approvals for Lane B | eng D2–D6 | approved | still approved, only timing changes | approved
+
+Question: D2 — CUT-B: Should the checker lane wait until the builder messages are sent?
+Header: Checker timing
+A) Defer to TODOS.md (recommended)
+Effort S (zero implementation now), risk low. Build Lane A now. Lane B (voxcheck: E4, E5, E6, E8) starts the day you confirm the 10 Assignment messages went out, as your own design's Sequencing step 1 says. Its design stays approved; only the start is gated.
+B) Keep it in scope
+Effort L, risk medium. Build both lanes now. Pros: the checker exists sooner and can be shown to the first builder who replies. Con: about 3 days of human-equivalent work before anyone has answered the one question.
+
+### Review sections (re-review)
+
+**Current scope:**
+- Mode: SCOPE REDUCTION (D1).
+- Lane A approved and built now: E1, E2, E3, E7, plus E9's bench part.
+- Lane B deferred until outreach (D2): E4, E5, E6, E8, plus E9's README/end-to-end part.
+- Prior approvals unchanged: CEO D2–D7, eng D2–D8.
+
+#### Section 1: Architecture
+
+Unchanged from the eng review (see Review sections §1 above). Gating Lane B creates no coupling problem, because Lane A has no dependency on voxcheck: traces are just files until Lane B reads them.
+
+- **[P2] (confidence 9/10) Strategy: the demand clock has no dates** (design Sequencing; PRODUCT.md "Demand test and kill rule"). The kill rule can't fire on "day 10" if day 1 is undefined.
+
+#### Answered: CLOCK (D3)
+Commitment comparison:
+Commitment | Source/approval or pending | Current | A Clock starts at send | B Clock started at approval
+Day 1 | design Sequencing (undated) | undefined | the date the founder confirms the 10 messages were sent (same event that unlocks Lane B, D2) | 2026-10-14 (design approval)
+Day 3 / 10 / 14 / 17 / 21 / 28 | design Success Criteria | relative, undated | relative to that send date; written into PRODUCT.md and the design when it happens | 2026-10-16 / -23 / -27 / -30 / 11-03 / 11-10
+Outreach before checker code | design Sequencing step 1; D2 | gated | unchanged | unchanged
+Kill-rule branches | approved | unchanged | unchanged | unchanged
+
+Question: D3 — CLOCK: When does day 1 of the demand test start?
+Header: Day 1
+A) The day messages are sent (recommended)
+Effort S (doc edit only), risk low. Day 1 = the date you confirm the 10 Assignment messages went out; I write the real dates for day 3, 10, 14 and the extensions into PRODUCT.md and the design that day. Matches D2: one event starts both the clock and Lane B.
+B) Already started on 2026-10-14
+Effort S (doc edit only), risk medium. Day 1 = design approval date: day 3 was 2026-10-16 (already missed), day 10 is 2026-10-23. Keeps pressure high, but the first deadline is already blown.
+
+
+CLOCK answer: D3 2026-10-17, "The day messages are sent (recommended)". Day 1 is the date the founder confirms the 10 Assignment messages were sent. That same event unlocks Lane B (D2). Real dates for days 3, 10 and 14 and the extension windows are written into PRODUCT.md and the design doc on that day. PRODUCT.md is amended now to state the rule.
+
+#### Sections 2–10 (re-review)
+
+- **2. Error & rescue:** unchanged from the eng review's Failure modes table. Lane A's rows (run_tool, per-turn buffer, trace write, hang-up save) all have tests and handling. Lane B's rows move with Lane B. No new gaps.
+- **3. Security:** no new surface. Lane A adds trace files under the gitignored `calls/`, and phones in traces are the business's own data (the existing M11 retention TODO applies). No issues found.
+- **4. Data flow & edge cases:** a new edge from D2. Lane A ships traces before any reader exists, so **trace_version 1 is frozen before voxcheck is written**. A field voxcheck later needs would force a version bump. Mitigation: the trace schema is already fully specified in docs/ARCHITECTURE.md §3, and Lane B must read v1 as written. No new choice is needed.
+- **5. Code quality:** no change (eng D2–D4 govern).
+- **6. Tests:** Lane A's required tests are unchanged (eng §3: test_agent, test_telephony, test_storage, test_dashboard). Without voxcheck, the end-to-end proof for Lane A becomes "a FakeLive phone booking writes a trace whose actions and snapshot match the booking". That's already a listed critical path in the test plan artifact. No gap.
+- **7. Performance:** E9's bench part ships with Lane A (`run_tool`, `log_call_from_agent` with a trace, under 5 ms). No change.
+- **8. Observability:** Lane A logs trace-write and hang-up failures with call id and exception class. **Observable success:** the count of trace files equals the call count for new calls. Spot-check it during Lane A QA. No new gaps.
+- **9. Deployment:** local only. Lane A lands as its own commit series on a branch from `phase-1/product`, and Lane B later on another. Rollback is a revert. No change.
+- **10. Long-term trajectory:** reversibility 5/5. The new debt item is the schema freeze above (documented). D3 ties the product timeline to a real event.
+- **11. Design:** SKIPPED (no UI scope).
+
+**Outside voice:** Codex not installed; native fallback unavailable in this session. Coverage unavailable.
+
+**Remaining TODO choices:** none. The D2 Lane B gate is already in TODOS.md.
+
+Approval readiness: PASS (re-review: MODE2 D1, CUT-B D2, CLOCK D3; prior: CEO D2–D7, eng D2–D8)
+
+#### Re-review completion summary
+
+```
+  +====================================================================+
+  |            MEGA PLAN REVIEW — COMPLETION SUMMARY (re-review)       |
+  +====================================================================+
+  | Mode selected        | SCOPE REDUCTION                             |
+  | System Audit         | docs-only changes since first CEO review;   |
+  |                      | demand clock undated; outreach unverified   |
+  | Step 0               | Lane B gated on outreach (D2)               |
+  | Section 1  (Arch)    | 1 issue found (CLOCK, decided D3)           |
+  | Section 2  (Errors)  | 0 new paths, 0 GAPS                         |
+  | Section 3  (Security)| 0 issues found                              |
+  | Section 4  (Data/UX) | 1 edge mapped (schema freeze), 0 unhandled  |
+  | Section 5  (Quality) | 0 issues found                              |
+  | Section 6  (Tests)   | Lane A diagram reused, 0 gaps               |
+  | Section 7  (Perf)    | 0 issues found                              |
+  | Section 8  (Observ)  | 0 gaps found                                |
+  | Section 9  (Deploy)  | 0 risks flagged                             |
+  | Section 10 (Future)  | Reversibility: 5/5, debt items: 1           |
+  | Section 11 (Design)  | SKIPPED (no UI scope)                       |
+  +--------------------------------------------------------------------+
+  | NOT in scope         | Lane B until outreach (D2)                  |
+  | What already exists  | unchanged (eng review)                      |
+  | Dream state delta    | unchanged; Lane B now tied to builder input |
+  | Error/rescue registry| Lane A: 4 rows, 0 CRITICAL GAPS             |
+  | Failure modes        | 7 total (eng), 0 CRITICAL GAPS              |
+  | TODOS.md updates     | 1 item (Lane B gate)                        |
+  | Scope proposals      | 0 proposed, 0 accepted (REDUCTION)          |
+  | CEO plan             | skipped by mode                             |
+  | Outside voice        | codex: unavailable (not installed)          |
+  | Lake Score           | N/A (no coverage-scored questions)          |
+  | Diagrams produced    | 0 new (eng diagrams still accurate)         |
+  | Stale diagrams found | 0                                           |
+  | Unresolved decisions | 0                                           |
+  | Reality rows         | 7/7 rows, 1 unverified (C3)                 |
+  +====================================================================+
+```
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
-| CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | ISSUES OPEN | mode: SCOPE_REDUCTION, 0 critical gaps |
-| Outside Review | codex (auto, plan-review) | Independent 2nd opinion | 2 | unavailable | Codex not installed; no completed external review |
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 2 | ISSUES OPEN | mode: SCOPE_REDUCTION, 0 critical gaps (re-review: Lane B gated on outreach, demand clock dated) |
+| Outside Review | codex (auto, plan-review) | Independent 2nd opinion | 3 | unavailable | Codex not installed; no completed external review |
 | Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | ISSUES OPEN | 32 issues, 0 critical gaps |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
 
-- **OUTSIDE COVERAGE:** codex, plan-review (CEO and Eng), unavailable both times (CLI not installed; native fallback unavailable). No findings.
-- **VERDICT:** no review CLEAR. The Eng review status is ISSUES OPEN because its 32 issues are mapped work: 28 are the test gaps of not-yet-written code, and 0 decisions are unresolved. The CEO review's 3 logged open items (P-1, P-2, P-3) were decided in this review (D5, D6, D8); its log entry predates that. Eng review required: re-run, or treat this plan as ready to implement once tasks E1–E9 land with tests.
+- **OUTSIDE COVERAGE:** codex, plan-review (CEO ×2, Eng ×1), unavailable every time (CLI not installed; native fallback unavailable). No findings.
+- **VERDICT:** no review CLEAR. The CEO re-review has 0 unresolved decisions and 0 critical gaps. Its status is ISSUES OPEN only because of mapped work: Lane B is deferred until outreach, and the clock is dated on send. Eng status ISSUES OPEN is the mapped E1–E9 work (28 test gaps for unwritten code) with 0 unresolved decisions. The first CEO review's 3 logged open items were decided in the eng review (D5, D6, D8). Lane A (E1, E2, E3, E7, plus the E9 bench part) is ready to implement. Lane B waits for outreach. Eng review required.
 
-**UNRESOLVED DECISIONS:**
-- + 3 unresolved from prior reviews
+NO UNRESOLVED DECISIONS
