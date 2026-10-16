@@ -429,3 +429,84 @@ def test_sheets_usable_requires_the_credentials_file(sheets_on, monkeypatch):
     assert storage.sheets_usable() is True
     monkeypatch.setenv("GOOGLE_SHEETS_CREDENTIALS_PATH", "/nonexistent/credentials.json")
     assert storage.sheets_usable() is False
+
+
+# ---- call traces (eng review E3, D7) --------------------------------------------------
+
+import json  # noqa: E402
+
+from agent import ReceptionistAgent  # noqa: E402
+from conftest import open_day, open_times  # noqa: E402
+
+
+def booked_conversation(fake_llm, name="Ravi", phone="+91 98765 43210"):
+    date = open_day()
+    slot = open_times(date=date)[0]
+    agent = ReceptionistAgent("demo_clinic", llm=fake_llm([
+        {"text": None, "tool_calls": [{"name": "check_availability", "args": {"date": date}}]},
+        {"text": f"{slot} is free.", "tool_calls": []},
+        {"text": None, "tool_calls": [{"name": "book_appointment", "args": {
+            "customer_name": name, "phone": phone, "service": "Cleaning",
+            "date": date, "time": slot}}]},
+        {"text": "You're booked!", "tool_calls": []},
+    ]))
+    agent.chat("any slots?")
+    agent.chat("book the first one")
+    return agent, date, slot
+
+
+def read_trace(call_id="c1"):
+    return json.loads((storage.CALLS_DIR / "demo_clinic" / "traces" / f"{call_id}.json").read_text())
+
+
+def test_trace_records_turns_actions_and_the_booking_snapshot(tmp_storage, fake_llm):
+    agent, date, slot = booked_conversation(fake_llm)
+    storage.save_lead("demo_clinic", "Ravi", "9876543210", "whitening", "")
+    storage.log_call_from_agent(agent, "web-test", dt.datetime.now(), call_id="c1")
+
+    trace = read_trace()
+    assert trace["trace_version"] == 1 and trace["timezone"] == "Asia/Kolkata"
+    assert dt.datetime.fromisoformat(trace["started_at"]).utcoffset() is not None
+    assert [t["speaker"] for t in trace["turns"]] == ["caller", "agent", "caller", "agent"]
+    book = trace["actions"][1]
+    assert (book["type"], book["ok"], book["args"]["time"]) == ("book", True, slot)
+    # The booking belongs to the agent turn that announces it ("You're booked!").
+    assert trace["turns"][book["turn_index"]]["text"] == "You're booked!"
+    kinds = [(r["kind"], r["date"] if r["kind"] == "booking" else r["phone"])
+             for r in trace["records_snapshot"]]
+    assert ("booking", date) in kinds and ("lead", "9876543210") in kinds
+
+
+def test_failed_booking_is_recorded_as_not_ok(tmp_storage, fake_llm):
+    agent = ReceptionistAgent("demo_clinic", llm=fake_llm([
+        {"text": None, "tool_calls": [{"name": "book_appointment", "args": {
+            "customer_name": "A", "phone": "123", "service": "x", "date": open_day(),
+            "time": "03:00"}}]},
+        {"text": "That slot is taken.", "tool_calls": []},
+    ]))
+    agent.chat("book 3am")
+    storage.log_call_from_agent(agent, "web-test", dt.datetime.now(), call_id="c1")
+    action = read_trace()["actions"][0]
+    assert action["type"] == "book" and action["ok"] is False
+    assert read_trace()["records_snapshot"] == []
+
+
+def test_traces_do_not_count_as_calls_or_reach_the_dashboard(tmp_storage, fake_llm):
+    """Eng review D7: read_call_logs treats every *.json in the folder as a
+    call, and the dashboard ships call records to the browser."""
+    agent, _, _ = booked_conversation(fake_llm)
+    storage.log_call_from_agent(agent, "web-test", dt.datetime.now(), call_id="c1")
+    calls = storage.read_call_logs("demo_clinic")
+    assert len(calls) == 1
+    assert "actions" not in calls[0] and "records_snapshot" not in calls[0]
+
+
+def test_a_trace_failure_never_costs_the_call_record(tmp_storage, fake_llm, monkeypatch, capsys):
+    agent, _, _ = booked_conversation(fake_llm)
+
+    def broken(*a, **k):
+        raise RuntimeError("bug in trace builder")
+    monkeypatch.setattr(storage, "_write_trace", broken)
+    storage.log_call_from_agent(agent, "web-test", dt.datetime.now(), call_id="c1")
+    assert len(storage.read_call_logs("demo_clinic")) == 1
+    assert "trace for call c1 not written: RuntimeError" in capsys.readouterr().out

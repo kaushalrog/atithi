@@ -67,7 +67,7 @@ from starlette.websockets import WebSocketState
 
 import billing
 import storage
-from agent import TOOL_SCHEMAS, ReceptionistAgent
+from agent import TOOL_SCHEMAS, ReceptionistAgent, TurnRecorder
 
 router = APIRouter()
 
@@ -265,8 +265,7 @@ class TwilioBridge:
         self.converter = AudioConverter()
         self.stream_sid = None
         self.started = dt.datetime.now()
-        self._user_line = ""
-        self._agent_line = ""
+        self.turn = TurnRecorder(agent)
 
     async def handle_twilio(self, msg: dict) -> bool:
         """One message from Twilio. Returns False when the call has ended."""
@@ -298,34 +297,22 @@ class TwilioBridge:
                 # Caller barged in: tell Twilio to drop buffered agent audio NOW.
                 await self.send_json({"event": "clear", "streamSid": self.stream_sid})
             elif kind == "tool_calls":
-                results = []
-                for call in event["calls"]:
-                    try:
-                        result = self.agent._execute_tool(call["name"], call["args"])
-                    except Exception as e:
-                        result = {"error": f"{type(e).__name__}: {e}"}
-                    results.append({"id": call["id"], "name": call["name"], "result": result})
-                await self.live.send_tool_results(results)
+                await self.live.send_tool_results(self.turn.tool_calls(event["calls"]))
             elif kind == "user_text":
-                self._user_line += event["text"]
+                self.turn.user_text(event["text"])
             elif kind == "agent_text":
-                self._agent_line += event["text"]
+                self.turn.agent_text(event["text"])
             elif kind == "turn_complete":
-                self._flush_turn()
-
-    def _flush_turn(self):
-        if self._user_line.strip():
-            self.agent.history.append({"role": "user", "text": self._user_line.strip()})
-        if self._agent_line.strip():
-            self.agent.history.append({"role": "assistant", "text": self._agent_line.strip()})
-        self._user_line = self._agent_line = ""
+                self.turn.flush()
 
     def finish(self):
-        """Call ended: flush any half-turn and log it like every other channel."""
-        self._flush_turn()
-        if self.caller and self.agent.history:
-            self.agent.history.insert(0, {"role": "user", "text": f"[caller id: {self.caller}]"})
-        storage.log_call_from_agent(self.agent, "phone", self.started)
+        """Call ended: flush any half-turn and log it like every other channel.
+
+        The caller's number is call metadata, not something the caller said:
+        it used to be inserted as a customer turn, which inflated the turn
+        count and shifted every turn after it (audit M2)."""
+        self.turn.flush()
+        storage.log_call_from_agent(self.agent, "phone", self.started, caller=self.caller)
 
 
 # ---- HTTP: the webhook Twilio hits when a call starts -------------------------------
@@ -502,7 +489,13 @@ async def twilio_stream(ws: WebSocket):
             except Exception:
                 pass
         if bridge is not None:
-            bridge.finish()
+            # Saving the call log reads the database and writes files: do it
+            # on a worker thread so other live calls never stall, and never
+            # let a failure here skip closing the socket below.
+            try:
+                await asyncio.to_thread(bridge.finish)
+            except Exception as e:
+                print(f"  (call {params.get('call_sid', '?')}: call log not saved: {type(e).__name__}: {e})")
         # Hang up our side too: a finished or failed call must never leave a
         # half-open socket (Twilio closes after "stop"; anything else may not).
         if ws.client_state == WebSocketState.CONNECTED:

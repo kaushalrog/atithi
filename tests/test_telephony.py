@@ -14,6 +14,7 @@ import yaml
 
 import storage
 import telephony
+from conftest import open_day, open_times
 from telephony import AudioConverter, TwilioBridge, resolve_client
 from agent import ReceptionistAgent
 
@@ -120,7 +121,6 @@ def test_bridge_start_and_media(tmp_storage, fake_llm):
 
 
 def test_bridge_pumps_audio_interruption_tools_and_history(tmp_storage, fake_llm):
-    from conftest import open_day, open_times
     date = open_day()
     live = FakeLive(events=[
         {"type": "audio", "data": make_tone_pcm(24000, 60)},
@@ -140,13 +140,38 @@ def test_bridge_pumps_audio_interruption_tools_and_history(tmp_storage, fake_llm
     assert events == ["media", "clear"]
     assert live.tool_results and live.tool_results[0][0]["name"] == "check_availability"
     assert live.tool_results[0][0]["result"]["available_slots"] == open_times(date=date)
+    # The tool ran mid-turn but is recorded between the caller's question and
+    # the agent's answer; phone calls used to drop it entirely (audit M2).
     roles = [m["role"] for m in bridge.agent.history]
-    assert roles == ["user", "assistant"]
+    assert roles == ["user", "assistant", "tool", "assistant"]
+    assert bridge.agent.history[1]["tool_calls"][0]["name"] == "check_availability"
 
     bridge.finish()
     logs = storage.read_call_logs("demo_clinic")
     assert len(logs) == 1 and logs[0]["channel"] == "phone"
     assert "+919876543210" in logs[0]["transcript"]  # caller id preserved
+    # ...as metadata: it is not a customer turn any more (audit M2).
+    assert logs[0]["caller"] == "+919876543210" and logs[0]["turns"] == 1
+    assert all("caller id" not in (m.get("text") or "") for m in bridge.agent.history)
+
+
+def test_hang_up_mid_turn_still_records_the_tool(tmp_storage, fake_llm):
+    """The caller hangs up after a booking but before turn_complete: the
+    booking must still be in the call record."""
+    date = open_day()
+    slot = open_times(date=date)[0]
+    live = FakeLive(events=[
+        {"type": "user_text", "text": "book me at " + slot},
+        {"type": "tool_calls", "calls": [{"id": "t1", "name": "book_appointment", "args": {
+            "customer_name": "Ravi", "phone": "9876543210", "service": "Cleaning",
+            "date": date, "time": slot}}]},
+    ])
+    bridge = make_bridge(fake_llm, live, [])
+    asyncio.run(bridge.pump_gemini())
+    bridge.finish()
+    roles = [m["role"] for m in bridge.agent.history]
+    assert roles == ["user", "assistant", "tool"]
+    assert bridge.agent.history[2]["result"]["status"] == "confirmed"
 
 
 # ---- the inbound webhook and the media stream (audit H1) -----------------------------
@@ -372,6 +397,18 @@ def test_stream_enforces_the_concurrent_call_limit(phone, monkeypatch):
     monkeypatch.setattr(telephony, "_active_calls", 3)        # three calls in progress
     assert stream(phone["client"], good_ticket()) == 1008
     assert SpyLive.created == []
+
+
+def test_a_failing_call_log_never_leaves_the_socket_open(phone, monkeypatch, capsys):
+    """Eng review D7: saving the call log used to run unguarded in the
+    stream's finally block, so a disk or database error there skipped the
+    socket close below it."""
+    def broken(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(storage, "log_call_from_agent", broken)
+    assert stream(phone["client"], good_ticket()) == 1000
+    assert "call log not saved: OSError: disk full" in capsys.readouterr().out
+    assert telephony._active_calls == 0
 
 
 def test_call_slot_is_released_when_the_model_fails_to_connect(phone, monkeypatch):

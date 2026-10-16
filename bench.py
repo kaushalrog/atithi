@@ -16,8 +16,10 @@ The numbers that mattered when this was written (median, this laptop):
     whole dashboard refresh         26.75 ms    1.9 ms
 """
 
+import datetime as dt
 import statistics
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -83,6 +85,27 @@ def main():
         return len(calls) + len(bookings) + len(leads)
 
     total = bench("whole dashboard refresh", dashboard, n=25)
+
+    # Tool calls and call logging, as every channel now does them. The call
+    # log + trace is rewritten after EVERY web-test turn, so it is on the
+    # /api/chat path; budget 5 ms (eng review). Written to a temp folder:
+    # a benchmark must never touch the business's real call records.
+    agent = ReceptionistAgent(CLIENT, llm=FakeLLM())
+    day = next(d for d, s in sorted(agent.slots.items()) if s)
+    call = {"name": "check_availability", "args": {"date": day}}
+    bench("run one tool (every tool call)", lambda: agent.run_tool(call))
+    agent.history = [{"role": "user", "text": "any slots?", "at": agent.now()},
+                     agent.tool_call_entry([call]), agent.run_tool(call),
+                     {"role": "assistant", "text": "Yes.", "at": agent.now()}]
+    real_calls_dir = storage.CALLS_DIR
+    with tempfile.TemporaryDirectory() as tmp:
+        storage.CALLS_DIR = Path(tmp)
+        try:
+            bench("log a call + trace (every web-test turn)",
+                  lambda: storage.log_call_from_agent(agent, "bench", dt.datetime.now(),
+                                                      call_id="bench"))
+        finally:
+            storage.CALLS_DIR = real_calls_dir
     print(f"\n  tool schemas offered per turn: {len(TOOL_SCHEMAS)}")
     print(f"  dashboard server work: {total:.2f} ms\n")
 

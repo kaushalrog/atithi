@@ -72,7 +72,10 @@ AI receptionist for Indian small service businesses (clinics, salons, coaching i
   constructing it costs ~780 ms, so it is built at server startup, never
   per conversation.
 - Persistence: storage.py (ALL disk I/O: bookings.db SQLite, leads.csv,
-  calls/<client_id>/*.json). Nothing else touches paths. bookings.db is the
+  calls/<client_id>/*.json, plus one trace per call in calls/<client_id>/traces/
+  for the voxcheck checker — see docs/ARCHITECTURE.md). Nothing else touches
+  paths. Every channel runs tools through agent.run_tool; streaming channels
+  (phone, live) record turns with agent.TurnRecorder. bookings.db is the
   single source of truth for bookings; a partial UNIQUE index allows one
   confirmed booking per slot (the double-booking guard). Google Sheets
   receives a copy of each booking; it is read only once, by the explicit

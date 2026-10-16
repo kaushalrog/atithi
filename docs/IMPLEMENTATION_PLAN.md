@@ -459,15 +459,15 @@ Approval readiness: PASS (D2, D3, D4, D5, D6, D7, D8)
 
 Synthesized from this review's findings. Each task derives from a specific finding above. Run with Claude Code or Codex; checkbox as you ship. Ratios: features ~30x, tests ~50x.
 
-- [ ] **E1 (P1, human: ~4h / CC: ~15min)**: agent. Add `run_tool` with timestamped entries and the timezone default.
+- [x] **E1 (P1, human: ~4h / CC: ~15min)**: agent. Add `run_tool` with timestamped entries and the timezone default.
   - Surfaced by: F2 (D4); CEO T1; premise P8
   - Files: agent.py, tests/test_agent.py
   - Verify: `python -m pytest tests/test_agent.py -q`; the error text is byte-identical
-- [ ] **E2 (P1, human: ~4h / CC: ~15min)**: telephony/live. Buffer tool entries per turn; move the caller id into metadata.
+- [x] **E2 (P1, human: ~4h / CC: ~15min)**: telephony/live. Buffer tool entries per turn; move the caller id into metadata.
   - Surfaced by: F1 (D3)
   - Files: telephony.py, live_main.py, storage.py (caller param), tests/test_telephony.py
   - Verify: FakeLive booking turn order; no caller id in history; turn count
-- [ ] **E3 (P1, human: ~6h / CC: ~20min)**: storage. Write `calls/<client>/traces/<id>.json` with snapshot (bookings on touched dates plus the caller's leads); failure is non-fatal.
+- [x] **E3 (P1, human: ~6h / CC: ~20min)**: storage. Write `calls/<client>/traces/<id>.json` with snapshot (bookings on touched dates plus the caller's leads); failure is non-fatal.
   - Surfaced by: D7 (CEO); Section 1
   - Files: storage.py, tests/test_storage.py, tests/test_dashboard.py
   - Verify: trace written; dashboard has no trace keys; call count unchanged; failure test
@@ -483,7 +483,7 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Surfaced by: CEO D5; Section 3 (security)
   - Files: voxcheck/outputs.py, voxcheck/__main__.py, .gitignore, tests/test_voxcheck.py
   - Verify: adversarial HTML inert; compare and exit-code tests
-- [ ] **E7 (P1, human: ~1h / CC: ~10min)**: telephony. Guard `finish()` and run it via `asyncio.to_thread`.
+- [x] **E7 (P1, human: ~1h / CC: ~10min)**: telephony. Guard `finish()` and run it via `asyncio.to_thread`.
   - Surfaced by: F3 (D7), P-3 (D8)
   - Files: telephony.py, tests/test_telephony.py
   - Verify: call-log write raises, then the socket closes and the error is logged
@@ -491,7 +491,7 @@ Synthesized from this review's findings. Each task derives from a specific findi
   - Surfaced by: Success Criteria; Section 3
   - Files: tests/fixtures/voxcheck/, tests/test_voxcheck_fixtures.py
   - Verify: recall ≥ 90%, each check ≥ 1, FP ≤ 1
-- [ ] **E9 (P2, human: ~3h / CC: ~15min)**: bench and docs. bench.py measures `run_tool` and `log_call_from_agent` with a trace; README quick start; end-to-end portal test call to trace to voxcheck.
+- [ ] **E9 (P2, human: ~3h / CC: ~15min)**: bench and docs. *(Bench part done 2026-10-17: run_tool 0.01 ms, call log + trace 0.11 ms; README and end-to-end wait for Lane B.)* bench.py measures `run_tool` and `log_call_from_agent` with a trace; README quick start; end-to-end portal test call to trace to voxcheck.
   - Surfaced by: Section 1/4 P3 (web turn cost); CEO T7, T8
   - Files: bench.py, README.md
   - Verify: `python bench.py` (web-turn log under 5 ms); a fresh clone reaches a report in ≤ 10 min

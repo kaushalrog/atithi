@@ -72,7 +72,7 @@
 
 ### Compute call metrics from structured history, not transcript substrings
 
-**What:** Derive conversion from confirmed bookings, and record phone/live tool calls in conversation history.
+**What:** Derive conversion from confirmed bookings. (The second half, recording phone/live tool calls in history, was done on 2026-10-17 in `phase-3/lane-a`, eng review E2.)
 
 **Why:** The dashboard shows 100% conversion for a call whose booking failed (audit M1) and 0% for real phone bookings, because phone/live channels drop tool calls from history (audit M2).
 
@@ -80,7 +80,7 @@
 
 **Effort:** M
 **Priority:** P2
-**Depends on:** Phase 2 architecture decision on the persisted conversation format.
+**Depends on:** Nothing now: per-call traces (`calls/<client>/traces/<id>.json`, `actions[].type/ok`) carry the outcome; count calls with a `book` action where `ok` is true.
 
 ## Completed
 

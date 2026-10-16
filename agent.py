@@ -22,6 +22,7 @@ import re
 import sys
 import threading
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import scheduling
 import storage
@@ -97,6 +98,26 @@ TOOL_SCHEMAS = [
 ]
 
 
+# Every timestamp in a conversation record carries a UTC offset, so "tomorrow
+# at 4" can later be checked against the right calendar day. Indian businesses
+# by default; a client YAML may set `timezone:` (an IANA name).
+DEFAULT_TIMEZONE = "Asia/Kolkata"
+# India has no daylight saving, so a fixed offset is exact. Used when the
+# operating system has no timezone database (Windows without `tzdata`).
+_IST = dt.timezone(dt.timedelta(hours=5, minutes=30), "IST")
+
+
+def _business_timezone(config: dict) -> dt.tzinfo:
+    name = config.get("timezone") or DEFAULT_TIMEZONE
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        if name != DEFAULT_TIMEZONE:
+            # A typo in one client's YAML must not stop its calls.
+            print(f"  (unknown timezone {name!r} in client config; using {DEFAULT_TIMEZONE})")
+        return _IST
+
+
 def _phone_ok(phone: str) -> bool:
     """A usable Indian phone number has at least 10 digits (12 with +91)."""
     return len(re.sub(r"\D", "", phone or "")) >= 10
@@ -141,6 +162,7 @@ class ReceptionistAgent:
     def __init__(self, client_id: str, llm=None):
         self.client_id = client_id
         self.config = self._load_config(client_id)
+        self.tz = _business_timezone(self.config)
         # What's free right now. Refreshed from the bookings database on every
         # availability check and booking (see _refresh_slots), so a slot that
         # another conversation booked a minute ago is never offered here.
@@ -190,6 +212,10 @@ class ReceptionistAgent:
             _prompt_cache[key] = prompt
         return prompt
 
+    def now(self) -> str:
+        """The current time in the business's timezone, with its UTC offset."""
+        return dt.datetime.now(self.tz).isoformat(timespec="seconds")
+
     # ---- the conversation loop -------------------------------------------------
 
     def chat(self, user_message: str) -> str:
@@ -200,40 +226,25 @@ class ReceptionistAgent:
         It repeats until the model produces a plain text reply (max 5 rounds so a
         confused model can never loop forever).
         """
-        self.history.append({"role": "user", "text": user_message})
+        self.history.append({"role": "user", "text": user_message, "at": self.now()})
         messages = [{"role": "system", "text": self.system_prompt}]
 
         for _ in range(5):
             response = self.llm.send(messages + self.history, TOOL_SCHEMAS)
 
             if response["tool_calls"]:
-                self.history.append(
-                    {
-                        "role": "assistant",
-                        "text": response["text"],
-                        "tool_calls": response["tool_calls"],
-                    }
-                )
+                self.history.append(self.tool_call_entry(response["tool_calls"], response["text"]))
                 for call in response["tool_calls"]:
-                    # A tool bug must never kill the conversation: report the
-                    # failure to the model instead, so it can apologize and
-                    # offer a front-desk callback.
-                    try:
-                        result = self._execute_tool(call["name"], call["args"])
-                    except Exception as e:
-                        result = {"error": f"{type(e).__name__}: {e}"}
-                    self.history.append(
-                        {"role": "tool", "name": call["name"], "result": result}
-                    )
+                    self.history.append(self.run_tool(call))
                 continue  # feed tool results back, get the model's next move
 
             text = response["text"] or "Sorry, could you repeat that?"
-            self.history.append({"role": "assistant", "text": text})
+            self.history.append({"role": "assistant", "text": text, "at": self.now()})
             return text
 
         # Safety net: 5 rounds of tools without a text reply.
         text = "Sorry, I'm having trouble right now — the front desk will call you back."
-        self.history.append({"role": "assistant", "text": text})
+        self.history.append({"role": "assistant", "text": text, "at": self.now()})
         return text
 
     def reset(self):
@@ -241,6 +252,24 @@ class ReceptionistAgent:
         self.history = []
 
     # ---- tools -----------------------------------------------------------------
+
+    def tool_call_entry(self, calls: list[dict], text: str | None = None) -> dict:
+        """The history entry for "the agent asked for these tools"."""
+        return {"role": "assistant", "text": text, "tool_calls": calls, "at": self.now()}
+
+    def run_tool(self, call: dict) -> dict:
+        """Run one tool call and return its history entry.
+
+        Every channel (text chat, phone, live mic) runs tools through here, so
+        error handling and timestamps are identical everywhere. A tool bug
+        must never kill the conversation: the failure is reported to the
+        model, which apologises and offers a front-desk callback.
+        """
+        try:
+            result = self._execute_tool(call["name"], call["args"])
+        except Exception as e:
+            result = {"error": f"{type(e).__name__}: {e}"}
+        return {"role": "tool", "name": call["name"], "result": result, "at": self.now()}
 
     def _execute_tool(self, name: str, args: dict) -> dict:
         if name == "check_availability":
@@ -386,3 +415,58 @@ class ReceptionistAgent:
                 lines.append(f"  [tool result] {msg['result']}")
             lines.append("")
         return "\n".join(lines)
+
+
+class TurnRecorder:
+    """Writes a streaming call (phone, live mic) into agent.history in the
+    order things actually happened.
+
+    WHY: on a streaming call the speech arrives as text fragments that are
+    only complete when the turn ends, but tools run in the MIDDLE of the turn.
+    Appending tool entries the moment they run would put "booked 10:30"
+    before the caller's "can I come at 10:30?". So tool entries wait in a
+    buffer and the whole turn is written at once:
+
+        user_text ... user_text   tool_calls(+results)   agent_text ... agent_text
+              |                          |                        |
+              v                          v                        v
+        [ user entry ] -> [ assistant tool_calls entry, tool result entries ] -> [ assistant entry ]
+                                   flush() at turn_complete and at hang-up
+    """
+
+    def __init__(self, agent: ReceptionistAgent):
+        self.agent = agent
+        self._user, self._user_at = "", None
+        self._said, self._said_at = "", None
+        self._tools: list[dict] = []
+
+    def user_text(self, text: str):
+        if not self._user:
+            self._user_at = self.agent.now()
+        self._user += text
+
+    def agent_text(self, text: str):
+        if not self._said:
+            self._said_at = self.agent.now()
+        self._said += text
+
+    def tool_calls(self, calls: list[dict]) -> list[dict]:
+        """Run the tools now (the model is waiting); record them at flush()."""
+        self._tools.append(self.agent.tool_call_entry(calls))
+        results = []
+        for call in calls:
+            entry = self.agent.run_tool(call)
+            self._tools.append(entry)
+            results.append({"id": call.get("id"), "name": call["name"], "result": entry["result"]})
+        return results
+
+    def flush(self):
+        history = self.agent.history
+        if self._user.strip():
+            history.append({"role": "user", "text": self._user.strip(), "at": self._user_at})
+        history.extend(self._tools)
+        if self._said.strip():
+            history.append({"role": "assistant", "text": self._said.strip(), "at": self._said_at})
+        self._user, self._user_at = "", None
+        self._said, self._said_at = "", None
+        self._tools = []
