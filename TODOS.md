@@ -83,3 +83,41 @@
 **Depends on:** Phase 2 architecture decision on the persisted conversation format.
 
 ## Completed
+
+## Claim-vs-records checker (deferred by /plan-ceo-review, 2026-10-15)
+
+### Check 5: spoken time differs from the booking
+
+**What:** A heuristic check that normalises spoken dates and times ("4 PM", "tomorrow", "next Monday") against the call's `started_at` and timezone, and flags a confirmed booking whose spoken time differs from the `book` action's args.
+
+**Why:** It catches "booked you at 4" when the record says 14:00. It was deferred because it's the noisiest check and there are no real logs to tune it on (CEO review D3).
+
+**Context:** `docs/designs/claim-vs-records-checker.md` (Checks §5). Build it after the day-10 demand checkpoint. Use real builder or VoxAgent traces as tuning fixtures. Its recall fixture returns with it.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** The first checker release; real traces to tune on.
+
+### Check 2b: spoken slot offer never returned by availability
+
+**What:** A heuristic sub-check that flags a spoken offer of a date/time no `availability` result contained, even when nothing was booked.
+
+**Why:** It catches hallucinated availability the caller declined. Deferred with check 5 because it needs the same normaliser (CEO review D4). Check 2a still catches bookings on unavailable slots.
+
+**Context:** design doc Checks §2b. Build it right after check 5 and reuse its normaliser.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** Check 5's normaliser.
+
+### `redact` command for shared logs
+
+**What:** Replace caller names with tokens and phones with a keyed hash. Normalise phones to the last 10 digits before hashing, use one key across the trace and records files, and scrub names and phones inside turn text.
+
+**Why:** It's needed only if builders want to send logs instead of running the checker locally (CEO review D6). It could later serve VoxAgent's own retention work (Security: personal-data retention).
+
+**Context:** design doc "Input safety and personal data" plus review concern R3-11. Build it only when a builder asks to share data.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** A builder request.
