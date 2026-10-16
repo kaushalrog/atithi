@@ -8,7 +8,7 @@
 
 **Why:** Today a dropped model stream leaves the caller in silence until they hang up (audit M7), and one booking's Sheets network write stalls every other live call (audit M8).
 
-**Context:** `telephony.py` `twilio_stream` starts `pump_gemini` as a task but only awaits `read_twilio()`, so pump exceptions are never observed. `pump_gemini` calls `agent._execute_tool` synchronously. Start with an `asyncio.wait(..., return_when=FIRST_COMPLETED)` over both tasks and `asyncio.to_thread` for tool execution. Must be done before live calls are enabled for a paying client.
+**Context:** `telephony.py` `twilio_stream` starts `pump_gemini` as a task but only awaits `read_twilio()`, so pump exceptions are never observed. `pump_gemini` calls `agent._execute_tool` synchronously. (Update 2026-10-16, eng review D8: the hang-up save is planned to move to `asyncio.to_thread` inside a guard, task E7 in docs/IMPLEMENTATION_PLAN.md, not yet built. Tool execution during the call stays on the loop and stays open here.) Start with an `asyncio.wait(..., return_when=FIRST_COMPLETED)` over both tasks and `asyncio.to_thread` for tool execution. Must be done before live calls are enabled for a paying client.
 
 **Effort:** M
 **Priority:** P2
