@@ -21,6 +21,7 @@ send(messages, tools) returns:
     {"text": str | None, "tool_calls": [{"name": str, "args": dict}]}
 """
 
+import base64
 import os
 import re
 import threading
@@ -34,7 +35,9 @@ import perf
 
 load_dotenv()
 
-MODEL = "gemini-2.5-flash"
+# GEMINI_MODEL in .env overrides it: Google retires models for new keys
+# (a key created in late 2026 can no longer use gemini-2.5-flash).
+MODEL = os.getenv("GEMINI_MODEL", "").strip() or "gemini-2.5-flash"
 
 
 class QuotaExhausted(Exception):
@@ -179,7 +182,10 @@ class GeminiLLM:
             tools=_tools_to_gemini(tools),
             # A receptionist reply doesn't need chain-of-thought; turning
             # thinking off makes replies faster and saves free-tier quota.
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            # Only 2.x models accept a zero budget; Gemini 3 models reject the
+            # request (400), so they keep their own default.
+            thinking_config=(types.ThinkingConfig(thinking_budget=0)
+                             if self.model.startswith("gemini-2") else None),
         )
         self._config_cache = ((id(tools), system_prompt), config)
         return config
@@ -231,7 +237,8 @@ class GeminiLLM:
                         types.Part(
                             function_call=types.FunctionCall(
                                 name=call["name"], args=call["args"]
-                            )
+                            ),
+                            thought_signature=_signature_bytes(call),
                         )
                     )
                 contents.append(types.Content(role="model", parts=parts))
@@ -292,13 +299,23 @@ class GeminiLLM:
             if part.text:
                 out["text"] = (out["text"] or "") + part.text
             if part.function_call:
-                out["tool_calls"].append(
-                    {
-                        "name": part.function_call.name,
-                        "args": dict(part.function_call.args or {}),
-                    }
-                )
+                call = {
+                    "name": part.function_call.name,
+                    "args": dict(part.function_call.args or {}),
+                }
+                if part.thought_signature:
+                    call["signature"] = base64.b64encode(part.thought_signature).decode("ascii")
+                out["tool_calls"].append(call)
         return out
+
+
+def _signature_bytes(call: dict) -> bytes | None:
+    """Gemini 3 models attach an opaque thought_signature to each function
+    call and refuse (400) a replayed history that drops it. We keep it in the
+    neutral tool-call dict as base64 text ("signature"), so agent.history
+    stays plain JSON and no other file needs to know what it is."""
+    sig = call.get("signature")
+    return base64.b64decode(sig) if sig else None
 
 
 class GeminiLive:

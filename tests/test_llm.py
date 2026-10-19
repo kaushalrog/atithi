@@ -90,3 +90,29 @@ def test_a_wait_longer_than_the_budget_is_not_retried(monkeypatch):
     with pytest.raises(llm.errors.APIError):
         model._call_with_retry([], None)
     assert slept == [] and model.client.models.calls == 1
+
+
+def test_gemini_3_thought_signatures_survive_the_history_round_trip():
+    """Gemini 3 models refuse (400) a replayed tool call without the
+    thought_signature they attached; the neutral history keeps it as text."""
+    from google.genai import types
+    model = llm.GeminiLLM.__new__(llm.GeminiLLM)
+    part = types.Part(function_call=types.FunctionCall(name="check_availability",
+                                                       args={"date": "2026-10-21"}),
+                      thought_signature=b"\x01opaque\xff")
+    content = types.Content(role="model", parts=[part])
+    response = type("R", (), {"candidates": [type("C", (), {"content": content})()]})()
+    [call] = model._normalize(response)["tool_calls"]
+    assert isinstance(call["signature"], str)            # plain JSON in agent.history
+    _, contents = model._to_gemini_messages([
+        {"role": "assistant", "text": None, "tool_calls": [call]}])
+    assert contents[0].parts[0].thought_signature == b"\x01opaque\xff"
+
+
+def test_thinking_is_switched_off_only_where_the_model_accepts_it():
+    def config_for(name):
+        m = llm.GeminiLLM.__new__(llm.GeminiLLM)
+        m.model, m._config_cache = name, None
+        return m._config_for("prompt", None)
+    assert config_for("gemini-2.5-flash").thinking_config.thinking_budget == 0
+    assert config_for("gemini-3.5-flash-lite").thinking_config is None
