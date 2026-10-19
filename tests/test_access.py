@@ -297,3 +297,93 @@ def test_a_failed_model_call_records_the_customer_turn_once(client, session):
     users = [m for m in agent.history if m["role"] == "user"]
     assert [m["text"] for m in users] == ["hello?"]
     assert all(m.get("at") for m in agent.history)
+
+
+# ---- bounded sessions (perf audit F7, F8; eng review D7) ------------------------------
+
+import threading  # noqa: E402
+import time  # noqa: E402
+
+
+class SlowLLM:
+    """Answers after `delay` seconds, so two requests can overlap."""
+
+    def __init__(self, delay):
+        self.delay, self.calls = delay, 0
+
+    def send(self, messages, tools=None):
+        self.calls += 1
+        time.sleep(self.delay)
+        return {"text": "Here you go.", "tool_calls": []}
+
+
+def test_a_second_message_while_answering_gets_409_and_history_stays_whole(client, session):
+    """Two tabs (or a double-click) used to run two turns at once and
+    interleave them in one history (bench: 18 of 20 runs broken)."""
+    agent = server.get_session(session)["agent"]
+    agent.llm = SlowLLM(0.2)
+    codes, barrier = [], threading.Barrier(2)
+
+    def send():
+        barrier.wait()
+        codes.append(client.post("/api/chat", json={"session_id": session,
+                                                    "message": "slots?"}).status_code)
+    threads = [threading.Thread(target=send) for _ in range(2)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert sorted(codes) == [200, 409]
+    assert [m["role"] for m in agent.history] == ["user", "assistant"]
+    # ...and the session works normally afterwards.
+    assert client.post("/api/chat", json={"session_id": session,
+                                          "message": "thanks"}).status_code == 200
+
+
+def test_the_409_names_the_problem_for_the_portal(client, session):
+    s = server.get_session(session)
+    s["lock"].acquire()
+    try:
+        res = client.post("/api/chat", json={"session_id": session, "message": "hi"})
+    finally:
+        s["lock"].release()
+    assert res.status_code == 409 and "Still answering" in res.json()["detail"]
+
+
+def test_a_session_ends_politely_at_the_turn_cap(client, session, monkeypatch):
+    monkeypatch.setattr(server, "MAX_TURNS_PER_SESSION", 3)
+    agent = server.get_session(session)["agent"]
+    agent.llm = SlowLLM(0)
+    for _ in range(3):
+        assert client.post("/api/chat", json={"session_id": session,
+                                              "message": "hi"}).json().get("ended") is None
+    res = client.post("/api/chat", json={"session_id": session, "message": "one more"}).json()
+    assert res["reply"] == server.CLOSING_LINE and res["ended"] is True
+    assert agent.llm.calls == 3                       # no model call past the cap
+    assert sum(m["role"] == "user" for m in agent.history) == 3
+
+
+def test_sessions_are_capped_per_business_and_in_total(client, session, monkeypatch):
+    monkeypatch.setattr(server, "MAX_SESSIONS_PER_BUSINESS", 2)
+    new = lambda cid, key: client.post("/api/session", json={"client_id": cid},
+                                       headers={"X-Client-Key": key}).status_code
+    assert new("demo_clinic", DEMO_KEY) == 200        # the fixture's + this one = 2
+    assert new("demo_clinic", DEMO_KEY) == 429
+    assert new("lakshmi_beauty_salon", "VX-7TPX3R") == 200   # other businesses unaffected
+    monkeypatch.setattr(server, "MAX_SESSIONS", 3)
+    assert new("lakshmi_beauty_salon", "VX-7TPX3R") == 429
+
+
+def test_idle_sessions_are_purged_on_any_request(client, session):
+    server.get_session(session)["last_activity"] -= server.SESSION_IDLE_LIMIT * 2
+    res = client.post("/api/chat", json={"session_id": session, "message": "hi"})
+    assert res.status_code == 404 and session not in server.sessions
+
+
+def test_a_session_mid_turn_is_never_purged(client, session):
+    s = server.get_session(session)
+    s["last_activity"] -= server.SESSION_IDLE_LIMIT * 2
+    s["lock"].acquire()                               # a very slow model answer in progress
+    try:
+        server.purge_idle_sessions()
+        assert session in server.sessions
+    finally:
+        s["lock"].release()

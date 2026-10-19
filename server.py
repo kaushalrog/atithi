@@ -14,6 +14,7 @@ Run:  python server.py            (opens http://127.0.0.1:8765)
 """
 
 import argparse
+import contextlib
 import datetime as dt
 import hmac
 import os
@@ -121,10 +122,19 @@ def _page(name: str) -> str:
     return hit[1]
 
 # One test-call session = one agent + one call-log entry. In memory only; the
-# call log JSON on disk is the durable record. Idle sessions are purged so a
-# long-running server doesn't accumulate dead agents.
+# call log JSON on disk is the durable record. Everything here is BOUNDED, so
+# a long-running server (or someone scripting the portal) can't grow it
+# without limit (docs/PERFORMANCE_AUDIT.md F8): idle sessions are purged on
+# every request, and sessions and turns are capped. Each turn re-sends the
+# whole history to the model, so turn 60 already costs ~60x turn 1.
 sessions: dict[str, dict] = {}
+_sessions_lock = threading.Lock()   # sync endpoints run on many threads at once
 SESSION_IDLE_LIMIT = dt.timedelta(hours=2)
+MAX_TURNS_PER_SESSION = 60
+MAX_SESSIONS_PER_BUSINESS = 20
+MAX_SESSIONS = 500
+CLOSING_LINE = ("Thanks for chatting — this conversation has reached its limit. "
+                "Please start a new one, or the front desk will call you back.")
 
 MIME_FIX = {"audio/mpeg": "audio/mp3", "audio/x-wav": "audio/wav",
             "application/octet-stream": "audio/wav"}
@@ -273,6 +283,7 @@ def authorize_client(client_id: str, client_key: str | None, admin_key: str | No
 # ---------- helpers ------------------------------------------------------------
 
 def get_session(session_id: str) -> dict:
+    purge_idle_sessions()
     session = sessions.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Unknown or expired session")
@@ -280,15 +291,44 @@ def get_session(session_id: str) -> dict:
 
 
 def purge_idle_sessions():
+    """Drop sessions idle for 2 h. A scan of at most MAX_SESSIONS dicts —
+    microseconds — so it runs on every request, not only at session start.
+    A session mid-turn is never dropped, however long the model takes."""
     now = dt.datetime.now()
-    for sid in [s for s, v in sessions.items()
-                if now - v["last_activity"] > SESSION_IDLE_LIMIT]:
-        del sessions[sid]
+    with _sessions_lock:
+        for sid in [s for s, v in sessions.items()
+                    if now - v["last_activity"] > SESSION_IDLE_LIMIT
+                    and not v["lock"].locked()]:
+            del sessions[sid]
+    perf.gauge("sessions.active", len(sessions))
+
+
+@contextlib.contextmanager
+def one_turn_at_a_time(session: dict):
+    """Refuse a second message while this session is still answering.
+
+    WHY: two tabs (or a double-click) on one session used to run two turns at
+    once on two threads, interleaving both into the same history — a tool
+    call separated from its result breaks every later model request (audit
+    F7, 18 of 20 runs). It refuses instead of waiting, because a waiting
+    request would hold one of the server's worker threads for nothing."""
+    if not session["lock"].acquire(blocking=False):
+        raise HTTPException(status_code=409,
+                            detail="Still answering your last message — send this one after the reply.")
+    try:
+        yield
+    finally:
+        session["last_activity"] = dt.datetime.now()
+        session["lock"].release()
 
 
 def run_turn(session: dict, message: str) -> dict:
-    """One customer turn; also reports which tools fired so the UI can show them."""
+    """One customer turn; also reports which tools fired so the UI can show them.
+    The caller holds one_turn_at_a_time(session)."""
     agent = session["agent"]
+    if sum(1 for m in agent.history if m["role"] == "user") >= MAX_TURNS_PER_SESSION:
+        # The cap: a polite end, no model call, nothing more added to history.
+        return {"reply": CLOSING_LINE, "tools": [], "ended": True}
     before = len(agent.history)
     reply = agent.chat(message)
     tools = []
@@ -596,13 +636,23 @@ def create_session(req: SessionRequest,
         raise HTTPException(status_code=404, detail=f"No client '{req.client_id}'")
     session_id = uuid.uuid4().hex
     now = dt.datetime.now()
-    sessions[session_id] = {
-        "agent": agent,
-        "client_id": req.client_id,
-        "call_id": now.strftime("%Y%m%d_%H%M%S_") + session_id[:6],
-        "started": now,
-        "last_activity": now,
-    }
+    with _sessions_lock:      # count and insert together, or two requests both fit
+        if len(sessions) >= MAX_SESSIONS:
+            raise HTTPException(status_code=429,
+                                detail="Too many test calls are open right now — try again shortly.")
+        if sum(1 for v in sessions.values()
+               if v["client_id"] == req.client_id) >= MAX_SESSIONS_PER_BUSINESS:
+            raise HTTPException(status_code=429,
+                                detail="This business has too many test calls open — "
+                                       "close one or wait a while.")
+        sessions[session_id] = {
+            "agent": agent,
+            "client_id": req.client_id,
+            "call_id": now.strftime("%Y%m%d_%H%M%S_") + session_id[:6],
+            "started": now,
+            "last_activity": now,
+            "lock": threading.Lock(),
+        }
     return {"session_id": session_id, "business_name": agent.config["business_name"]}
 
 
@@ -613,17 +663,22 @@ FRONT_DESK_LINE = ("Sorry, our line is very busy right now — the front desk "
 @app.post("/api/chat")
 def chat(req: ChatRequest):
     session = get_session(req.session_id)
+    with one_turn_at_a_time(session):
+        return _chat_turn(session, req.message)
+
+
+def _chat_turn(session: dict, message: str) -> dict:
     agent = session["agent"]
     before = len(agent.history)
     # A model outage or rate limit must never show the customer an error page.
     try:
-        return run_turn(session, req.message)
+        return run_turn(session, message)
     except Exception as e:
         print(f"  [chat] degraded reply for {session['client_id']}: {type(e).__name__}: {e}")
         # agent.chat records the customer's message before calling the model,
         # so only add it if the failure happened before that.
         if not any(m["role"] == "user" for m in agent.history[before:]):
-            agent.history.append({"role": "user", "text": req.message, "at": agent.now()})
+            agent.history.append({"role": "user", "text": message, "at": agent.now()})
         agent.history.append({"role": "assistant", "text": FRONT_DESK_LINE, "at": agent.now()})
         return {"reply": FRONT_DESK_LINE, "tools": [], "degraded": True}
 
@@ -636,11 +691,12 @@ def voice(session_id: str = Form(...), audio: UploadFile = File(...)):
     if len(data) > MAX_VOICE_BYTES:
         raise HTTPException(status_code=413, detail="Recording too long — keep a turn under a minute")
     mime = MIME_FIX.get(audio.content_type, audio.content_type) or "audio/wav"
-    # Same bound as a typed turn: the transcript is re-sent every later turn.
-    heard = session["agent"].llm.transcribe(data, mime_type=mime)[:MAX_CHAT_CHARS]
-    if not heard:
-        return {"heard": "", "reply": "", "tools": []}
-    return {"heard": heard, **run_turn(session, heard)}
+    with one_turn_at_a_time(session):
+        # Same bound as a typed turn: the transcript is re-sent every later turn.
+        heard = session["agent"].llm.transcribe(data, mime_type=mime)[:MAX_CHAT_CHARS]
+        if not heard:
+            return {"heard": "", "reply": "", "tools": []}
+        return {"heard": heard, **run_turn(session, heard)}
 
 
 @app.post("/api/tts")

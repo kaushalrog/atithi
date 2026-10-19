@@ -378,7 +378,7 @@ def new_web_session(llm):
     now = dt.datetime.now()
     server.sessions[sid] = {"agent": ReceptionistAgent(CLIENT, llm=llm), "client_id": CLIENT,
                             "call_id": now.strftime("%Y%m%d_%H%M%S_") + sid[-6:],
-                            "started": now, "last_activity": now}
+                            "started": now, "last_activity": now, "lock": threading.Lock()}
     return sid
 
 
@@ -430,32 +430,46 @@ def run_web(sessions, kind, failure, n_turns=4, model_s=0.15):
 
 # ---- focused scenarios ------------------------------------------------------------------
 
-def run_double_submit(_sessions=2, *_):
-    """Two requests on ONE session at the same moment (double-click, two tabs).
-    Checks that every tool-call entry is still followed by its results."""
+def run_double_submit(runs=20, *_):
+    """Two requests on ONE session at the same moment (double-click, two tabs),
+    `runs` times. Checks that every tool-call entry is still followed by its
+    results, and counts what the second request got back."""
     import server
-    responses = []
-    for _ in range(2):
-        responses += [{"text": None, "tool_calls": [{"name": "check_availability",
-                                                     "args": {"date": open_slots(1)[0][0]}}]},
-                      {"text": "Slots.", "tool_calls": []}]
-    sid = new_web_session(SleepyLLM(responses, 0.1))
-    barrier = threading.Barrier(2)
+    from fastapi import HTTPException
+    broken_runs = broken_pairs = 0
+    statuses = {}
+    for _ in range(runs):
+        responses = []
+        for _ in range(2):
+            responses += [{"text": None, "tool_calls": [{"name": "check_availability",
+                                                         "args": {"date": open_slots(1)[0][0]}}]},
+                          {"text": "Slots.", "tool_calls": []}]
+        sid = new_web_session(SleepyLLM(responses, 0.02))
+        barrier = threading.Barrier(2)
 
-    def go():
-        barrier.wait()
-        server.chat(server.ChatRequest(session_id=sid, message="slots?"))
-    threads = [threading.Thread(target=go) for _ in range(2)]
-    [t.start() for t in threads]
-    [t.join() for t in threads]
-    history = server.sessions[sid]["agent"].history
-    broken = 0
-    for i, m in enumerate(history):
-        if m["role"] == "assistant" and m.get("tool_calls"):
-            following = history[i + 1:i + 1 + len(m["tool_calls"])]
-            if [x["role"] for x in following] != ["tool"] * len(m["tool_calls"]):
-                broken += 1
-    return {"history_roles": [m["role"] for m in history], "broken_tool_pairs": broken}
+        def go():
+            barrier.wait()
+            try:
+                server.chat(server.ChatRequest(session_id=sid, message="slots?"))
+                code = 200
+            except HTTPException as e:
+                code = e.status_code
+            statuses[code] = statuses.get(code, 0) + 1
+        threads = [threading.Thread(target=go) for _ in range(2)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        history = server.sessions.pop(sid)["agent"].history
+        broken = 0
+        for i, m in enumerate(history):
+            if m["role"] == "assistant" and m.get("tool_calls"):
+                following = history[i + 1:i + 1 + len(m["tool_calls"])]
+                if [x["role"] for x in following] != ["tool"] * len(m["tool_calls"]):
+                    broken += 1
+        broken_runs += int(broken > 0)
+        broken_pairs += broken
+    return {"runs": runs, "runs_with_broken_history": broken_runs,
+            "broken_tool_pairs": broken_pairs,
+            "responses_by_status": {str(k): v for k, v in sorted(statuses.items())}}
 
 
 def run_booking_race(sessions, *_):
@@ -565,14 +579,14 @@ SCENARIOS = {
 
 SUITES = {
     "quick": [("phone_avail", 5), ("phone_book", 5), ("phone_book_sheets_slow", 2),
-              ("phone_model_drop", 1), ("web_avail", 5), ("web_double_submit", 2),
+              ("phone_model_drop", 1), ("web_avail", 5), ("web_double_submit", 20),
               ("booking_race", 10), ("long_history", 200), ("dashboard", 1000)],
     "full": [(s, n) for s in ("phone_avail", "phone_book", "phone_interrupt", "web_avail", "web_book")
              for n in (1, 2, 5, 10)]
     + [(s, n) for s in ("phone_book_sheets_slow", "phone_book_sheets_down", "phone_book_slow_db",
                         "web_book_sheets_slow", "web_model_timeout") for n in (1, 5)]
     + [("phone_book_sheets_stall", 2), ("phone_model_drop", 1), ("phone_model_drop", 5),
-       ("web_double_submit", 2), ("booking_race", 10), ("booking_race", 50)]
+       ("web_double_submit", 1000), ("booking_race", 10), ("booking_race", 50)]
     + [("long_history", n) for n in (20, 200, 800)]
     + [("dashboard", n) for n in (100, 1000, 5000)],
 }

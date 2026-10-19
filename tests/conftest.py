@@ -76,3 +76,16 @@ class FakeLLM:
 @pytest.fixture
 def fake_llm():
     return FakeLLM
+
+
+@pytest.fixture(autouse=True)
+def no_leftover_web_sessions():
+    """The portal's session table is process-wide and capped (20 per
+    business): start every test with it empty so caps never leak between tests."""
+    server = sys.modules.get("server")
+    if server is not None:
+        server.sessions.clear()
+    yield
+    server = sys.modules.get("server")
+    if server is not None:
+        server.sessions.clear()
