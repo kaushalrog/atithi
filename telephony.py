@@ -41,14 +41,18 @@ inbound calls to that number reach that business. Calls to an unmapped number
 go to DEFAULT_CLIENT (env) or demo_clinic.
 
 Concurrency: every call is one independent websocket + one GeminiLive session
-inside FastAPI's event loop — no shared mutable state between calls, so many
-calls run in parallel. The practical ceiling is your Gemini tier's concurrent
-Live sessions (free: 3, paid tier 1: ~50), not this code.
+inside FastAPI's ONE event loop. That loop is shared by every live call, so
+nothing that blocks (a tool hitting the database, building the agent,
+saving the record) may run on it — a 300 ms booking there froze every other
+caller's audio for 300 ms (docs/PERFORMANCE_AUDIT.md F2). Those run on the
+call-I/O thread pool below instead. The practical ceiling is your Gemini
+tier's concurrent Live sessions (free: 3, paid tier 1: ~50), not this code.
 """
 
 import asyncio
 import audioop
 import base64
+import concurrent.futures
 import datetime as dt
 import hashlib
 import hmac
@@ -76,6 +80,33 @@ BASE_DIR = Path(__file__).resolve().parent
 
 
 # ---- configuration ----------------------------------------------------------------
+
+TOOL_DRAIN_S = 15   # at hang-up, how long to wait for a booking still running
+
+_call_io_pool = None
+_call_io_lock = threading.Lock()
+
+
+def call_io_pool() -> concurrent.futures.ThreadPoolExecutor:
+    """The threads that run phone calls' blocking work.
+
+    Its own pool, not asyncio's default one: the default (min(32, CPUs + 4)
+    threads — 5 on a 1-vCPU VM) is shared with everything else in the
+    process, so a few slow tools could leave a hanging-up call waiting for
+    a thread just to save its record. Two per call allows a tool and a
+    record save at once."""
+    global _call_io_pool
+    with _call_io_lock:
+        if _call_io_pool is None:
+            _call_io_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=max(8, 2 * max_concurrent_calls()),
+                thread_name_prefix="call-io")
+        return _call_io_pool
+
+
+async def _off_loop(fn, *args):
+    """Run blocking fn(*args) on the call-I/O pool; the loop keeps serving calls."""
+    return await asyncio.wrap_future(call_io_pool().submit(fn, *args))
 
 def twilio_config() -> dict:
     return {
@@ -274,6 +305,7 @@ class TwilioBridge:
         # Audio timing (perf_counter). The Live API detects the end of the
         # caller's speech itself, so "the caller finished" is approximated by
         # the last transcript fragment heard before the reply's first audio.
+        self._tool_job = None      # the tool run in flight (a concurrent Future)
         self._greet_t = None       # when we asked for the greeting
         self._heard_t = None       # last caller transcript fragment
         self._reply_t0 = self._reply_last = None
@@ -332,7 +364,13 @@ class TwilioBridge:
                 self._reply_ended("interrupted")
                 self.turn.flush()
             elif kind == "tool_calls":
-                await self.live.send_tool_results(self.turn.tool_calls(event["calls"]))
+                # On a worker thread: the database (and anything slow behind
+                # it) must never stall the other calls on this event loop.
+                # Safe because this pump handles ONE event at a time — nothing
+                # else touches this call's TurnRecorder until the tool is done.
+                self._tool_job = call_io_pool().submit(self.turn.tool_calls, event["calls"])
+                results = await asyncio.wrap_future(self._tool_job)
+                await self.live.send_tool_results(results)
             elif kind == "user_text":
                 self._heard_t = time.perf_counter()
                 self.turn.user_text(event["text"])
@@ -347,7 +385,22 @@ class TwilioBridge:
 
         The caller's number is call metadata, not something the caller said:
         it used to be inserted as a customer turn, which inflated the turn
-        count and shifted every turn after it (audit M2)."""
+        count and shifted every turn after it (audit M2).
+
+        Runs on a worker thread. If the caller hung up while a tool was
+        running, that thread is still writing the result into the turn:
+        wait for it (bounded), so a booking that happened is never missing
+        from the record — and the turn is never read while it changes."""
+        job = self._tool_job
+        if job is not None and not job.done():
+            try:
+                job.result(timeout=TOOL_DRAIN_S)
+            except concurrent.futures.TimeoutError:
+                perf.event("timeout.tool_at_hangup")
+                print(f"  (call {self.call_sid or '?'}: a tool was still running after "
+                      f"{TOOL_DRAIN_S}s at hang-up; saving the record without it)")
+            except Exception:
+                pass   # run_tool never raises; a cancelled job never ran
         self.turn.flush()
         # Two calls can start in the same second, so the call id carries the
         # Twilio SID; without one it would overwrite the other call's record.
@@ -377,6 +430,19 @@ def _say(text: str) -> Response:
     ), media_type="application/xml")
 
 
+def _route_and_check(to_number: str, explicit: str | None) -> tuple[str, bool]:
+    client = resolve_client(to_number, explicit)
+    return client, billing.client_active(client)
+
+
+def _business_problem(client_id: str) -> str | None:
+    if storage.read_client_config(client_id) is None:
+        return f"unknown business {client_id!r}"
+    if not billing.client_active(client_id):       # the plan may have lapsed since the webhook
+        return f"plan inactive for {client_id!r}"
+    return None
+
+
 @router.post("/twilio/voice")
 async def twilio_voice(request: Request, client_id: str | None = None):
     if not live_calls_enabled():
@@ -386,13 +452,15 @@ async def twilio_voice(request: Request, client_id: str | None = None):
     form = dict((await request.form()).items())
     if not _validate_signature(request, form):
         raise HTTPException(status_code=403, detail="Invalid Twilio signature")
-    client = resolve_client(form.get("To", ""), client_id)
+    # Routing and the plan check read client files: off the loop, because
+    # live calls share it (cached reads are fast, but a cold one is not).
+    client, active = await _off_loop(_route_and_check, form.get("To", ""), client_id)
     # A call the business placed (from /admin) is answered by the customer:
     # their number is "To", and the lines were already checked when dialling,
     # so they must never hear "all our lines are busy" on picking up.
     outbound = form.get("Direction", "").startswith("outbound")
     caller = form.get("To", "") if outbound else form.get("From", "")
-    if not billing.client_active(client):          # also False for an unknown business
+    if not active:                                 # also False for an unknown business
         # Unpaid/expired business: apologize to the caller instead of answering.
         return _say("Sorry, this number is temporarily unavailable. Please try again later.")
     if not outbound and _calls_in_flight() >= max_concurrent_calls():
@@ -488,17 +556,19 @@ async def twilio_stream(ws: WebSocket):
             return await _reject(ws, problem)
         # Identity comes from the signed ticket, never from unsigned input.
         client_id, caller = params["client_id"], params.get("caller", "")
-        if storage.read_client_config(client_id) is None:
-            return await _reject(ws, f"unknown business {client_id!r}")
-        if not billing.client_active(client_id):    # the plan may have lapsed since the webhook
-            return await _reject(ws, f"plan inactive for {client_id!r}")
+        # Check-and-take the line with no await in between: the ticket's
+        # reserved slot was just given back, so an await here would let
+        # another call take the line this caller was promised.
         if _calls_in_flight() >= max_concurrent_calls():
             return await _reject(ws, "concurrent call limit reached")
         _active_calls += 1
         holds_slot = True
+        problem = await _off_loop(_business_problem, client_id)
+        if problem:
+            return await _reject(ws, problem)    # finally gives the line back
 
         # Every gate passed — only now do we spend resources on the call.
-        agent = ReceptionistAgent(client_id)
+        agent = await _off_loop(ReceptionistAgent, client_id)
         if caller:
             agent.system_prompt += (
                 f"\n\nThis is a PHONE CALL. The caller's number from caller ID is {caller} "
@@ -546,7 +616,7 @@ async def twilio_stream(ws: WebSocket):
             # on a worker thread so other live calls never stall, and never
             # let a failure here skip closing the socket below.
             try:
-                await asyncio.to_thread(bridge.finish)
+                await _off_loop(bridge.finish)
             except Exception as e:
                 print(f"  (call {params.get('call_sid', '?')}: call log not saved: {type(e).__name__}: {e})")
         # Hang up our side too: a finished or failed call must never leave a

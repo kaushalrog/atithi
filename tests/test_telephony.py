@@ -764,3 +764,100 @@ def test_bridge_measures_reply_audio_timing(tmp_storage, fake_llm):
     assert {r["call"] for r in seen} == {bridge.agent.perf_id}
     assert "9876543210" not in str(seen)
     perf.reset()
+
+
+# ---- blocking work stays off the shared event loop (perf audit F2, R1) ---------------
+
+def _booking_call(slot, date):
+    return {"type": "tool_calls", "calls": [{"id": "t1", "name": "book_appointment", "args": {
+        "customer_name": "Ravi", "phone": "9876543210", "service": "Cleaning",
+        "date": date, "time": slot}}]}
+
+
+def _slow_bookings(monkeypatch, seconds):
+    real = storage.reserve_booking
+
+    def slow(row):
+        time.sleep(seconds)          # a held database lock, a slow disk...
+        return real(row)
+    monkeypatch.setattr(storage, "reserve_booking", slow)
+
+
+def test_a_slow_tool_never_stalls_another_calls_audio(tmp_storage, fake_llm, monkeypatch):
+    """One call's 300 ms booking used to freeze every call's 20 ms audio
+    frames on the shared loop (bench: 99-124 ms late with a held lock)."""
+    date = open_day()
+    _slow_bookings(monkeypatch, 0.3)
+    bridge = make_bridge(fake_llm, FakeLive([_booking_call(open_times(date=date)[0], date)]), [])
+
+    async def other_call_frames():
+        worst = 0.0
+        for _ in range(25):                     # 500 ms of another call's audio
+            t0 = time.perf_counter()
+            await asyncio.sleep(0.02)
+            worst = max(worst, time.perf_counter() - t0 - 0.02)
+        return worst
+
+    async def main():
+        frames = asyncio.create_task(other_call_frames())
+        await asyncio.sleep(0.05)               # the other call is mid-conversation
+        await bridge.pump_gemini()              # ...when this caller books
+        return await frames
+
+    worst = asyncio.run(main())
+    assert worst < 0.05, f"another call's audio frame was {worst * 1000:.0f} ms late"
+    assert bridge.live.tool_results[0][0]["result"]["status"] == "confirmed"
+
+
+def test_hang_up_during_a_running_booking_keeps_it_in_the_record(tmp_storage, fake_llm,
+                                                                 monkeypatch):
+    """Eng review R1: the caller hangs up while the booking is still on its
+    worker thread. The record must contain the booking that happened."""
+    import json
+    date = open_day()
+    slot = open_times(date=date)[0]
+    _slow_bookings(monkeypatch, 0.3)
+
+    class HangsAfterTool(FakeLive):
+        async def events(self):
+            yield {"type": "user_text", "text": "book me"}
+            yield _booking_call(slot, date)
+
+    bridge = make_bridge(fake_llm, HangsAfterTool(), [])
+
+    async def call_then_hang_up():
+        pump = asyncio.create_task(bridge.pump_gemini())
+        await asyncio.sleep(0.05)               # booking is mid-flight
+        pump.cancel()                           # Twilio sent "stop"
+        await asyncio.gather(pump, return_exceptions=True)
+        await telephony._off_loop(bridge.finish)
+
+    asyncio.run(call_then_hang_up())
+    [path] = (storage.CALLS_DIR / "demo_clinic" / "traces").glob("*.json")
+    [action] = json.loads(path.read_text())["actions"]
+    assert (action["type"], action["ok"]) == ("book", True)
+    assert storage.read_bookings("demo_clinic")
+
+
+def test_hang_up_gives_up_on_a_stuck_tool_after_the_drain_limit(tmp_storage, fake_llm,
+                                                                monkeypatch, capsys):
+    import perf
+    perf.reset()
+    monkeypatch.setattr(telephony, "TOOL_DRAIN_S", 0.05)
+    date = open_day()
+    _slow_bookings(monkeypatch, 0.4)
+    bridge = make_bridge(fake_llm, FakeLive([_booking_call(open_times(date=date)[0], date)]), [])
+
+    async def main():
+        pump = asyncio.create_task(bridge.pump_gemini())
+        await asyncio.sleep(0.02)
+        pump.cancel()
+        await asyncio.gather(pump, return_exceptions=True)
+        t0 = time.perf_counter()
+        await telephony._off_loop(bridge.finish)
+        return time.perf_counter() - t0
+
+    assert asyncio.run(main()) < 0.3
+    assert perf.snapshot()["events"]["timeout.tool_at_hangup"] == 1
+    assert "still running" in capsys.readouterr().out
+    bridge._tool_job.result(timeout=2)          # let the stray booking finish cleanly

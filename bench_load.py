@@ -589,7 +589,9 @@ def main():
     for name, n in SUITES[args.suite]:
         proc = subprocess.run([sys.executable, __file__, "--scenario", name, "--sessions", str(n)],
                               capture_output=True, text=True, timeout=600)
-        line = (proc.stdout.strip().splitlines() or ["{}"])[-1]
+        # The result is the last JSON line: agent.py prints booking lines
+        # before it, and storage's shutdown report can print after it.
+        line = next((ln for ln in reversed(proc.stdout.splitlines()) if ln.startswith("{")), "{}")
         try:
             data = json.loads(line)
         except json.JSONDecodeError:

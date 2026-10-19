@@ -85,7 +85,9 @@ async def run(client_id: str, half_duplex: bool):
             elif kind == "tool_calls":
                 for call in event["calls"]:
                     print(f"  [tool] {call['name']}({call['args']})")
-                await live.send_tool_results(turn.tool_calls(event["calls"]))
+                # Off the event loop, like the phone bridge: while the
+                # database answers, the mic and speaker keep streaming.
+                await live.send_tool_results(await asyncio.to_thread(turn.tool_calls, event["calls"]))
             elif kind == "turn_complete":
                 user_line, agent_line = turn.flush()
                 if user_line:
