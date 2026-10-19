@@ -44,6 +44,7 @@ import csv
 import datetime as dt
 import json
 import os
+import queue
 import re
 import sqlite3
 import threading
@@ -53,6 +54,7 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
+import perf
 import scheduling
 
 load_dotenv()
@@ -420,10 +422,11 @@ def reserve_booking(row: list) -> str | None:
             "Bookings are paused for a moment — apologise and offer to have the "
             "front desk call the customer back to confirm a slot."
         )
-    try:
-        conn.execute(_INSERT_BOOKING, tuple(row))
-    except sqlite3.IntegrityError:
-        return None
+    with perf.span("db.booking_insert"):
+        try:
+            conn.execute(_INSERT_BOOKING, tuple(row))
+        except sqlite3.IntegrityError:
+            return None
     _invalidate(BOOKINGS_DB)   # keep the dashboard's counters and ETag honest
     if _mirror_to_google_sheet(row):
         return "bookings.db + Google Sheet copy"
@@ -602,10 +605,14 @@ def log_call_from_agent(agent, channel: str, started: dt.datetime,
         record["transcript"] = f"Caller: {caller}\n\n" + record["transcript"]
     folder = CALLS_DIR / agent.client_id
     path = folder / f"{call_id}.json"
-    _write_json_atomic(path, record)
+    perf_id = getattr(agent, "perf_id", None)
+    with perf.span("call_log.write", call=perf_id, channel=channel):
+        _write_json_atomic(path, record)
     _invalidate(path)
     try:
-        _write_trace(agent, channel, started, call_id, caller, folder / "traces" / f"{call_id}.json")
+        with perf.span("trace.write", call=perf_id, channel=channel):
+            _write_trace(agent, channel, started, call_id, caller,
+                         folder / "traces" / f"{call_id}.json")
     except Exception as e:
         # A trace bug must never cost the business its call record. The
         # checker reports a call without a trace as "skipped", never as clean.
@@ -852,6 +859,110 @@ def client_for_number(number: str) -> str | None:
         if str(entry["config"].get("twilio_number", "")).strip() == wanted:
             return entry["client_id"]
     return None
+
+
+# ---- background work (never on the call path) -------------------------------------
+
+class _BackgroundQueue:
+    """One daemon thread draining a BOUNDED queue.
+
+    WHY: work that is not the source of truth (the Google Sheet copy, the perf
+    log) must never make a caller wait, and must never pile up without limit
+    while its destination is slow or down. put() never blocks: when the queue
+    is full the item is dropped and counted, so memory stays capped whatever
+    the network does. The thread starts on first use, so importing storage
+    (tests, CLI commands) starts nothing.
+    """
+
+    def __init__(self, name: str, handle, maxsize: int):
+        self.name, self.handle = name, handle
+        self.queue: queue.Queue = queue.Queue(maxsize=maxsize)
+        self.dropped = 0
+        self._thread = None
+        self._start_lock = threading.Lock()
+
+    def put(self, item) -> bool:
+        """Queue an item; False (and counted) when the queue is full."""
+        self._ensure_thread()
+        try:
+            self.queue.put_nowait(item)
+            return True
+        except queue.Full:
+            self.dropped += 1
+            return False
+
+    def pending(self) -> int:
+        """Items queued or being handled right now."""
+        return self.queue.unfinished_tasks
+
+    def drain(self, timeout: float) -> int:
+        """Wait up to `timeout` seconds for the work to finish; returns what's left."""
+        deadline = time.monotonic() + timeout
+        while self.pending() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return self.pending()
+
+    def _ensure_thread(self):
+        if self._thread is not None and self._thread.is_alive():
+            return
+        with self._start_lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._run, name=self.name, daemon=True)
+                self._thread.start()
+
+    def _run(self):
+        while True:
+            item = self.queue.get()
+            try:
+                self.handle(item)
+            except Exception as e:
+                # A background worker must survive any error in its handler,
+                # or every later item would silently wait forever.
+                print(f"  [{self.name}] {type(e).__name__}: {e}")
+            finally:
+                self.queue.task_done()
+
+
+# ---- the optional perf log (VOXAGENT_PERF_LOG) -------------------------------------
+# perf.py measures but never touches disk; when a path is configured, every
+# finished span is appended here as one JSON line, on the background thread.
+
+PERF_LOG_MAX_BYTES = 20 * 1024 * 1024   # then rolled to <name>.1 (one backup kept)
+
+
+def _append_perf_line(item):
+    path, line = item
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if path.stat().st_size >= PERF_LOG_MAX_BYTES:
+            os.replace(path, path.with_name(path.name + ".1"))
+    except FileNotFoundError:
+        pass
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+
+_perf_log = _BackgroundQueue("perf-log", _append_perf_line, maxsize=10_000)
+
+
+def enable_perf_log(path: str | Path | None):
+    """Append every perf span to `path` as JSON lines; None/"" turns it off."""
+    if not path:
+        perf.set_sink(None)
+        return
+    path = Path(path)
+    if not path.is_absolute():
+        path = BASE_DIR / path
+    _guard_write(path)   # refuse now, at startup, rather than silently later
+
+    def sink(rec: dict):
+        if not _perf_log.put((path, json.dumps(rec, ensure_ascii=False))):
+            perf.event("perf_log.dropped")
+
+    perf.set_sink(sink)
+
+
+enable_perf_log(os.getenv("VOXAGENT_PERF_LOG", "").strip())
 
 
 # ---- shared CSV helpers ----------------------------------------------------------

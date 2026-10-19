@@ -19,11 +19,14 @@ the error and corrects itself. Self-healing beats hoping.
 
 import datetime as dt
 import re
+import secrets
 import sys
 import threading
+import time
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import perf
 import scheduling
 import storage
 from llm import GeminiLLM
@@ -96,6 +99,7 @@ TOOL_SCHEMAS = [
         },
     },
 ]
+_TOOL_NAMES = frozenset(t["name"] for t in TOOL_SCHEMAS)
 
 
 # Every timestamp in a conversation record carries a UTC offset, so "tomorrow
@@ -175,6 +179,9 @@ class ReceptionistAgent:
         self.system_prompt = self._render_system_prompt()
         self.llm = llm or default_llm()
         self.history: list[dict] = []
+        # A random id that ties this conversation's perf measurements
+        # together. Deliberately NOT the phone number or the Twilio SID.
+        self.perf_id = secrets.token_hex(6)
 
     # ---- setup ---------------------------------------------------------------
 
@@ -233,24 +240,34 @@ class ReceptionistAgent:
         """
         self.history.append({"role": "user", "text": user_message, "at": self.now()})
         messages = [{"role": "system", "text": self.system_prompt}]
+        t0, rounds, outcome = time.perf_counter(), 0, "error"
+        try:
+            for _ in range(5):
+                rounds += 1
+                # Each model round trip is timed: a turn that needs three
+                # trips is three waits the customer sits through.
+                with perf.span("model.request", call=self.perf_id, round=rounds):
+                    response = self.llm.send(messages + self.history, TOOL_SCHEMAS)
 
-        for _ in range(5):
-            response = self.llm.send(messages + self.history, TOOL_SCHEMAS)
+                if response["tool_calls"]:
+                    self.history.append(self.tool_call_entry(response["tool_calls"], response["text"]))
+                    for call in response["tool_calls"]:
+                        self.history.append(self.run_tool(call))
+                    continue  # feed tool results back, get the model's next move
 
-            if response["tool_calls"]:
-                self.history.append(self.tool_call_entry(response["tool_calls"], response["text"]))
-                for call in response["tool_calls"]:
-                    self.history.append(self.run_tool(call))
-                continue  # feed tool results back, get the model's next move
+                text = response["text"] or "Sorry, could you repeat that?"
+                self.history.append({"role": "assistant", "text": text, "at": self.now()})
+                outcome = "reply"
+                return text
 
-            text = response["text"] or "Sorry, could you repeat that?"
+            # Safety net: 5 rounds of tools without a text reply.
+            text = "Sorry, I'm having trouble right now — the front desk will call you back."
             self.history.append({"role": "assistant", "text": text, "at": self.now()})
+            outcome = "round_limit"
             return text
-
-        # Safety net: 5 rounds of tools without a text reply.
-        text = "Sorry, I'm having trouble right now — the front desk will call you back."
-        self.history.append({"role": "assistant", "text": text, "at": self.now()})
-        return text
+        finally:
+            perf.record("turn", (time.perf_counter() - t0) * 1000, outcome != "error",
+                        self.perf_id, rounds=rounds, outcome=outcome)
 
     def reset(self):
         """Forget the conversation (the /reset command)."""
@@ -270,10 +287,18 @@ class ReceptionistAgent:
         must never kill the conversation: the failure is reported to the
         model, which apologises and offers a front-desk callback.
         """
+        t0 = time.perf_counter()
         try:
             result = self._execute_tool(call["name"], call["args"])
         except Exception as e:
             result = {"error": f"{type(e).__name__}: {e}"}
+        # The tool name comes from the model, so only known names become a
+        # label; the outcome is the tool's own status, never its arguments.
+        raised = "error" in result and "status" not in result
+        status = result.get("status") or ("error" if raised else "ok")
+        perf.record("tool", (time.perf_counter() - t0) * 1000, not raised, self.perf_id,
+                    tool=call["name"] if call["name"] in _TOOL_NAMES else "unknown",
+                    status=status)
         return {"role": "tool", "name": call["name"], "result": result, "at": self.now()}
 
     def _execute_tool(self, name: str, args: dict) -> dict:
@@ -451,6 +476,7 @@ class TurnRecorder:
 
     def _reset(self):
         self._user, self._user_at = "", None
+        self._user_last = None                     # perf_counter of the caller's last fragment
         self._before, self._before_at = "", None   # agent speech before the first tool
         self._after, self._after_at = "", None     # agent speech after it
         self._tools: list[dict] = []
@@ -459,6 +485,7 @@ class TurnRecorder:
         if not self._user:
             self._user_at = self.agent.now()
         self._user += text
+        self._user_last = time.perf_counter()
 
     def agent_text(self, text: str):
         if self._tools:
@@ -491,5 +518,10 @@ class TurnRecorder:
         history.extend(self._tools)
         if after:
             history.append({"role": "assistant", "text": after, "at": self._after_at})
+        if self._user_last is not None:
+            # From the caller's last transcribed words to the turn being
+            # written down: how long a finished turn waits to be recorded.
+            perf.record("turn.finalize", (time.perf_counter() - self._user_last) * 1000,
+                        call=self.agent.perf_id)
         self._reset()
         return user, " ".join(t for t in (before, after) if t)

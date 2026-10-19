@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 import auth
 import billing
 import llm as llm_module
+import perf
 import scheduling
 import storage
 import telephony
@@ -405,6 +406,14 @@ def admin_overview():
             }}
 
 
+@app.get("/api/admin/perf", dependencies=[Depends(require_admin)])
+def admin_perf():
+    """Latency percentiles, counters and gauges measured inside this process
+    (perf.py). Durations only — no transcripts, names or numbers."""
+    perf.gauge("sessions.active", len(sessions))
+    return perf.snapshot()
+
+
 @app.post("/api/admin/activate", dependencies=[Depends(require_admin)])
 def admin_activate(req: ActivateRequest):
     """The owner paid — extend their plan by N months."""
@@ -693,9 +702,10 @@ def dashboard(client_id: str, response: Response,
     if if_none_match and if_none_match == version:
         return Response(status_code=304, headers={"ETag": version})
 
-    calls = storage.read_call_logs(client_id)
-    bookings = storage.read_bookings(client_id)
-    leads = storage.read_leads(client_id)
+    with perf.span("dashboard.read"):
+        calls = storage.read_call_logs(client_id)
+        bookings = storage.read_bookings(client_id)
+        leads = storage.read_leads(client_id)
     response.headers["ETag"] = version
     return {
         # Stats count every call ever; the list ships only the recent ones so

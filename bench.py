@@ -2,7 +2,7 @@
 
     .venv\\Scripts\\python bench.py
 
-Run it after touching agent.py, storage.py, auth.py or llm.py. These are the
+Run it after touching agent.py, storage.py, auth.py, llm.py or perf.py. These are the
 paths that sit between a caller speaking and the agent answering, so a
 regression here is a regression the customer hears.
 
@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import auth  # noqa: E402
 import billing  # noqa: E402
+import perf  # noqa: E402
 import scheduling  # noqa: E402
 import storage  # noqa: E402
 import telephony  # noqa: E402
@@ -106,6 +107,16 @@ def main():
                                                       call_id="bench"))
         finally:
             storage.CALLS_DIR = real_calls_dir
+    # The instrumentation itself sits on every one of those paths: one span
+    # must stay far below anything a caller could notice (budget 10 µs).
+    def span_x1000():
+        for _ in range(1000):
+            with perf.span("bench.span", tool="check_availability"):
+                pass
+
+    per_span = bench("perf.span x1000 (instrumentation cost)", span_x1000, n=20)
+    print(f"  -> one perf.span: {per_span:.2f} µs")
+    perf.reset()
     print(f"\n  tool schemas offered per turn: {len(TOOL_SCHEMAS)}")
     print(f"  dashboard server work: {total:.2f} ms\n")
 

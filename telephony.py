@@ -66,6 +66,7 @@ from fastapi.responses import Response
 from starlette.websockets import WebSocketState
 
 import billing
+import perf
 import storage
 from agent import TOOL_SCHEMAS, ReceptionistAgent, TurnRecorder
 
@@ -270,6 +271,30 @@ class TwilioBridge:
         self.stream_sid = None
         self.started = dt.datetime.now()
         self.turn = TurnRecorder(agent)
+        # Audio timing (perf_counter). The Live API detects the end of the
+        # caller's speech itself, so "the caller finished" is approximated by
+        # the last transcript fragment heard before the reply's first audio.
+        self._greet_t = None       # when we asked for the greeting
+        self._heard_t = None       # last caller transcript fragment
+        self._reply_t0 = self._reply_last = None
+
+    def _audio_out(self):
+        now = time.perf_counter()
+        if self._reply_t0 is None:
+            self._reply_t0 = now
+            pid = self.agent.perf_id
+            if self._heard_t is not None:
+                perf.record("call.first_audio", (now - self._heard_t) * 1000, call=pid)
+            elif self._greet_t is not None:
+                perf.record("call.greeting_audio", (now - self._greet_t) * 1000, call=pid)
+            self._heard_t = self._greet_t = None
+        self._reply_last = now
+
+    def _reply_ended(self, outcome: str):
+        if self._reply_t0 is not None:
+            perf.record("call.reply_audio", (self._reply_last - self._reply_t0) * 1000,
+                        call=self.agent.perf_id, outcome=outcome)
+        self._reply_t0 = self._reply_last = None
 
     async def handle_twilio(self, msg: dict) -> bool:
         """One message from Twilio. Returns False when the call has ended."""
@@ -277,6 +302,7 @@ class TwilioBridge:
         if event == "start":
             self.stream_sid = msg["start"]["streamSid"]
             # The receptionist speaks first on a phone call.
+            self._greet_t = time.perf_counter()
             await self.live.send_text("(the call has just connected — greet the caller briefly)")
         elif event == "media":
             mulaw = base64.b64decode(msg["media"]["payload"])
@@ -290,6 +316,7 @@ class TwilioBridge:
         async for event in self.live.events():
             kind = event["type"]
             if kind == "audio":
+                self._audio_out()
                 payload = base64.b64encode(
                     self.converter.gemini_to_twilio(event["data"])
                 ).decode("ascii")
@@ -302,14 +329,17 @@ class TwilioBridge:
                 # and end the turn so the cut-off reply is recorded before the
                 # caller's next words.
                 await self.send_json({"event": "clear", "streamSid": self.stream_sid})
+                self._reply_ended("interrupted")
                 self.turn.flush()
             elif kind == "tool_calls":
                 await self.live.send_tool_results(self.turn.tool_calls(event["calls"]))
             elif kind == "user_text":
+                self._heard_t = time.perf_counter()
                 self.turn.user_text(event["text"])
             elif kind == "agent_text":
                 self.turn.agent_text(event["text"])
             elif kind == "turn_complete":
+                self._reply_ended("complete")
                 self.turn.flush()
 
     def finish(self):
@@ -475,8 +505,11 @@ async def twilio_stream(ws: WebSocket):
                 "— when taking a booking or lead you may offer to use it, but always "
                 "confirm it with the caller first."
             )
+        perf.gauge("calls.active", _active_calls)
+        perf.ensure_loop_monitor()
         live = GeminiLive()
-        await live.connect(agent.system_prompt, TOOL_SCHEMAS)
+        with perf.span("call.model_connect", call=agent.perf_id):
+            await live.connect(agent.system_prompt, TOOL_SCHEMAS)
         bridge = TwilioBridge(agent, live, ws.send_json, caller=caller,
                               call_sid=str(params.get("call_sid", "")))
         await bridge.handle_twilio(start_msg)
@@ -502,6 +535,7 @@ async def twilio_stream(ws: WebSocket):
     finally:
         if holds_slot:
             _active_calls -= 1
+            perf.gauge("calls.active", _active_calls)
         if live is not None:
             try:
                 await live.close()

@@ -732,3 +732,35 @@ def test_dialled_customer_keeps_a_slot_while_ringing(phone, monkeypatch):
                           query="?client_id=demo_clinic")
     assert stream(phone["client"], ticket_from_twiml(answered.text), call_sid="CAOUT") == 1000
     assert SpyLive.created and telephony._calls_in_flight() == 0
+
+
+def test_bridge_measures_reply_audio_timing(tmp_storage, fake_llm):
+    """Time to the agent's first audio and the reply's length are recorded,
+    tied to the conversation's random perf id, never to the caller."""
+    import perf
+    perf.reset()
+    live = FakeLive([
+        {"type": "audio", "data": make_tone_pcm(24000, 20)},     # the greeting
+        {"type": "turn_complete"},
+        {"type": "user_text", "text": "a slot please"},
+        {"type": "audio", "data": make_tone_pcm(24000, 20)},
+        {"type": "audio", "data": make_tone_pcm(24000, 20)},
+        {"type": "interrupted"},
+    ])
+    sent = []
+    bridge = make_bridge(fake_llm, live, sent)
+    seen = []
+    perf.set_sink(seen.append)
+    asyncio.run(bridge.handle_twilio(
+        {"event": "start", "start": {"streamSid": "MZ1", "customParameters": {}}}))
+    asyncio.run(bridge.pump_gemini())
+    perf.set_sink(None)
+    names = [r["name"] for r in seen]
+    assert names.count("call.greeting_audio") == 1
+    assert names.count("call.first_audio") == 1
+    assert [r["labels"]["outcome"] for r in seen if r["name"] == "call.reply_audio"] \
+        == ["complete", "interrupted"]
+    assert "turn.finalize" in names
+    assert {r["call"] for r in seen} == {bridge.agent.perf_id}
+    assert "9876543210" not in str(seen)
+    perf.reset()
