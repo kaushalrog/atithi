@@ -331,8 +331,11 @@ class GeminiLive:
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
         )
-        self._cm = self.client.aio.live.connect(model=self.model, config=config)
-        self._session = await self._cm.__aenter__()
+        cm = self.client.aio.live.connect(model=self.model, config=config)
+        # Remember the session only once it's open: a handshake that failed
+        # or was cancelled (the caller's connect timeout) has nothing to close.
+        self._session = await cm.__aenter__()
+        self._cm = cm
 
     async def close(self):
         if self._cm is not None:

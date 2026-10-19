@@ -330,7 +330,9 @@ class SpyLive:
         pass
 
     async def events(self):
-        return
+        # A healthy session stays open until the call ends (the stream
+        # treats a pump that stops on its own as a dropped session).
+        await asyncio.Event().wait()
         yield
 
 
@@ -522,13 +524,15 @@ def test_a_failing_call_log_never_leaves_the_socket_open(phone, monkeypatch, cap
     assert telephony._active_calls == 0
 
 
-def test_call_slot_is_released_when_the_model_fails_to_connect(phone, monkeypatch):
+def test_call_slot_is_released_when_the_model_fails_to_connect(phone, monkeypatch, capsys):
+    """A failed connect now ends the stream cleanly (Twilio then plays the
+    apology after </Connect>) instead of escaping as a server error."""
     async def broken(self, *a):
         raise ConnectionError("Gemini unreachable")
     monkeypatch.setattr(SpyLive, "connect", broken)
-    with pytest.raises(ConnectionError):
-        stream(phone["client"], good_ticket())
+    assert stream(phone["client"], good_ticket()) == 1000
     assert telephony._active_calls == 0
+    assert "model session did not open (ConnectionError)" in capsys.readouterr().out
 
 
 # ---- review fixes: stream robustness and call-slot accounting (D2 #8, D3 #11) -------
@@ -861,3 +865,61 @@ def test_hang_up_gives_up_on_a_stuck_tool_after_the_drain_limit(tmp_storage, fak
     assert perf.snapshot()["events"]["timeout.tool_at_hangup"] == 1
     assert "still running" in capsys.readouterr().out
     bridge._tool_job.result(timeout=2)          # let the stray booking finish cleanly
+
+
+# ---- a failing model session must never leave the caller on a silent line (F3, F4) ---
+
+def test_twiml_apologises_after_the_stream_ends(phone):
+    res = post_voice(phone["client"], {"To": "+15550001111", "From": "+919876543210",
+                                       "CallSid": "CA1"})
+    root = ET.fromstring(res.text)
+    assert [child.tag for child in root] == ["Connect", "Say"]
+    assert root.find("Say").text == telephony.APOLOGY
+
+
+def test_a_dropped_model_session_hangs_up_and_saves_the_record(phone, monkeypatch):
+    """Audit F3: the pump died, nobody noticed, and the caller sat in silence
+    until they gave up (bench: 5 of 5 calls). Our side must hang up at once."""
+    import perf
+    perf.reset()
+
+    async def drops(self):
+        yield {"type": "user_text", "text": "hello?"}
+        raise ConnectionError("Live session dropped")
+    monkeypatch.setattr(SpyLive, "events", drops)
+    headers = {"x-twilio-signature": sign(telephony.stream_url())}
+    t0 = time.perf_counter()
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with phone["client"].websocket_connect("/twilio/stream", headers=headers) as ws:
+            ws.send_json({"event": "start", "start": {
+                "streamSid": "MZ1", "callSid": "CA1", "customParameters": good_ticket()}})
+            ws.receive_text()          # no "stop" sent: the CALLER is still there
+    assert time.perf_counter() - t0 < 1.0
+    assert closed.value.code == 1000
+    assert telephony._active_calls == 0
+    assert perf.snapshot()["events"]["error.model_stream"] == 1
+    [record] = storage.read_call_logs("demo_clinic")
+    assert "hello?" in record["transcript"]
+
+
+def test_a_hanging_model_connect_times_out_and_frees_the_line(phone, monkeypatch):
+    """Audit F4: no connect timeout — a stuck handshake held a line forever."""
+    import perf
+    perf.reset()
+    monkeypatch.setattr(telephony, "LIVE_CONNECT_TIMEOUT_S", 0.1)
+
+    async def hangs(self, *a):
+        await asyncio.Event().wait()
+    monkeypatch.setattr(SpyLive, "connect", hangs)
+    t0 = time.perf_counter()
+    assert stream(phone["client"], good_ticket()) == 1000
+    assert time.perf_counter() - t0 < 1.0
+    assert telephony._active_calls == 0
+    assert perf.snapshot()["events"]["timeout.model_connect"] == 1
+
+
+def test_a_normal_hang_up_is_not_counted_as_a_model_failure(phone):
+    import perf
+    perf.reset()
+    assert stream(phone["client"], good_ticket()) == 1000
+    assert "error.model_stream" not in perf.snapshot()["events"]

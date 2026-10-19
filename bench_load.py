@@ -208,8 +208,12 @@ async def loop_lag_monitor(samples, stop, period=0.01):
 async def one_call(n, turns, model_s, result, drop_at=None, interrupt=False, patience_s=3.0):
     """One phone call, wired like telephony.twilio_stream: a 20 ms inbound
     media feeder (read_twilio) plus the Gemini pump task, then finish() on a
-    worker thread. The simulated caller hangs up after `patience_s` of
-    silence while waiting for a reply."""
+    worker thread. The call ends when EITHER side does (twilio_stream waits
+    FIRST_COMPLETED): a pump that stops on its own makes our side hang up
+    (counted as server_hangups). The simulated caller hangs up after
+    `patience_s` of silence while waiting for a reply (silent_hangups).
+    Keep this in step with twilio_stream; tests/test_telephony.py drives the
+    real handler."""
     agent = ReceptionistAgent(CLIENT, llm=object())
     marks, sent = [], []
 
@@ -223,7 +227,7 @@ async def one_call(n, turns, model_s, result, drop_at=None, interrupt=False, pat
     await bridge.handle_twilio({"event": "start", "start": {"streamSid": f"MZ{n}"}})
     pump = asyncio.create_task(bridge.pump_gemini())
     lateness, started = [], time.perf_counter()
-    k, silent_since, hung_up_silent = 0, None, False
+    k, silent_since, hung_up_silent, server_hung_up = 0, None, False, False
     while True:
         k += 1
         due = started + k * 0.02
@@ -232,8 +236,11 @@ async def one_call(n, turns, model_s, result, drop_at=None, interrupt=False, pat
         await bridge.handle_twilio({"event": "media", "media": {"payload": MULAW_20MS}})
         if any(m[0] == "script_done" for m in marks):
             break
+        if pump.done():                 # the model side ended: our side hangs up now
+            server_hung_up = True
+            break
         waiting = marks and marks[-1][0] == "speech_end" and (not sent or sent[-1] < marks[-1][1])
-        if waiting or pump.done():
+        if waiting:
             silent_since = silent_since or time.perf_counter()
             if time.perf_counter() - silent_since > patience_s:
                 hung_up_silent = True
@@ -264,7 +271,8 @@ async def one_call(n, turns, model_s, result, drop_at=None, interrupt=False, pat
     result["audio_gaps_over_60ms"] += sum(1 for g in gaps if g > 0.06)
     result["max_audio_gap_s"].append(max(gaps) if gaps else 0.0)
     result["silent_hangups"] += int(hung_up_silent)
-    result["calls_ok"] += int(finish_ok and not hung_up_silent)
+    result["server_hangups"] += int(server_hung_up)
+    result["calls_ok"] += int(finish_ok and not hung_up_silent and not server_hung_up)
 
 
 def phone_script(kind, slots, n_turns):
@@ -287,7 +295,7 @@ def run_phone(sessions, kind, failure, n_turns=4, model_s=0.25):
     slots = open_slots(sessions + 2)
     undo = inject(failure)
     result = {"ttfa_s": [], "feeder_lateness_s": [], "finish_s": [], "audio_gaps_over_60ms": 0,
-              "max_audio_gap_s": [], "silent_hangups": 0, "calls_ok": 0}
+              "max_audio_gap_s": [], "silent_hangups": 0, "server_hangups": 0, "calls_ok": 0}
     lag = []
 
     async def main():
@@ -311,7 +319,8 @@ def run_phone(sessions, kind, failure, n_turns=4, model_s=0.25):
             "event_loop_lag_ms": summary(lag), "finish_ms": summary(result["finish_s"]),
             "audio_gaps_over_60ms": result["audio_gaps_over_60ms"],
             "max_audio_gap_ms": round(max(result["max_audio_gap_s"] or [0]) * 1000, 1),
-            "silent_hangups": result["silent_hangups"], "calls_ok": result["calls_ok"],
+            "silent_hangups": result["silent_hangups"], "server_hangups": result["server_hangups"],
+            "calls_ok": result["calls_ok"],
             "calls": sessions, "bookings_confirmed": booked,
             "turns_per_s": round(sessions * n_turns / wall, 2), "wall_s": round(wall, 2),
             "cpu_s": round(time.process_time() - cpu0, 2)}

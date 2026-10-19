@@ -109,8 +109,27 @@ So on the first test call, from your own verified phone:
   something different. Don't disable the check. Capture the request details,
   fix `telephony.py`, and add a test with the real shape.
 
+**Second check: the apology after a model failure.** When the Gemini session
+fails to open (10 s limit) or drops mid-call, VoxAgent closes the media stream
+itself. The TwiML has a `<Say>` after `</Connect>`, and Twilio's documentation
+says the call then continues with it. That has not been heard on a real call.
+To check it on your test call, set `GEMINI_API_KEY` to an invalid value for
+that one call, then ring the number:
+- **You hear "Sorry, we're having trouble right now…" and the call ends.** The
+  assumption holds; note it in `docs/AUDIT.md`. The server prints
+  `[phone] model session did not open`.
+- **You hear silence, or the call just drops.** Twilio doesn't continue after a
+  stream we close. Note it in `docs/AUDIT.md`; the fix is to end the call through
+  the Twilio REST API with `<Say>` TwiML instead (telephony.py).
+
+Put the real key back afterwards.
+
 Other things only a real call can show: audio quality over the phone line,
-latency the caller hears, and Twilio trial-account messages.
+latency the caller hears, and Twilio trial-account messages. With
+`VOXAGENT_PERF_LOG=perf.jsonl` set, `/api/admin/perf` and that file show
+`call.model_connect`, `call.greeting_audio`, `call.first_audio` and `loop.lag`
+for the real call. Those are the first real-provider numbers; the offline
+benchmark's numbers come from fake providers and say nothing about them.
 
 ## 6. Checking the Google Sheets copy by hand
 

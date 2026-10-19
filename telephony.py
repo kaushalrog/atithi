@@ -82,6 +82,12 @@ BASE_DIR = Path(__file__).resolve().parent
 # ---- configuration ----------------------------------------------------------------
 
 TOOL_DRAIN_S = 15   # at hang-up, how long to wait for a booking still running
+LIVE_CONNECT_TIMEOUT_S = 10   # opening the Gemini Live session; the caller hears silence meanwhile
+# Twilio runs the TwiML after </Connect> once OUR side ends the stream — a
+# dropped model session, a connect that failed. (A caller hanging up ends
+# the call, so they never hear it.) Twilio documents this behaviour; it is
+# UNVERIFIED on a real call until docs/SAFE_TESTING.md §5 is done.
+APOLOGY = "Sorry, we're having trouble right now. Please call back in a few minutes."
 
 _call_io_pool = None
 _call_io_lock = threading.Lock()
@@ -480,6 +486,7 @@ async def twilio_voice(request: Request, client_id: str | None = None):
 {params}
     </Stream>
   </Connect>
+  <Say>{escape(APOLOGY)}</Say>
 </Response>"""
     return Response(content=twiml, media_type="application/xml")
 
@@ -578,8 +585,18 @@ async def twilio_stream(ws: WebSocket):
         perf.gauge("calls.active", _active_calls)
         perf.ensure_loop_monitor()
         live = GeminiLive()
-        with perf.span("call.model_connect", call=agent.perf_id):
-            await live.connect(agent.system_prompt, TOOL_SCHEMAS)
+        # Bounded: a handshake that hangs used to leave the caller in silence
+        # (holding a line) for as long as the network let it.
+        try:
+            with perf.span("call.model_connect", call=agent.perf_id):
+                await asyncio.wait_for(live.connect(agent.system_prompt, TOOL_SCHEMAS),
+                                       timeout=LIVE_CONNECT_TIMEOUT_S)
+        except Exception as e:
+            kind = "timeout" if isinstance(e, TimeoutError) else "error"
+            perf.event(f"{kind}.model_connect")
+            print(f"  [phone] model session did not open ({type(e).__name__}); "
+                  "ending the stream so the caller hears the apology")
+            return
         bridge = TwilioBridge(agent, live, ws.send_json, caller=caller,
                               call_sid=str(params.get("call_sid", "")))
         await bridge.handle_twilio(start_msg)
@@ -590,16 +607,34 @@ async def twilio_stream(ws: WebSocket):
                 if not await bridge.handle_twilio(msg):
                     return
 
+        # The call lasts until EITHER side ends. Waiting on the caller alone
+        # meant a dropped model session left them on a silent line until they
+        # gave up (bench: 5 of 5 calls). Now our side hangs up at once, and
+        # Twilio plays the apology that follows </Connect>.
+        reader = asyncio.create_task(read_twilio())
         pump = asyncio.create_task(bridge.pump_gemini())
+        done = set()
         try:
-            await read_twilio()
+            done, _ = await asyncio.wait({reader, pump}, return_when=asyncio.FIRST_COMPLETED)
         finally:
+            reader.cancel()
             pump.cancel()
-            # Let the pump finish unwinding BEFORE finish() runs on a worker
+            # Let both finish unwinding BEFORE finish() runs on a worker
             # thread, so nothing on the event loop can touch this call's
             # history while it is being saved. return_exceptions also
-            # collects a pump crash instead of leaving it unretrieved.
-            await asyncio.gather(pump, return_exceptions=True)
+            # collects a crash instead of leaving it unretrieved.
+            reader_result, pump_result = await asyncio.gather(reader, pump,
+                                                              return_exceptions=True)
+        if reader in done:          # the caller's side ended: the normal way out
+            if isinstance(reader_result, Exception) \
+                    and not isinstance(reader_result, WebSocketDisconnect):
+                perf.event("error.twilio_stream")
+                print(f"  [phone] bad message from Twilio mid-call "
+                      f"({type(reader_result).__name__}); ending the call")
+        elif pump in done:          # the model's side dropped or failed first
+            why = type(pump_result).__name__ if isinstance(pump_result, BaseException) else "closed"
+            perf.event("error.model_stream")
+            print(f"  [phone] model stream ended mid-call ({why}); hanging up our side")
     except WebSocketDisconnect:
         pass
     finally:
