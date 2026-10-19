@@ -192,6 +192,7 @@ Same machine, same Python (3.13.13), same harness and fake providers as §2. Raw
 | F5, F6 retry and TTS waits | 25 s retry-wait budget per model request; TTS 15 s timeout → 504 | a7c338d |
 | Phase 5: conversion | `outcome` stored per call; used for conversion, admin flags and the portal badge | 7d57cbe |
 | Regression found and fixed | In-process lock around the booking INSERT (see "Regressions") | bad773e |
+| `/review` findings (2026-10-19) | Test widget frees its session on close; the per-business cap evicts the business's own oldest idle session instead of refusing (QA reproduced a 2 h lockout after 20 opens). A booking that finishes after the 15 s hang-up drain is saved again into the record. Sheets read timeouts aren't retried (no duplicate rows). The insert lock is waited on ≤1 s. The model retry budget is a 25 s deadline that counts attempts. Perf snapshot sorts outside its lock, and loop lag stays out of the JSONL log | this review |
 | Benchmark safety | `bench.py` now uses temporary storage. It had created an empty `bookings.db` in the repo when none existed | 92b2589 |
 
 ### Before and after: the failures

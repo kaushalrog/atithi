@@ -112,7 +112,7 @@ def _capacity_line() -> str:
 
     WHY: VoxAgent is ONE process (the phone tickets' signing key and the
     session table live in its memory). Its capacity is these numbers, and
-    nothing scales them for you — see docs/SETUP.md "Capacity"."""
+    nothing scales them for you — see SETUP.md "Capacity"."""
     try:
         import anyio.to_thread
         portal = anyio.to_thread.current_default_thread_limiter().total_tokens
@@ -303,9 +303,13 @@ def authorize_client(client_id: str, client_key: str | None, admin_key: str | No
 
 def get_session(session_id: str) -> dict:
     purge_idle_sessions()
-    session = sessions.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Unknown or expired session")
+    with _sessions_lock:
+        session = sessions.get(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Unknown or expired session")
+        # Touched on every use, so a session a request has just fetched (and
+        # is about to lock) is never the "oldest idle" one evicted at the cap.
+        session["last_activity"] = dt.datetime.now()
     return session
 
 
@@ -341,11 +345,15 @@ def one_turn_at_a_time(session: dict):
         session["lock"].release()
 
 
+def turn_cap_reached(session: dict) -> bool:
+    return sum(1 for m in session["agent"].history if m["role"] == "user") >= MAX_TURNS_PER_SESSION
+
+
 def run_turn(session: dict, message: str) -> dict:
     """One customer turn; also reports which tools fired so the UI can show them.
     The caller holds one_turn_at_a_time(session)."""
     agent = session["agent"]
-    if sum(1 for m in agent.history if m["role"] == "user") >= MAX_TURNS_PER_SESSION:
+    if turn_cap_reached(session):
         # The cap: a polite end, no model call, nothing more added to history.
         return {"reply": CLOSING_LINE, "tools": [], "ended": True}
     before = len(agent.history)
@@ -445,7 +453,7 @@ def admin_overview():
         "channel": c["channel"],
         "seconds": c["seconds"],
         "turns": c["turns"],
-        **call_outcome(c),
+        **record_outcome(c),
     } for c in all_calls[:12]]
     return {"totals": totals, "clients": clients, "recent_calls": recent,
             "password_resets": auth.pending_resets(),
@@ -658,11 +666,19 @@ def create_session(req: SessionRequest,
         if len(sessions) >= MAX_SESSIONS:
             raise HTTPException(status_code=429,
                                 detail="Too many test calls are open right now — try again shortly.")
-        if sum(1 for v in sessions.values()
-               if v["client_id"] == req.client_id) >= MAX_SESSIONS_PER_BUSINESS:
-            raise HTTPException(status_code=429,
-                                detail="This business has too many test calls open — "
-                                       "close one or wait a while.")
+        mine = [(v["last_activity"], sid) for sid, v in sessions.items()
+                if v["client_id"] == req.client_id]
+        if len(mine) >= MAX_SESSIONS_PER_BUSINESS:
+            # Make room by dropping this business's OWN oldest idle session
+            # (its call record is already on disk). Refusing instead locked
+            # an owner out for 2 hours after 20 demo clicks. A session that
+            # is mid-reply is never dropped, and no other business's is.
+            idle = [(t, sid) for t, sid in mine if not sessions[sid]["lock"].locked()]
+            if not idle:
+                raise HTTPException(status_code=429,
+                                    detail="This business has too many test calls open — "
+                                           "close one or wait a while.")
+            del sessions[min(idle)[1]]
         sessions[session_id] = {
             "agent": agent,
             "client_id": req.client_id,
@@ -672,6 +688,21 @@ def create_session(req: SessionRequest,
             "lock": threading.Lock(),
         }
     return {"session_id": session_id, "business_name": agent.config["business_name"]}
+
+
+class EndSessionRequest(BaseModel):
+    session_id: str = Field(max_length=64)
+
+
+@app.post("/api/session/end")
+def end_session(req: EndSessionRequest):
+    """The owner closed the test widget: free its slot now, not after 2 h idle.
+    Like /api/chat, knowing the random session id is the permission, so it
+    travels in the body, never the URL (URLs end up in access logs). The call
+    record is already saved; a reply still being generated finishes normally."""
+    with _sessions_lock:
+        sessions.pop(req.session_id, None)
+    return {"ok": True}
 
 
 FRONT_DESK_LINE = ("Sorry, our line is very busy right now — the front desk "
@@ -710,6 +741,8 @@ def voice(session_id: str = Form(...), audio: UploadFile = File(...)):
         raise HTTPException(status_code=413, detail="Recording too long — keep a turn under a minute")
     mime = MIME_FIX.get(audio.content_type, audio.content_type) or "audio/wav"
     with one_turn_at_a_time(session):
+        if turn_cap_reached(session):        # don't pay for a transcription past the cap
+            return {"heard": "", **run_turn(session, "")}
         # Same bound as a typed turn: the transcript is re-sent every later turn.
         heard = session["agent"].llm.transcribe(data, mime_type=mime)[:MAX_CHAT_CHARS]
         if not heard:
@@ -737,7 +770,7 @@ def speak(req: TTSRequest):
 
 # ---------- dashboard data -------------------------------------------------------
 
-def call_outcome(call: dict) -> dict:
+def record_outcome(call: dict) -> dict:
     """Did this call book, or save a lead? Records written since the perf
     audit store the tools' real results; older ones fall back to the old
     transcript rule, which also counted FAILED attempts (audit M1)."""
@@ -750,14 +783,14 @@ def call_outcome(call: dict) -> dict:
 
 def _with_outcome(calls: list[dict]) -> list[dict]:
     # Copies: call records come from storage's shared cache (read-only).
-    return [{**c, "outcome": call_outcome(c)} for c in calls]
+    return [{**c, "outcome": record_outcome(c)} for c in calls]
 
 
 def _stats_from(calls, bookings, leads) -> dict:
     """Stats from data already in hand — no second pass over the disk."""
     n_calls = len(calls)
     # Conversion = share of calls whose booking actually succeeded.
-    booked_calls = sum(1 for c in calls if call_outcome(c)["booked"])
+    booked_calls = sum(1 for c in calls if record_outcome(c)["booked"])
     return {
         "calls": n_calls,
         "minutes": round(sum(c["seconds"] for c in calls) / 60, 1),

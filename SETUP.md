@@ -226,7 +226,8 @@ server prints its limits at startup, in a line like:
   retry waits are capped at 25 s and speech at 15 s, so one turn can't hold a
   thread for much longer than that.
 - **Web test-call sessions:** 20 per business, 500 in total, 60 turns each.
-  Idle ones are cleared after 2 hours.
+  Closing the test widget frees its session at once. At 20, the business's oldest
+  idle session makes room; idle ones are cleared after 2 hours anyway.
 
 What has been measured: `python bench_load.py --suite full` runs an offline,
 fake-provider workload of 1–10 simultaneous calls or chats. Results are in

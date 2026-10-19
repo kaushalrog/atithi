@@ -366,7 +366,8 @@ def test_sessions_are_capped_per_business_and_in_total(client, session, monkeypa
     new = lambda cid, key: client.post("/api/session", json={"client_id": cid},
                                        headers={"X-Client-Key": key}).status_code
     assert new("demo_clinic", DEMO_KEY) == 200        # the fixture's + this one = 2
-    assert new("demo_clinic", DEMO_KEY) == 429
+    assert new("demo_clinic", DEMO_KEY) == 200        # at the cap its oldest idle one goes (D1)...
+    assert sum(v["client_id"] == "demo_clinic" for v in server.sessions.values()) == 2  # ...never more
     assert new("lakshmi_beauty_salon", "VX-7TPX3R") == 200   # other businesses unaffected
     monkeypatch.setattr(server, "MAX_SESSIONS", 3)
     assert new("lakshmi_beauty_salon", "VX-7TPX3R") == 429
@@ -397,3 +398,80 @@ def test_a_slow_voice_reply_is_a_504_not_a_hang(client, session, monkeypatch):
     monkeypatch.setattr(server.tts, "synthesize_bytes", stalled)
     res = client.post("/api/tts", json={"session_id": session, "text": "hi"})
     assert res.status_code == 504 and "text reply stands" in res.json()["detail"]
+
+
+# ---- the test widget must never lock an owner out (review D1) -------------------------
+
+def _open(client):
+    return client.post("/api/session", json={"client_id": "demo_clinic"},
+                       headers={"X-Client-Key": DEMO_KEY})
+
+
+def test_closing_the_widget_releases_its_session(client, session, monkeypatch):
+    """QA replay: an owner opening and closing the widget 21 times during a
+    demo got 429 'too many test calls' for up to 2 hours."""
+    for _ in range(server.MAX_SESSIONS_PER_BUSINESS + 1):
+        res = _open(client)
+        assert res.status_code == 200
+        assert client.post("/api/session/end",
+                           json={"session_id": res.json()["session_id"]}).status_code == 200
+    assert len(server.sessions) == 1                 # only the fixture's session is left
+
+
+def test_at_the_cap_the_oldest_idle_session_makes_room(client, session, monkeypatch):
+    monkeypatch.setattr(server, "MAX_SESSIONS_PER_BUSINESS", 2)
+    second = _open(client).json()["session_id"]
+    server.get_session(session)["last_activity"] -= server.dt.timedelta(minutes=5)
+    third = _open(client)
+    assert third.status_code == 200                  # nobody locked out...
+    assert session not in server.sessions            # ...the oldest idle one went
+    assert second in server.sessions
+
+
+def test_a_session_mid_turn_is_never_evicted(client, session, monkeypatch):
+    monkeypatch.setattr(server, "MAX_SESSIONS_PER_BUSINESS", 1)
+    s = server.get_session(session)
+    s["lock"].acquire()                              # a reply is being generated
+    try:
+        assert _open(client).status_code == 429
+        assert session in server.sessions
+    finally:
+        s["lock"].release()
+
+
+def test_deleting_an_unknown_session_is_harmless(client):
+    assert client.post("/api/session/end", json={"session_id": "nope"}).status_code == 200
+
+
+def test_a_voice_message_while_answering_gets_409(client, session):
+    s = server.get_session(session)
+    s["lock"].acquire()
+    try:
+        res = client.post("/api/voice", data={"session_id": session},
+                          files={"audio": ("a.wav", b"RIFF0000", "audio/wav")})
+    finally:
+        s["lock"].release()
+    assert res.status_code == 409 and "Still answering" in res.json()["detail"]
+
+
+def test_a_voice_turn_past_the_cap_skips_the_paid_transcription(client, session, monkeypatch):
+    monkeypatch.setattr(server, "MAX_TURNS_PER_SESSION", 1)
+    agent = server.get_session(session)["agent"]
+    agent.history.append({"role": "user", "text": "hi", "at": agent.now()})
+    heard = []
+    agent.llm.transcribe = lambda data, mime_type=None: heard.append(1) or "hello"
+    res = client.post("/api/voice", data={"session_id": session},
+                      files={"audio": ("a.wav", b"RIFF0000", "audio/wav")}).json()
+    assert res["reply"] == server.CLOSING_LINE and res["ended"] is True
+    assert heard == []
+
+
+def test_a_session_just_fetched_is_never_the_one_evicted(client, session, monkeypatch):
+    """A tab that just sent a message (fetched, not yet locked) must not lose
+    its session to another tab opening a new one."""
+    monkeypatch.setattr(server, "MAX_SESSIONS_PER_BUSINESS", 2)
+    other = _open(client).json()["session_id"]
+    server.get_session(session)["last_activity"] -= server.dt.timedelta(minutes=5)
+    server.get_session(session)                  # a request picks it up again now
+    assert _open(client).status_code == 200
+    assert session in server.sessions and other not in server.sessions

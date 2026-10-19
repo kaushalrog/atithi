@@ -152,3 +152,41 @@ def test_perf_endpoint_is_admin_only(tmp_storage, monkeypatch):
     res = client.get("/api/admin/perf", headers={"X-Admin-Key": "test-admin-pw"})
     assert res.status_code == 200
     assert {"spans", "events", "gauges"} <= set(res.json())
+
+
+def test_a_model_error_is_a_failed_turn_and_still_raises(tmp_storage):
+    class Down:
+        def send(self, *a, **k):
+            raise RuntimeError("model down")
+    agent = ReceptionistAgent("demo_clinic", llm=Down())
+    seen = []
+    perf.set_sink(seen.append)
+    with pytest.raises(RuntimeError, match="model down"):
+        agent.chat("hi")
+    perf.set_sink(None)
+    [turn] = [r for r in seen if r["name"] == "turn"]
+    assert turn["ok"] is False and turn["labels"]["outcome"] == "error"
+    assert [r["ok"] for r in seen if r["name"] == "model.request"] == [False]
+
+
+def test_five_tool_rounds_without_a_reply_is_a_round_limit_turn(tmp_storage):
+    day = open_day()
+    call = {"text": None, "tool_calls": [{"name": "check_availability", "args": {"date": day}}]}
+    agent = ReceptionistAgent("demo_clinic", llm=FakeLLM([call] * 5))
+    seen = []
+    perf.set_sink(seen.append)
+    agent.chat("slots?")
+    perf.set_sink(None)
+    [turn] = [r for r in seen if r["name"] == "turn"]
+    assert turn["labels"] == {"rounds": "5", "outcome": "round_limit"} and turn["ok"] is True
+
+
+def test_loop_lag_samples_stay_out_of_the_jsonl_log():
+    """Four samples a second would roll real call spans out of the 20 MB log."""
+    seen = []
+    perf.set_sink(seen.append)
+    perf.record("loop.lag", 1.0, log=False)
+    perf.record("tool", 1.0)
+    perf.set_sink(None)
+    assert [r["name"] for r in seen] == ["tool"]
+    assert perf.snapshot()["spans"]["loop.lag"]["count"] == 1

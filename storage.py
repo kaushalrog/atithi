@@ -277,7 +277,9 @@ def _bookings_db() -> sqlite3.Connection:
         return conn
     if conn is not None:
         conn.close()
-    _guard_write(BOOKINGS_DB)                # opening creates the file
+    # Guard the exact path about to be opened (opening creates the file),
+    # not the global again: it can change between the two reads.
+    _guard_write(Path(path))
     # isolation_level=None: autocommit. Normal writes are ONE statement (atomic
     # on its own); the imports below open explicit transactions.
     conn = sqlite3.connect(path, timeout=10, isolation_level=None)
@@ -478,6 +480,10 @@ def import_sheet(skip: bool = False):
 # (bench: insert max 4-12 ms; with this lock 1.3-1.6 ms). A Python lock hands
 # over instantly. Held only for the one statement.
 _booking_insert_lock = threading.Lock()
+# ...but never wait on it for long: if another process holds the database,
+# the thread holding this lock sits in SQLite's 10 s busy wait, and bookings
+# queued behind it would wait 10 s EACH. Past this, take SQLite's own turn.
+BOOKING_LOCK_WAIT_S = 1.0
 
 
 def reserve_booking(row: list) -> str | None:
@@ -495,11 +501,15 @@ def reserve_booking(row: list) -> str | None:
             "Bookings are paused for a moment — apologise and offer to have the "
             "front desk call the customer back to confirm a slot."
         )
-    with perf.span("db.booking_insert"), _booking_insert_lock:
+    with perf.span("db.booking_insert"):
+        locked = _booking_insert_lock.acquire(timeout=BOOKING_LOCK_WAIT_S)
         try:
             conn.execute(_INSERT_BOOKING, tuple(row))
         except sqlite3.IntegrityError:
             return None
+        finally:
+            if locked:
+                _booking_insert_lock.release()
     _invalidate(BOOKINGS_DB)   # keep the dashboard's counters and ETag honest
     # The booking is committed: it's real now, whatever happens next. The
     # Sheet copy is queued, never awaited — it used to run right here, so a
@@ -584,17 +594,41 @@ def _copy_to_sheet(row: list):
         if wait:
             time.sleep(wait)
         try:
+            sheet = _sheet_handle(*target)     # a failure here never reached the append
+        except Exception as e:
+            _reset_sheet_handle()
+            error = e
+            continue
+        try:
             with perf.span("sheets.copy"):
-                _sheet_handle(*target).append_row(row)
+                sheet.append_row(row)
             return
         except Exception as e:
             _reset_sheet_handle()       # a stale handle may be the problem
             error = e
+            if _may_have_landed(e):
+                # Google may have applied the append and answered too late.
+                # append_row is not idempotent: retrying could put the
+                # booking in the owner's Sheet twice, which reads as a
+                # double booking. Say so instead of guessing.
+                perf.event("sheets.unconfirmed")
+                print(f"  [warning] Google Sheet copy may or may not have landed ({type(e).__name__}) "
+                      f"— check the Sheet for {row[1]} {row[5]} {row[6]}; it is safe in bookings.db.")
+                return
     perf.event("sheets.dropped")
     # Which booking, without the customer's name or number in the log.
     print(f"  [warning] Google Sheet copy dropped after {1 + len(SHEETS_RETRY_WAITS_S)} tries "
           f"({type(error).__name__}) — {row[1]} {row[5]} {row[6]} is safe in bookings.db; "
           "the Sheet is missing that row.")
+
+
+def _may_have_landed(error: Exception) -> bool:
+    """A read timeout: the request reached Google, the answer didn't reach us.
+    (requests' ReadTimeout, which gspread raises, matched by name so this
+    file needs no requests import.) Connection errors, 429s and 5xx never
+    landed and are safe to retry."""
+    return any(c.__name__ in ("ReadTimeout", "ReadTimeoutError")
+               for c in type(error).__mro__)
 
 
 _sheets_queue = _BackgroundQueue("sheets-copy", _copy_to_sheet, maxsize=SHEETS_QUEUE_MAX)
@@ -687,7 +721,8 @@ def read_leads(client_id: str) -> list[dict]:
 # ---- call logs -----------------------------------------------------------------
 
 def log_call_from_agent(agent, channel: str, started: dt.datetime,
-                        call_id: str | None = None, caller: str | None = None):
+                        call_id: str | None = None, caller: str | None = None,
+                        ended: dt.datetime | None = None):
     """Write (or rewrite) the call record for one conversation.
 
     Works for every channel: the web server calls this after each turn with a
@@ -706,7 +741,7 @@ def log_call_from_agent(agent, channel: str, started: dt.datetime,
         return
     if call_id is None:
         call_id = started.strftime("%Y%m%d_%H%M%S_") + channel
-    now = dt.datetime.now()
+    now = ended or dt.datetime.now()   # a re-save keeps the original hang-up time
     record = {
         "call_id": call_id,
         "client_id": agent.client_id,
@@ -767,9 +802,16 @@ def _phone10(phone) -> str:
     return re.sub(r"\D", "", str(phone or ""))[-10:]
 
 
+def tool_raised(result: dict) -> bool:
+    """Did the tool raise? run_tool turns an exception into {"error": ...}
+    with no "status"; a tool's own validation failure carries a status.
+    One rule, used by the trace, the call outcome and the perf counters."""
+    return "error" in result and "status" not in result
+
+
 def _action_ok(kind: str, result: dict) -> bool:
-    if "error" in result and "status" not in result:
-        return False  # the tool raised (run_tool turned it into an error)
+    if tool_raised(result):
+        return False
     if kind in _OK_STATUS:
         return result.get("status") == _OK_STATUS[kind]
     return True  # availability answers have no status: an answer is success

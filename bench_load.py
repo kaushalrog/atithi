@@ -27,7 +27,6 @@ import datetime as dt
 import json
 import os
 import platform
-import resource
 import statistics
 import subprocess
 import sys
@@ -96,6 +95,10 @@ def open_slots(count):
 
 
 def peak_rss_mb():
+    try:
+        import resource          # Unix only; Windows has no getrusage
+    except ImportError:
+        return None
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return round(rss / (1024 * 1024) if platform.system() == "Darwin" else rss / 1024, 1)
 

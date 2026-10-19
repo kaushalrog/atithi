@@ -16,6 +16,8 @@
 **Priority:** P2
 **Depends on:** None
 
+**Update 2026-10-19 (perf/audit /review):** also throttle `/api/auth/signup` and `/api/business`. Since perf/audit, test-call sessions are capped at 500 in total, and each business can hold 20. About 25 throwaway trial businesses could fill the global table, and every real business would then get 429 on its test widget for up to 2 hours (idle sessions expire after 2 h). The per-business cap no longer locks an owner out (their own oldest idle session is evicted), but the global cap still can.
+
 ### Personal-data retention and redaction
 
 **What:** A retention window for call logs, leads and bookings, a per-business delete path, and phone numbers redacted in console logs.
@@ -41,6 +43,32 @@
 **Effort:** S
 **Priority:** P2
 **Depends on:** Decision on per-session limits.
+
+### A durable outbox for the Google Sheet copy
+
+**What:** Record in bookings.db which bookings reached the Sheet (a `sheet_copied` column or small table). Re-queue the unsynced ones at startup, and add `python storage.py sync-sheet`.
+
+**Why:** Since perf/audit the Sheet copy waits in an in-memory queue, so a booking never waits for Google. But a crash, kill or redeploy loses whatever is queued, with no log. A clean exit drains for only 5 s, and a Google outage can fill the 1,000-item queue. The booking itself is always safe in bookings.db; only the owner's Sheet can silently miss rows.
+
+**Context:** `storage.py` `_copy_to_sheet`, `_sheets_queue`, `_drain_sheets_at_exit`. Read timeouts are already not retried; they're logged as "may or may not have landed" (perf/audit review D3). A re-sync must therefore check the Sheet for the booking before appending.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** Only matters for businesses using a Google Sheet.
+
+## Telephony (pre-existing, found by perf/audit /review)
+
+### Reserve the outbound call slot atomically with the capacity check
+
+**What:** `start_outbound_call` checks `_calls_in_flight()` before `calls.create()`, but reserves the slot only after Twilio answers the REST call. Reserve a provisional slot inside the same lock as the check, then re-key it to `call.sid`, or release it if dialling fails.
+
+**Why:** During that round trip (hundreds of ms) an inbound call or a second admin dial can take the last line. The customer the business dialled then picks up and hears the apology. Separately, the state-machine review found three slot cells without tests: an unanswered outbound dial expiring, a genuine outbound ticket used for the wrong call, and a forged one.
+
+**Context:** `telephony.py` `start_outbound_call`, `_reserve_slot`, `_slots_lock`. This code is unchanged on perf/audit (introduced in e4a3d38).
+
+**Effort:** S
+**Priority:** P2 (P1 once outbound campaigns start)
+**Depends on:** None
 
 ## Dashboard
 

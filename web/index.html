@@ -914,10 +914,23 @@ async function openTest() {
     addBubble("note", "⚠ " + e.message);
   }
 }
+// Free the server's test-call slot as soon as the widget closes (or the page
+// goes away): each business may hold only a limited number at once.
+function endSession() {
+  if (!SID) return;
+  fetch("/api/session/end", {
+    method: "POST", keepalive: true, headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: SID }),
+  }).catch(() => {});
+  SID = null;
+}
+// persisted = the page is kept in the back/forward cache and may come back
+// with the test call still open: keep its session then.
+window.addEventListener("pagehide", (e) => { if (!e.persisted) endSession(); });
 async function closeTest() {
   if (recorder) await toggleMic().catch(() => {});
   $("testOverlay").classList.add("hidden");
-  SID = null;
+  endSession();
   loadAll();
 }
 

@@ -118,11 +118,11 @@ def test_a_saved_lead_is_flagged_as_a_lead(client):
 
 
 def test_old_records_without_an_outcome_fall_back_to_the_transcript():
-    assert server.call_outcome({"transcript": "  [tool call] book_appointment(...)"}) \
+    assert server.record_outcome({"transcript": "  [tool call] book_appointment(...)"}) \
         == {"booked": True, "lead": False}
-    assert server.call_outcome({"transcript": "Customer: hi"}) == {"booked": False, "lead": False}
+    assert server.record_outcome({"transcript": "Customer: hi"}) == {"booked": False, "lead": False}
     stored = {"transcript": "book_appointment", "outcome": {"booked": False, "lead": False}}
-    assert server.call_outcome(stored)["booked"] is False   # the stored truth wins
+    assert server.record_outcome(stored)["booked"] is False   # the stored truth wins
 
 
 def test_shipping_outcomes_never_mutates_the_shared_cache(client):

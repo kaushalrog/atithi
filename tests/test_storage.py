@@ -152,12 +152,13 @@ class SlowWorksheet(FakeWorksheet):
 def test_a_slow_sheet_never_delays_the_booking(sheets_on):
     """Audit F1: the copy ran inside the booking, so a 1 s Google API made
     every phone caller on the server wait (5 s TTFA with 5 calls)."""
-    sheet = sheets_on(SlowWorksheet(delay=0.5))
+    sheet = sheets_on(SlowWorksheet(delay=1.5))
     t0 = time.perf_counter()
     assert storage.reserve_booking(booking()) == "bookings.db"
-    assert time.perf_counter() - t0 < 0.1
+    # gstack-timing-ok: inline copy would take >= 1.5 s; the bound is 5x looser than normal
+    assert time.perf_counter() - t0 < 0.5
     assert sheet.rows == []                      # still copying...
-    assert storage._sheets_queue.drain(3) == 0
+    assert storage._sheets_queue.drain(5) == 0
     assert sheet.rows == [booking()]             # ...and then it lands
 
 
@@ -737,3 +738,95 @@ def test_atomic_write_survives_a_reader_holding_the_file_on_windows(tmp_storage,
     storage.log_call_from_agent(agent, "web-test", dt.datetime.now(), call_id="c1")
     assert len(storage.read_call_logs("demo_clinic")) == 1
     assert read_trace()["call_id"] == "c1"
+
+
+class ReadTimeout(Exception):
+    """Same name as requests.exceptions.ReadTimeout, which gspread raises when
+    Google takes longer than the read timeout to answer."""
+
+
+def test_a_read_timeout_is_not_retried_so_the_sheet_never_gets_a_duplicate(
+        sheets_on, monkeypatch, capsys):
+    """Review D3: Google can apply an append and answer too late. Retrying
+    then appended the booking twice, which reads as a double booking."""
+    import perf
+    perf.reset()
+    monkeypatch.setattr(storage, "SHEETS_RETRY_WAITS_S", (0.01, 0.01, 0.01))
+
+    class AppliedButSlow(FakeWorksheet):
+        calls = 0
+
+        def append_row(self, row):
+            AppliedButSlow.calls += 1
+            self.rows.append(list(row))          # Google applied it...
+            if AppliedButSlow.calls == 1:
+                raise ReadTimeout("read timed out")   # ...but answered too late
+
+    sheet = sheets_on(AppliedButSlow())
+    storage.reserve_booking(booking())
+    assert storage._sheets_queue.drain(3) == 0
+    assert sheet.rows == [booking()]             # once, not twice
+    assert perf.snapshot()["events"]["sheets.unconfirmed"] == 1
+    assert "may or may not have landed" in capsys.readouterr().out
+
+
+def test_a_connection_error_is_still_retried(sheets_on, monkeypatch):
+    monkeypatch.setattr(storage, "SHEETS_RETRY_WAITS_S", (0.01, 0.01, 0.01))
+    sheet = sheets_on(SlowWorksheet(fail_times=1))   # ConnectionError: never reached Google
+    storage.reserve_booking(booking())
+    assert storage._sheets_queue.drain(3) == 0
+    assert sheet.rows == [booking()] and sheet.calls == 2
+
+
+def test_the_in_process_insert_lock_is_never_waited_on_for_long(tmp_storage, monkeypatch):
+    """Review D4: the lock was held across SQLite's 10 s busy wait, so with an
+    outside writer holding the database, bookings queued one behind another
+    (N x 10 s). Waiting for the lock is capped; SQLite's own wait remains."""
+    monkeypatch.setattr(storage, "BOOKING_LOCK_WAIT_S", 0.1)
+    storage._bookings_db()                       # create the database first
+    storage._booking_insert_lock.acquire()       # another booking thread is stuck
+    try:
+        t0 = time.perf_counter()
+        assert storage.reserve_booking(booking()) == "bookings.db"
+        assert time.perf_counter() - t0 < 1.0
+    finally:
+        storage._booking_insert_lock.release()
+
+
+def test_the_write_guard_checks_the_path_actually_opened(tmp_storage, monkeypatch):
+    """The guard used to re-read BOOKINGS_DB after the path was taken, so a
+    path swapped in between (a late thread at a test boundary) slipped past."""
+    real = storage._REAL_DATA[0]
+    existed = real.exists()                        # a working checkout may have one
+    reads = iter([real, tmp_storage / "elsewhere.db"])
+
+    class Flip:                                    # first read: real, second: harmless
+        def __fspath__(self):
+            return str(next(reads))
+
+        def __str__(self):
+            return self.__fspath__()
+    monkeypatch.setattr(storage, "BOOKINGS_DB", Flip())
+    storage._db_local.__dict__.clear()
+    with pytest.raises(RuntimeError, match="refuses"):
+        storage._bookings_db()
+    assert real.exists() == existed                # never created by a test
+
+
+def test_a_timeout_while_opening_the_sheet_is_still_retried(sheets_on, monkeypatch):
+    """Only an append can have landed; a read timeout while (re)opening the
+    sheet never reached append_row, so it is retried like any failure."""
+    monkeypatch.setattr(storage, "SHEETS_RETRY_WAITS_S", (0.01, 0.01, 0.01))
+    sheet = FakeWorksheet()
+    opens = []
+
+    def handle(*a):
+        opens.append(1)
+        if len(opens) == 1:
+            raise ReadTimeout("opening timed out")
+        return sheet
+    sheets_on(sheet)
+    monkeypatch.setattr(storage, "_sheet_handle", handle)
+    storage.reserve_booking(booking())
+    assert storage._sheets_queue.drain(3) == 0
+    assert sheet.rows == [booking()] and len(opens) == 2

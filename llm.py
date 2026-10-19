@@ -130,11 +130,12 @@ def _tools_to_gemini(tools):
     return converted
 
 
-# The most one request may spend WAITING between retries. Without it a run of
-# 429s could hold a request (and one of the portal's worker threads) for
-# ~75 s while the customer stared at a typing indicator (perf audit F5).
-# When it runs out the error is raised, and /api/chat answers with the
-# front-desk callback line instead.
+# A deadline for retrying one request: no retry starts unless its wait would
+# end within RETRY_BUDGET_S of the first attempt (attempts count, not just
+# the waits). Without it a run of 429s or slow 503s could hold a request (and
+# one of the portal's worker threads) for minutes while the customer stared
+# at a typing indicator (perf audit F5). When it runs out the error is
+# raised, and /api/chat answers with the front-desk callback line instead.
 RETRY_BUDGET_S = 25
 
 _RETRY_DELAY_RE = re.compile(r"'retryDelay':\s*'(\d+)")
@@ -253,7 +254,7 @@ class GeminiLLM:
     # ---- the actual API call, with retries ----------------------------------
 
     def _call_with_retry(self, contents, config, attempts=4):
-        slept = 0.0
+        started = time.monotonic()
         for attempt in range(attempts):
             try:
                 return self.client.models.generate_content(
@@ -270,11 +271,10 @@ class GeminiLLM:
                 retriable = e.code in (429, 500, 503)
                 if retriable and attempt < attempts - 1:
                     wait = _retry_wait(e, attempt)
-                    if slept + wait <= RETRY_BUDGET_S:
+                    if time.monotonic() - started + wait <= RETRY_BUDGET_S:
                         print(f"  [llm] API error {e.code}, retrying in {wait}s...")
                         perf.event("retry.model")
                         time.sleep(wait)
-                        slept += wait
                         continue
                     perf.event("timeout.model_retry_budget")
                 raise

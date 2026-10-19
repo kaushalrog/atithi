@@ -294,7 +294,7 @@ class ReceptionistAgent:
             result = {"error": f"{type(e).__name__}: {e}"}
         # The tool name comes from the model, so only known names become a
         # label; the outcome is the tool's own status, never its arguments.
-        raised = "error" in result and "status" not in result
+        raised = storage.tool_raised(result)
         status = result.get("status") or ("error" if raised else "ok")
         perf.record("tool", (time.perf_counter() - t0) * 1000, not raised, self.perf_id,
                     tool=call["name"] if call["name"] in _TOOL_NAMES else "unknown",
@@ -472,6 +472,11 @@ class TurnRecorder:
 
     def __init__(self, agent: ReceptionistAgent):
         self.agent = agent
+        # Tools run on a worker thread (telephony, live_main). If the caller
+        # hangs up while one is still running, flush() can run on another
+        # thread at the same moment; the lock keeps every tool entry whole
+        # and in order, so a late result lands in the NEXT flush, not nowhere.
+        self._lock = threading.Lock()
         self._reset()
 
     def _reset(self):
@@ -499,16 +504,22 @@ class TurnRecorder:
 
     def tool_calls(self, calls: list[dict]) -> list[dict]:
         """Run the tools now (the model is waiting); record them at flush()."""
-        self._tools.append(self.agent.tool_call_entry(calls))
+        with self._lock:
+            self._tools.append(self.agent.tool_call_entry(calls))
         results = []
         for call in calls:
             entry = self.agent.run_tool(call)
-            self._tools.append(entry)
+            with self._lock:
+                self._tools.append(entry)
             results.append({"id": call.get("id"), "name": call["name"], "result": entry["result"]})
         return results
 
     def flush(self) -> tuple[str, str]:
         """Write the buffered turn to history; returns (caller said, agent said)."""
+        with self._lock:
+            return self._flush()
+
+    def _flush(self) -> tuple[str, str]:
         history = self.agent.history
         user, before, after = self._user.strip(), self._before.strip(), self._after.strip()
         if user:

@@ -61,8 +61,10 @@ def _clean_labels(labels: dict) -> dict:
     return {k: str(v)[:40] for k, v in labels.items()}
 
 
-def record(name: str, ms: float, ok: bool = True, call: str | None = None, **labels):
-    """Store one finished measurement. Never raises in production."""
+def record(name: str, ms: float, ok: bool = True, call: str | None = None,
+           log: bool = True, **labels):
+    """Store one finished measurement. Never raises in production.
+    log=False keeps it out of the JSONL sink (high-rate samples)."""
     labels = _clean_labels(labels)
     with _lock:
         entry = _spans.get(name)
@@ -75,7 +77,7 @@ def record(name: str, ms: float, ok: bool = True, call: str | None = None, **lab
         entry["count"] += 1
         entry["errors"] += 0 if ok else 1
         entry["ms"].append(ms)
-        sink = _sink
+        sink = _sink if log else None
     if sink is not None:
         try:
             sink({"ts": dt.datetime.now(dt.timezone.utc).isoformat(timespec="milliseconds"),
@@ -123,10 +125,13 @@ def _pct(sorted_ms: list[float], q: float) -> float:
 def snapshot() -> dict:
     """Everything measured so far, as plain JSON-ready numbers."""
     with _lock:
-        spans = {n: (e["count"], e["errors"], sorted(e["ms"])) for n, e in _spans.items()}
+        # Copy under the lock, sort outside it: the event loop records into
+        # this store, so an admin poll must never hold the lock for a sort.
+        spans = {n: (e["count"], e["errors"], list(e["ms"])) for n, e in _spans.items()}
         events, gauges, dropped = dict(_events), dict(_gauges), dict(_dropped)
     out = {}
     for name, (count, errors, ms) in sorted(spans.items()):
+        ms.sort()
         out[name] = {"count": count, "errors": errors, "samples": len(ms)}
         if ms:
             out[name].update(p50=_pct(ms, 0.50), p95=_pct(ms, 0.95),
@@ -152,7 +157,7 @@ def reset():
 
 # ---- event-loop lag ---------------------------------------------------------------
 
-_monitors: dict[int, asyncio.Task] = {}
+_monitors: dict[int, asyncio.Task] = {}   # id(loop) -> its monitor task
 
 
 async def _watch_loop(period: float):
@@ -161,7 +166,10 @@ async def _watch_loop(period: float):
     while True:
         t0 = time.perf_counter()
         await asyncio.sleep(period)
-        record("loop.lag", max(0.0, (time.perf_counter() - t0 - period) * 1000))
+        # Four samples a second for the life of the server: kept in memory
+        # for /api/admin/perf, never written to the JSONL log, where it would
+        # roll real call spans out of the 20 MB file within hours.
+        record("loop.lag", max(0.0, (time.perf_counter() - t0 - period) * 1000), log=False)
 
 
 def ensure_loop_monitor(period: float = LOOP_SAMPLE_S):
@@ -170,6 +178,11 @@ def ensure_loop_monitor(period: float = LOOP_SAMPLE_S):
     Called when a streaming call starts; the task lives as long as the loop,
     so there is never more than one per loop — not one per call."""
     loop = asyncio.get_running_loop()
+    # Forget monitors of loops that are gone: an id() can be reused by a new
+    # loop, and a dead loop's task never reports done.
+    for key, task in list(_monitors.items()):
+        if task.done() or task.get_loop().is_closed():
+            del _monitors[key]
     task = _monitors.get(id(loop))
-    if task is None or task.done():
+    if task is None or task.get_loop() is not loop:
         _monitors[id(loop)] = loop.create_task(_watch_loop(period))

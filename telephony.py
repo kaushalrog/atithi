@@ -315,6 +315,7 @@ class TwilioBridge:
         # caller's speech itself, so "the caller finished" is approximated by
         # the last transcript fragment heard before the reply's first audio.
         self._tool_job = None      # the tool run in flight (a concurrent Future)
+        self.late_save_done = threading.Event()   # set once a late tool's re-save ran
         self._greet_t = None       # when we asked for the greeting
         self._heard_t = None       # last caller transcript fragment
         self._reply_t0 = self._reply_last = None
@@ -397,19 +398,39 @@ class TwilioBridge:
         count and shifted every turn after it (audit M2).
 
         Runs on a worker thread. If the caller hung up while a tool was
-        running, that thread is still writing the result into the turn:
-        wait for it (bounded), so a booking that happened is never missing
-        from the record — and the turn is never read while it changes."""
+        running, wait for it (up to TOOL_DRAIN_S) so the record includes its
+        result. If it is still running after that, save now and save again
+        when it finishes: a booking that happened is never missing from the
+        record. TurnRecorder's lock keeps the two threads from interleaving."""
+        self.ended = dt.datetime.now()     # the hang-up, for both saves below
         job = self._tool_job
+        late = False
         if job is not None and not job.done():
             try:
                 job.result(timeout=TOOL_DRAIN_S)
             except concurrent.futures.TimeoutError:
+                late = True
                 perf.event("timeout.tool_at_hangup")
                 print(f"  (call {self.call_sid or '?'}: a tool was still running after "
-                      f"{TOOL_DRAIN_S}s at hang-up; saving the record without it)")
+                      f"{TOOL_DRAIN_S}s at hang-up; saving now and again when it finishes)")
             except Exception:
                 pass   # run_tool never raises; a cancelled job never ran
+        self._save()
+        if late:
+            # Save once more when the tool finishes (on its worker thread):
+            # same call id, so the record is rewritten, now with the result.
+            # A booking that committed late must never be missing from it.
+            job.add_done_callback(lambda _: self._save_late())
+
+    def _save_late(self):
+        try:
+            self._save()
+        except Exception as e:
+            print(f"  (call {self.call_sid or '?'}: late re-save failed: {type(e).__name__}: {e})")
+        finally:
+            self.late_save_done.set()
+
+    def _save(self):
         self.turn.flush()
         # Two calls can start in the same second, so the call id carries the
         # Twilio SID; without one it would overwrite the other call's record.
@@ -417,7 +438,8 @@ class TwilioBridge:
         if self.call_sid:
             call_id += f"_{self.call_sid}"
         storage.log_call_from_agent(self.agent, "phone", self.started,
-                                    call_id=call_id, caller=self.caller)
+                                    call_id=call_id, caller=self.caller,
+                                    ended=getattr(self, "ended", None))
 
 
 # ---- HTTP: the webhook Twilio hits when a call starts -------------------------------

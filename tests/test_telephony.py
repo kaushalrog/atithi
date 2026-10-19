@@ -5,6 +5,7 @@ so a FakeLive and a list collector stand in for the real endpoints.
 """
 
 import asyncio
+import threading
 import audioop
 import base64
 import math
@@ -779,24 +780,29 @@ def _booking_call(slot, date):
 
 
 def _slow_bookings(monkeypatch, seconds):
+    """Bookings take `seconds`; returns an Event set once one has started, so
+    a test can hang up mid-booking without guessing with a fixed sleep."""
     real = storage.reserve_booking
+    started = threading.Event()
 
     def slow(row):
+        started.set()
         time.sleep(seconds)          # a held database lock, a slow disk...
         return real(row)
     monkeypatch.setattr(storage, "reserve_booking", slow)
+    return started
 
 
 def test_a_slow_tool_never_stalls_another_calls_audio(tmp_storage, fake_llm, monkeypatch):
     """One call's 300 ms booking used to freeze every call's 20 ms audio
     frames on the shared loop (bench: 99-124 ms late with a held lock)."""
     date = open_day()
-    _slow_bookings(monkeypatch, 0.3)
+    _slow_bookings(monkeypatch, 0.6)
     bridge = make_bridge(fake_llm, FakeLive([_booking_call(open_times(date=date)[0], date)]), [])
 
     async def other_call_frames():
         worst = 0.0
-        for _ in range(25):                     # 500 ms of another call's audio
+        for _ in range(40):                     # 800 ms of another call's audio
             t0 = time.perf_counter()
             await asyncio.sleep(0.02)
             worst = max(worst, time.perf_counter() - t0 - 0.02)
@@ -809,7 +815,8 @@ def test_a_slow_tool_never_stalls_another_calls_audio(tmp_storage, fake_llm, mon
         return await frames
 
     worst = asyncio.run(main())
-    assert worst < 0.05, f"another call's audio frame was {worst * 1000:.0f} ms late"
+    # gstack-timing-ok: on the loop a frame is >= 600 ms late; normal is ~2 ms
+    assert worst < 0.15, f"another call's audio frame was {worst * 1000:.0f} ms late"
     assert bridge.live.tool_results[0][0]["result"]["status"] == "confirmed"
 
 
@@ -820,7 +827,7 @@ def test_hang_up_during_a_running_booking_keeps_it_in_the_record(tmp_storage, fa
     import json
     date = open_day()
     slot = open_times(date=date)[0]
-    _slow_bookings(monkeypatch, 0.3)
+    booking_started = _slow_bookings(monkeypatch, 0.3)
 
     class HangsAfterTool(FakeLive):
         async def events(self):
@@ -831,7 +838,7 @@ def test_hang_up_during_a_running_booking_keeps_it_in_the_record(tmp_storage, fa
 
     async def call_then_hang_up():
         pump = asyncio.create_task(bridge.pump_gemini())
-        await asyncio.sleep(0.05)               # booking is mid-flight
+        await asyncio.to_thread(booking_started.wait, 5)   # booking is mid-flight
         pump.cancel()                           # Twilio sent "stop"
         await asyncio.gather(pump, return_exceptions=True)
         await telephony._off_loop(bridge.finish)
@@ -849,22 +856,23 @@ def test_hang_up_gives_up_on_a_stuck_tool_after_the_drain_limit(tmp_storage, fak
     perf.reset()
     monkeypatch.setattr(telephony, "TOOL_DRAIN_S", 0.05)
     date = open_day()
-    _slow_bookings(monkeypatch, 0.4)
+    booking_started = _slow_bookings(monkeypatch, 1.5)
     bridge = make_bridge(fake_llm, FakeLive([_booking_call(open_times(date=date)[0], date)]), [])
 
     async def main():
         pump = asyncio.create_task(bridge.pump_gemini())
-        await asyncio.sleep(0.02)
+        await asyncio.to_thread(booking_started.wait, 5)
         pump.cancel()
         await asyncio.gather(pump, return_exceptions=True)
         t0 = time.perf_counter()
         await telephony._off_loop(bridge.finish)
         return time.perf_counter() - t0
 
-    assert asyncio.run(main()) < 0.3
+    assert asyncio.run(main()) < 0.75   # gstack-timing-ok: no drain limit means >= 1.5 s
     assert perf.snapshot()["events"]["timeout.tool_at_hangup"] == 1
     assert "still running" in capsys.readouterr().out
-    bridge._tool_job.result(timeout=2)          # let the stray booking finish cleanly
+    bridge._tool_job.result(timeout=5)          # let the stray booking finish...
+    assert bridge.late_save_done.wait(5)        # ...and its re-save, before this test's storage goes
 
 
 # ---- a failing model session must never leave the caller on a silent line (F3, F4) ---
@@ -923,3 +931,87 @@ def test_a_normal_hang_up_is_not_counted_as_a_model_failure(phone):
     perf.reset()
     assert stream(phone["client"], good_ticket()) == 1000
     assert "error.model_stream" not in perf.snapshot()["events"]
+
+
+def test_a_booking_that_finishes_after_the_drain_limit_still_reaches_the_record(
+        tmp_storage, fake_llm, monkeypatch):
+    """Review D2: finish() stopped waiting after TOOL_DRAIN_S and saved the
+    turn while the booking thread was still writing it, so a booking that
+    committed a moment later was missing from the record (booked: false)."""
+    import json
+    monkeypatch.setattr(telephony, "TOOL_DRAIN_S", 0.05)
+    date = open_day()
+    booking_started = _slow_bookings(monkeypatch, 0.3)
+    bridge = make_bridge(fake_llm, FakeLive([_booking_call(open_times(date=date)[0], date)]), [])
+
+    async def hang_up_mid_booking():
+        pump = asyncio.create_task(bridge.pump_gemini())
+        await asyncio.to_thread(booking_started.wait, 5)
+        pump.cancel()
+        await asyncio.gather(pump, return_exceptions=True)
+        await telephony._off_loop(bridge.finish)      # gives up waiting after 0.05 s
+
+    asyncio.run(hang_up_mid_booking())
+    bridge._tool_job.result(timeout=2)                # the booking commits later...
+    assert bridge.late_save_done.wait(2)              # ...and the record is saved again
+    [record] = storage.read_call_logs("demo_clinic")
+    assert record["outcome"]["booked"] is True, "the late booking never reached the call record"
+    assert record["ended"] == bridge.ended.isoformat(timespec="seconds")   # not the re-save time
+    [path] = (storage.CALLS_DIR / "demo_clinic" / "traces").glob("*.json")
+    roles = [m["role"] for m in bridge.agent.history]
+    assert roles.count("tool") == 1 and roles.index("tool") > 0     # call entry, then its result
+    [action] = json.loads(path.read_text())["actions"]
+    assert (action["type"], action["ok"]) == ("book", True)
+
+
+# ---- review D4: coverage the specialists found missing ---------------------------------
+
+@pytest.mark.parametrize("biz,reason", [("no_such_biz", "unknown business"),
+                                        ("expired_biz", "plan inactive")])
+def test_a_business_rejected_after_taking_a_line_gives_the_line_back(phone, capsys, biz, reason):
+    """The business check now runs after the line is taken (no await between
+    check-and-take); the finally block must still give it back."""
+    assert stream(phone["client"], telephony.mint_stream_ticket("CA1", biz, "")) == 1008
+    assert reason in capsys.readouterr().out
+    assert telephony._active_calls == 0 and telephony._calls_in_flight() == 0
+
+
+def test_a_bad_twilio_frame_mid_call_ends_the_call_cleanly(phone):
+    import perf
+    perf.reset()
+    headers = {"x-twilio-signature": sign(telephony.stream_url())}
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with phone["client"].websocket_connect("/twilio/stream", headers=headers) as ws:
+            ws.send_json({"event": "start", "start": {
+                "streamSid": "MZ1", "callSid": "CA1", "customParameters": good_ticket()}})
+            ws.send_text("this is not json")
+            ws.receive_text()
+    assert closed.value.code == 1000
+    assert telephony._active_calls == 0
+    assert perf.snapshot()["events"]["error.twilio_stream"] == 1
+    assert "error.model_stream" not in perf.snapshot()["events"]
+
+
+def test_a_failed_live_connect_leaves_nothing_to_close():
+    """GeminiLive keeps the session only once it opened: close() after a
+    failed (or timed-out) handshake must not touch a half-open connection."""
+    import llm as llm_mod
+
+    class Refuses:
+        async def __aenter__(self):
+            raise ConnectionError("handshake failed")
+
+        async def __aexit__(self, *a):
+            raise AssertionError("must not exit a context that never opened")
+
+    live = llm_mod.GeminiLive.__new__(llm_mod.GeminiLive)
+    live.model, live._cm, live._session = "fake", None, None
+    live.client = type("C", (), {"aio": type("A", (), {"live": type("L", (), {
+        "connect": staticmethod(lambda **kw: Refuses())})()})()})()
+
+    async def main():
+        with pytest.raises(ConnectionError):
+            await live.connect("prompt", [])
+        assert live._cm is None and live._session is None
+        await live.close()                       # a no-op, not an error
+    asyncio.run(main())
