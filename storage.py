@@ -551,12 +551,110 @@ def export_bookings_csv(path, force: bool = False) -> int:
 
 
 def read_bookings(client_id: str) -> list[dict]:
-    """This client's bookings, oldest first, as {header: value} dicts."""
+    """This client's bookings, oldest first, as {header: value} dicts (plus
+    the row id, which the owner's cancel button refers to)."""
     rows = _bookings_db().execute(
-        "SELECT timestamp, client_id, name, phone, service, date, time, status "
+        "SELECT id, timestamp, client_id, name, phone, service, date, time, status "
         "FROM bookings WHERE client_id=? ORDER BY id", (client_id,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---- cancel and reschedule -------------------------------------------------------
+#
+# A booking is never deleted: it changes status, so the owner can see what
+# happened. 'cancelled' and 'rescheduled' rows are ignored by the
+# double-booking guard (the UNIQUE index only covers 'confirmed'), which is
+# what frees the slot for someone else.
+
+def find_bookings(client_id: str, phone: str) -> list[dict]:
+    """This caller's upcoming confirmed bookings (phone matched on its last
+    10 digits, so +91 98..., 098... and 98... are the same person)."""
+    want = _phone10(phone)
+    if len(want) < 10:
+        return []
+    rows = _bookings_db().execute(
+        "SELECT id, name, phone, service, date, time FROM bookings "
+        "WHERE client_id=? AND status='confirmed' AND date >= ? ORDER BY date, time",
+        (client_id, dt.date.today().isoformat()),
+    ).fetchall()
+    return [dict(r) for r in rows if _phone10(r["phone"]) == want]
+
+
+def _locate(conn, client_id, booking_id=None, date=None, time_=None, phone=None):
+    """The confirmed booking an owner (by id) or a caller (by slot + phone)
+    means; None if there isn't exactly that booking."""
+    if booking_id is not None:
+        row = conn.execute("SELECT * FROM bookings WHERE id=? AND client_id=? AND status='confirmed'",
+                           (booking_id, client_id)).fetchone()
+        return row
+    row = conn.execute("SELECT * FROM bookings WHERE client_id=? AND date=? AND time=? "
+                       "AND status='confirmed'", (client_id, date, time_)).fetchone()
+    if row is None or _phone10(row["phone"]) != _phone10(phone) or len(_phone10(phone)) < 10:
+        return None          # a caller can only change a booking made with their number
+    return row
+
+
+def _transaction(conn):
+    """BEGIN IMMEDIATE ... COMMIT, rolled back on any error."""
+    class _Tx:
+        def __enter__(self):
+            conn.execute("BEGIN IMMEDIATE")
+        def __exit__(self, exc_type, exc, tb):
+            conn.execute("ROLLBACK" if exc_type else "COMMIT")
+            return False
+    return _Tx()
+
+
+def cancel_booking(client_id: str, booking_id: int | None = None, date: str | None = None,
+                   time_: str | None = None, phone: str | None = None) -> dict | None:
+    """Cancel one confirmed booking; returns it, or None if there's no such
+    booking (wrong slot, wrong number, already cancelled)."""
+    conn = _bookings_db()
+    with perf.span("db.booking_cancel"), _transaction(conn):
+        row = _locate(conn, client_id, booking_id, date, time_, phone)
+        if row is None:
+            return None
+        conn.execute("UPDATE bookings SET status='cancelled' WHERE id=?", (row["id"],))
+    _invalidate(BOOKINGS_DB)
+    done = dict(row) | {"status": "cancelled"}
+    if _sheets_target(quiet=True) is not None:      # the Sheet is a log: append the change
+        _queue_sheet_copy([dt.datetime.now().isoformat(timespec="seconds"), client_id, row["name"],
+                           row["phone"], row["service"], row["date"], row["time"], "cancelled"])
+    return done
+
+
+def reschedule_booking(client_id: str, new_date: str, new_time: str, booking_id: int | None = None,
+                       date: str | None = None, time_: str | None = None,
+                       phone: str | None = None) -> tuple[str, dict | None]:
+    """Move one confirmed booking to a new slot, atomically.
+
+    Returns ("rescheduled", new booking), ("not_found", None) or
+    ("taken", None) when the new slot already has a confirmed booking — in
+    which case nothing changed and the old booking still stands."""
+    if bookings_paused_reason():
+        raise BookingsUnavailable(
+            "Bookings are paused for a moment — apologise and offer to have the "
+            "front desk call the customer back to change the appointment.")
+    conn = _bookings_db()
+    with perf.span("db.booking_reschedule"):
+        try:
+            with _transaction(conn):
+                row = _locate(conn, client_id, booking_id, date, time_, phone)
+                if row is None:
+                    return "not_found", None
+                if (row["date"], row["time"]) == (new_date, new_time):
+                    return "rescheduled", dict(row)
+                conn.execute("UPDATE bookings SET status='rescheduled' WHERE id=?", (row["id"],))
+                new = [dt.datetime.now().isoformat(timespec="seconds"), client_id, row["name"],
+                       row["phone"], row["service"], new_date, new_time, "confirmed"]
+                conn.execute(_INSERT_BOOKING, tuple(new))   # the UNIQUE index decides
+        except sqlite3.IntegrityError:
+            return "taken", None          # rolled back: the old booking is untouched
+    _invalidate(BOOKINGS_DB)
+    if _sheets_target(quiet=True) is not None:
+        _queue_sheet_copy(new)
+    return "rescheduled", dict(zip(BOOKING_HEADER, new))
 
 
 def booked_pairs(client_id: str) -> set[tuple[str, str]]:
@@ -782,8 +880,10 @@ TRACE_VERSION = 1
 # How VoxAgent's tools map onto the neutral action types the checker reasons
 # about. Kept in step with voxcheck's built-in mapping (docs/ARCHITECTURE.md §3).
 _TOOL_TYPES = {"check_availability": "availability", "book_appointment": "book",
-               "save_lead": "lead"}
-_OK_STATUS = {"book": "confirmed", "lead": "saved"}
+               "save_lead": "lead", "find_booking": "lookup", "cancel_booking": "cancel",
+               "reschedule_booking": "reschedule"}
+_OK_STATUS = {"book": "confirmed", "lead": "saved", "cancel": "cancelled",
+              "reschedule": "rescheduled"}
 
 
 def call_outcome(history: list[dict]) -> dict:
@@ -792,7 +892,7 @@ def call_outcome(history: list[dict]) -> dict:
     for m in history:
         if m["role"] == "tool":
             kind = _TOOL_TYPES.get(m["name"])
-            if kind in _OK_STATUS and _action_ok(kind, m["result"]):
+            if kind in ("book", "lead") and _action_ok(kind, m["result"]):
                 done.add(kind)
     return {"booked": "book" in done, "lead": "lead" in done}
 

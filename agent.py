@@ -98,6 +98,56 @@ TOOL_SCHEMAS = [
             "required": ["phone", "interest"],
         },
     },
+    {
+        "name": "find_booking",
+        "description": (
+            "Look up the customer's upcoming appointments by their phone number. "
+            "Call this before cancelling or rescheduling, so you change the right one."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "phone": {"type": "string", "description": "The phone number the booking was made with."},
+            },
+            "required": ["phone"],
+        },
+    },
+    {
+        "name": "cancel_booking",
+        "description": (
+            "Cancel one of the customer's appointments. Call this ONLY after "
+            "find_booking showed it and the customer clearly confirmed they want "
+            "that appointment (date and time) cancelled."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "phone": {"type": "string", "description": "The phone number the booking was made with."},
+                "date": {"type": "string", "description": "The appointment's date, YYYY-MM-DD."},
+                "time": {"type": "string", "description": "The appointment's time, 24-hour HH:MM."},
+            },
+            "required": ["phone", "date", "time"],
+        },
+    },
+    {
+        "name": "reschedule_booking",
+        "description": (
+            "Move one of the customer's appointments to a new slot. Call this ONLY "
+            "after find_booking showed the appointment, check_availability showed "
+            "the new slot is free, and the customer confirmed the change."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "phone": {"type": "string", "description": "The phone number the booking was made with."},
+                "date": {"type": "string", "description": "The CURRENT appointment's date, YYYY-MM-DD."},
+                "time": {"type": "string", "description": "The CURRENT appointment's time, HH:MM."},
+                "new_date": {"type": "string", "description": "The new date, YYYY-MM-DD."},
+                "new_time": {"type": "string", "description": "The new time, HH:MM (from check_availability)."},
+            },
+            "required": ["phone", "date", "time", "new_date", "new_time"],
+        },
+    },
 ]
 _TOOL_NAMES = frozenset(t["name"] for t in TOOL_SCHEMAS)
 
@@ -312,6 +362,15 @@ class ReceptionistAgent:
                 args.get("date", ""),
                 args.get("time", ""),
             )
+        if name == "find_booking":
+            return self._find_booking(args.get("phone", ""))
+        if name == "cancel_booking":
+            return self._cancel_booking(args.get("phone", ""), args.get("date", ""),
+                                        args.get("time", ""))
+        if name == "reschedule_booking":
+            return self._reschedule_booking(args.get("phone", ""), args.get("date", ""),
+                                            args.get("time", ""), args.get("new_date", ""),
+                                            args.get("new_time", ""))
         if name == "save_lead":
             return self._save_lead(
                 args.get("name", ""),
@@ -414,6 +473,60 @@ class ReceptionistAgent:
             "time": time,
             "saved_to": saved_to,
         }
+
+    # ---- changing an existing booking -------------------------------------------
+
+    _BAD_PHONE = {"status": "failed",
+                  "error": "The phone number looks incomplete. Ask the customer for the "
+                           "10-digit number they booked with."}
+
+    def _find_booking(self, phone) -> dict:
+        if not _phone_ok(phone):
+            return self._BAD_PHONE
+        found = storage.find_bookings(self.client_id, phone)
+        if not found:
+            return {"status": "not_found", "bookings": [],
+                    "note": "No upcoming appointment with this number. Ask the customer to "
+                            "re-check the number, or offer to book a new appointment."}
+        return {"status": "found", "bookings": [
+            {k: b[k] for k in ("name", "service", "date", "time")} for b in found]}
+
+    def _cancel_booking(self, phone, date, time) -> dict:
+        if not _phone_ok(phone):
+            return self._BAD_PHONE
+        done = storage.cancel_booking(self.client_id, date=date, time_=time, phone=phone)
+        if done is None:
+            return {"status": "failed",
+                    "error": f"There is no appointment at {time} on {date} for that number. "
+                             "Call find_booking and confirm which appointment the customer means."}
+        self.slots = self._refresh_slots()      # the slot is free again
+        print(f"\n  ✖ BOOKING CANCELLED — {done['name']} | {date} {time}\n")
+        return {"status": "cancelled", "date": date, "time": time, "service": done["service"]}
+
+    def _reschedule_booking(self, phone, date, time, new_date, new_time) -> dict:
+        if not _phone_ok(phone):
+            return self._BAD_PHONE
+        free = self._refresh_slots().get(new_date) or []
+        if new_time not in free:
+            return {"status": "failed",
+                    "error": f"{new_time} on {new_date} is not an available slot. Offer the "
+                             "customer one of the available slots instead.",
+                    "available_slots": free}
+        result, new = storage.reschedule_booking(self.client_id, new_date, new_time,
+                                                 date=date, time_=time, phone=phone)
+        if result == "not_found":
+            return {"status": "failed",
+                    "error": f"There is no appointment at {time} on {date} for that number. "
+                             "Call find_booking and confirm which appointment the customer means."}
+        if result == "taken":
+            return {"status": "failed",
+                    "error": f"{new_time} on {new_date} was just booked by someone else. "
+                             "Apologise and offer one of the available slots.",
+                    "available_slots": self._refresh_slots().get(new_date) or []}
+        self.slots = self._refresh_slots()
+        print(f"\n  ↻ BOOKING MOVED — {new['name']} | {date} {time} -> {new_date} {new_time}\n")
+        return {"status": "rescheduled", "from": {"date": date, "time": time},
+                "to": {"date": new_date, "time": new_time}, "service": new["service"]}
 
     def _save_lead(self, name, phone, interest, note) -> dict:
         if not _phone_ok(phone):

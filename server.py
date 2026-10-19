@@ -422,7 +422,7 @@ def admin_overview():
         client_id = entry["client_id"]
         calls = storage.read_call_logs(client_id)
         minutes = round(sum(c["seconds"] for c in calls) / 60, 1)
-        n_bookings = len(storage.read_bookings(client_id))
+        n_bookings = sum(b["status"] == "confirmed" for b in storage.read_bookings(client_id))
         n_leads = len(storage.read_leads(client_id))
         billing_block = cfg.get("billing") or {}
         clients.append({
@@ -867,7 +867,7 @@ def _stats_from(calls, bookings, leads) -> dict:
     return {
         "calls": n_calls,
         "minutes": round(sum(c["seconds"] for c in calls) / 60, 1),
-        "bookings": len(bookings),
+        "bookings": sum(b["status"] == "confirmed" for b in bookings),
         "leads": len(leads),
         "conversion": round(100 * booked_calls / n_calls) if n_calls else 0,
     }
@@ -917,6 +917,25 @@ def dashboard(client_id: str, response: Response,
         "billing": billing.status(client_id),
         "phone": _phone_status(client_id),
     }
+
+
+class CancelRequest(BaseModel):
+    client_id: str
+    booking_id: int
+
+
+@app.post("/api/bookings/cancel")
+def owner_cancel_booking(req: CancelRequest,
+                         x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+                         x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+                         authorization: str | None = Header(default=None)):
+    """The owner cancels a booking from the Bookings page (the customer
+    phoned, or the slot can't be kept). The slot becomes free again."""
+    authorize_client(req.client_id, x_client_key, x_admin_key, authorization)
+    done = storage.cancel_booking(req.client_id, booking_id=req.booking_id)
+    if done is None:
+        raise HTTPException(status_code=404, detail="That booking is not confirmed any more")
+    return {"ok": True, "booking": done}
 
 
 @app.get("/api/stats")
