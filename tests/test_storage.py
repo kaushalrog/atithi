@@ -25,7 +25,10 @@ def test_booking_roundtrip_and_client_filter(tmp_storage):
     where = storage.reserve_booking(booking())
     assert where == "bookings.db"   # test mode: no Sheets copy, ever
     rows = storage.read_bookings("clinic_a")
-    assert rows == [dict(zip(storage.BOOKING_HEADER, booking()))]  # same shape as the CSV era
+    # Same fields as the CSV era, plus the row id the owner's cancel button uses.
+    assert [{k: r[k] for k in storage.BOOKING_HEADER} for r in rows] == \
+        [dict(zip(storage.BOOKING_HEADER, booking()))]
+    assert isinstance(rows[0]["id"], int)
     assert storage.read_bookings("other_client") == []
     assert storage.booked_pairs("clinic_a") == {(FUTURE, "09:30")}
 
@@ -438,7 +441,8 @@ def test_export_csv_backs_up_and_round_trips(tmp_storage):
     backups = list(tmp_storage.glob("export.csv.bak-*"))
     assert len(backups) == 1 and backups[0].read_text() == "previous contents"
     with open(out, newline="", encoding="utf-8") as f:
-        assert list(csv.DictReader(f)) == storage.read_bookings("clinic_a")
+        assert list(csv.DictReader(f)) == [{k: r[k] for k in storage.BOOKING_HEADER}
+                                           for r in storage.read_bookings("clinic_a")]
 
 
 def test_roll_forward_after_rollback_picks_up_new_csv_rows(tmp_storage):
