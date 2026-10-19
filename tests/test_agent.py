@@ -229,11 +229,25 @@ def test_history_timestamps_carry_the_business_timezone(tmp_storage, fake_llm):
         assert dt.datetime.fromisoformat(msg["at"]).utcoffset() == dt.timedelta(hours=5, minutes=30)
 
 
-@pytest.mark.parametrize("name,offset", [("Asia/Dubai", 4), ("Not/AZone", 5.5)])
+def _has_tz_database():
+    try:
+        agent_module.ZoneInfo("Asia/Dubai")
+        return True
+    except Exception:
+        return False
+
+
+@pytest.mark.parametrize("name,offset", [
+    pytest.param("Asia/Dubai", 4, marks=pytest.mark.skipif(
+        not _has_tz_database(), reason="no system timezone database (Windows without tzdata)")),
+    ("Not/AZone", 5.5),
+])
 def test_client_yaml_can_set_the_timezone(tmp_storage, fake_llm, monkeypatch, name, offset):
-    """A typo in one client's timezone must not stop its calls: fall back to IST."""
+    """The agent reads `timezone:` from the client YAML; a typo must not stop
+    its calls, so it falls back to India time."""
+    config = dict(storage.read_client_config("demo_clinic"), timezone=name)  # copy: cache is shared
+    monkeypatch.setattr(storage, "read_client_config", lambda cid: config)
     agent = make_agent(fake_llm, [])
-    agent.tz = agent_module._business_timezone({"timezone": name})
     assert dt.datetime.fromisoformat(agent.now()).utcoffset() == dt.timedelta(hours=offset)
 
 
@@ -254,3 +268,21 @@ def test_turn_recorder_writes_tools_between_the_request_and_the_reply(tmp_storag
     assert results[0]["id"] == "t1" and results[0]["result"]["available_slots"]
     turn.flush()                                     # a second flush adds nothing
     assert len(agent.history) == 4
+
+
+def test_streaming_history_order_is_authoritative_not_timestamps(tmp_storage, fake_llm, monkeypatch):
+    """Review I6: on a stream the tool can run before the caller's words finish
+    transcribing. The contract: history ORDER is request -> tool -> reply;
+    "at" is when each text started arriving, so it may go backwards."""
+    agent = make_agent(fake_llm, [])
+    ticks = iter(f"2026-01-01T10:00:0{i}+05:30" for i in range(9))
+    monkeypatch.setattr(agent, "now", lambda: next(ticks))
+    turn = agent_module.TurnRecorder(agent)
+    turn.tool_calls([{"id": "t1", "name": "check_availability", "args": {"date": open_day()}}])
+    turn.user_text("any slots?")              # transcript arrives after the tool ran
+    turn.agent_text("Yes.")
+    turn.flush()
+    roles = [m["role"] for m in agent.history]
+    assert roles == ["user", "assistant", "tool", "assistant"]
+    user_at, tool_at = agent.history[0]["at"], agent.history[2]["at"]
+    assert tool_at < user_at                  # documented: "at" is arrival time, not order

@@ -47,6 +47,7 @@ import os
 import re
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 import yaml
@@ -570,7 +571,9 @@ def log_call_from_agent(agent, channel: str, started: dt.datetime,
 
     Works for every channel: the web server calls this after each turn with a
     stable call_id; the terminal/voice/live wrappers call it once on exit.
-    Conversations with zero customer turns are not calls, so nothing is logged.
+    A conversation with no customer turn AND no tool action is not a call, so
+    nothing is logged. (Tools count: on a phone line the speech transcript can
+    come back empty while a booking still happened.)
 
     Also writes the call's TRACE (see _write_trace) next to it, in a traces/
     subfolder: the dashboard ships whole call records to the browser and
@@ -578,7 +581,7 @@ def log_call_from_agent(agent, channel: str, started: dt.datetime,
     must live elsewhere.
     """
     turns = sum(1 for m in agent.history if m["role"] == "user")
-    if turns == 0:
+    if turns == 0 and not any(m["role"] == "tool" for m in agent.history):
         return
     if call_id is None:
         call_id = started.strftime("%Y%m%d_%H%M%S_") + channel
@@ -599,11 +602,7 @@ def log_call_from_agent(agent, channel: str, started: dt.datetime,
         record["transcript"] = f"Caller: {caller}\n\n" + record["transcript"]
     folder = CALLS_DIR / agent.client_id
     path = folder / f"{call_id}.json"
-    _guard_write(path)
-    with _write_lock:
-        folder.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(record, f, ensure_ascii=False, indent=1)
+    _write_json_atomic(path, record)
     _invalidate(path)
     try:
         _write_trace(agent, channel, started, call_id, caller, folder / "traces" / f"{call_id}.json")
@@ -652,7 +651,10 @@ def _trace_turns_and_actions(history: list[dict]):
         elif msg["role"] == "assistant":
             for call in msg.get("tool_calls") or []:
                 calls_by_name.setdefault(call["name"], []).append(call)
-            if msg.get("text"):
+            # Text that came WITH a tool call was never shown to the customer
+            # (agent.chat only returns the final text-only reply), so it is not
+            # something the agent said.
+            if msg.get("text") and not msg.get("tool_calls"):
                 for action in pending:
                     action["turn_index"] = len(turns)
                 pending = []
@@ -677,7 +679,9 @@ def _write_trace(agent, channel: str, started: dt.datetime, call_id: str,
     and what they returned, plus the business's booking rows as of call end.
 
     The snapshot is what makes the verdict reproducible: a booking edited next
-    week cannot change what this call is judged against.
+    week cannot change what this call is judged against. It holds full rows
+    only for this call's own phone numbers; other customers' same-day
+    bookings appear as taken slots (date, time, status) with no name or phone.
     """
     tz = agent.tz
     turns, actions = _trace_turns_and_actions(agent.history)
@@ -699,7 +703,16 @@ def _write_trace(agent, channel: str, started: dt.datetime, call_id: str,
             f"WHERE client_id=? AND status='confirmed' AND date IN ({marks}) ORDER BY id",
             (agent.client_id, *sorted(dates)),
         ).fetchall()
-        snapshot += [dict(r, kind="booking") for r in rows]
+        for r in rows:
+            if _phone10(r["phone"]) in phones:
+                snapshot.append(dict(r, kind="booking"))
+            else:
+                # Another customer's booking: the checker only needs to know
+                # the slot was taken, so their name and number stay out of
+                # this call's trace (traces are kept even when a booking is
+                # later deleted).
+                snapshot.append({"kind": "booking", "date": r["date"], "time": r["time"],
+                                 "status": r["status"]})
     if phones:
         snapshot += [dict(r, kind="lead") for r in read_leads(agent.client_id)
                      if _phone10(r.get("phone")) in phones]
@@ -712,17 +725,47 @@ def _write_trace(agent, channel: str, started: dt.datetime, call_id: str,
         "caller": caller or "",
         "started_at": started.astimezone(tz).isoformat(timespec="seconds"),
         "ended_at": ended,
-        "timezone": str(tz),
+        "timezone": agent.tz_name,
         "turns": turns,
         "actions": actions,
         "records_as_of": ended,
         "records_snapshot": snapshot,
     }
+    _write_json_atomic(path, trace)
+
+
+# Windows refuses to rename over a file another handle has open (e.g. the
+# dashboard reading that call record right now); such a hold lasts
+# milliseconds, so retry briefly instead of failing the customer's turn.
+_REPLACE_TRIES = 5
+_REPLACE_RETRY_S = 0.02
+
+
+def _write_json_atomic(path: Path, data):
+    """Write a JSON file so a reader never sees half of it.
+
+    The web test call rewrites its record and trace after every turn; a crash
+    or a full disk mid-write used to leave a truncated file. Writing a temp
+    file in the same folder and renaming it over the old one is atomic: the
+    reader sees either the old version or the new one.
+    """
     _guard_write(path)
+    tmp = path.with_name(path.name + ".tmp")
     with _write_lock:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(trace, f, ensure_ascii=False, indent=1)
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=1)
+            for attempt in range(_REPLACE_TRIES):
+                try:
+                    os.replace(tmp, path)
+                    break
+                except PermissionError:
+                    if attempt == _REPLACE_TRIES - 1:
+                        raise
+                    time.sleep(_REPLACE_RETRY_S)
+        finally:
+            tmp.unlink(missing_ok=True)
 
 
 def read_call_logs(client_id: str) -> list[dict]:

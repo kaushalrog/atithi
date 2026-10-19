@@ -71,30 +71,27 @@ async def run(client_id: str, half_duplex: bool):
     turn = TurnRecorder(agent)
 
     async def pump_events():
-        user_line, agent_line = "", ""
         async for event in live.events():
             kind = event["type"]
             if kind == "audio":
                 playback.extend(event["data"])
             elif kind == "interrupted":
                 playback.clear()  # caller barged in — go silent immediately
+                turn.flush()      # ...and end the turn the agent was speaking in
             elif kind == "user_text":
-                user_line += event["text"]
                 turn.user_text(event["text"])
             elif kind == "agent_text":
-                agent_line += event["text"]
                 turn.agent_text(event["text"])
             elif kind == "tool_calls":
                 for call in event["calls"]:
                     print(f"  [tool] {call['name']}({call['args']})")
                 await live.send_tool_results(turn.tool_calls(event["calls"]))
             elif kind == "turn_complete":
-                if user_line.strip():
-                    print(f"You said: {user_line.strip()}")
-                if agent_line.strip():
-                    print(f"Agent:    {agent_line.strip()}\n")
-                turn.flush()
-                user_line, agent_line = "", ""
+                user_line, agent_line = turn.flush()
+                if user_line:
+                    print(f"You said: {user_line}")
+                if agent_line:
+                    print(f"Agent:    {agent_line}\n")
 
     business = agent.config["business_name"]
     mode = "half-duplex (mic muted while agent speaks)" if half_duplex else "full-duplex (🎧 headphones!)"
@@ -110,8 +107,11 @@ async def run(client_id: str, half_duplex: bool):
         ):
             await asyncio.gather(pump_mic(), pump_events())
     finally:
-        await live.close()
         turn.flush()  # a turn cut off by Ctrl+C still belongs in the record
+        try:
+            await live.close()
+        except Exception as e:  # a dropped session must not cost us the call record
+            print(f"  (live session did not close cleanly: {type(e).__name__}: {e})")
         if agent.history:
             print(f"\n(transcript saved to {save_transcript(agent)})")
             storage.log_call_from_agent(agent, "live", started)

@@ -155,6 +155,108 @@ def test_bridge_pumps_audio_interruption_tools_and_history(tmp_storage, fake_llm
     assert all("caller id" not in (m.get("text") or "") for m in bridge.agent.history)
 
 
+def test_barge_in_ends_the_turn(tmp_storage, fake_llm):
+    """Review C4 (QA capture 003): the caller interrupts the agent mid-reply.
+    The cut-off reply must be recorded before the caller's next words, not
+    merged with the next exchange into one turn."""
+    live = FakeLive(events=[
+        {"type": "user_text", "text": "hi"},
+        {"type": "agent_text", "text": "Hello, how can"},
+        {"type": "interrupted"},
+        {"type": "user_text", "text": "any slots?"},
+        {"type": "tool_calls", "calls": [{"id": "t1", "name": "check_availability",
+                                          "args": {"date": open_day()}}]},
+        {"type": "agent_text", "text": "Yes, 10 AM."},
+        {"type": "turn_complete"},
+    ])
+    bridge = make_bridge(fake_llm, live, [])
+    bridge.stream_sid = "MZ1"
+    asyncio.run(bridge.pump_gemini())
+    said = [(m["role"], m.get("text")) for m in bridge.agent.history if m.get("text")]
+    assert said == [("user", "hi"), ("assistant", "Hello, how can"),
+                    ("user", "any slots?"), ("assistant", "Yes, 10 AM.")]
+    assert [m["role"] for m in bridge.agent.history][-3:] == ["assistant", "tool", "assistant"]
+
+
+def test_a_claim_spoken_before_the_tool_stays_before_it(tmp_storage, fake_llm):
+    """Review C3 (QA capture 004): the agent says "You're booked!" and only then
+    calls the booking tool. The record must keep that order: the premature
+    claim is exactly what the checker exists to catch."""
+    date = open_day()
+    slot = open_times(date=date)[0]
+    live = FakeLive(events=[
+        {"type": "user_text", "text": "book me"},
+        {"type": "agent_text", "text": "You're booked! "},
+        {"type": "tool_calls", "calls": [{"id": "t1", "name": "book_appointment", "args": {
+            "customer_name": "Ravi", "phone": "9876543210", "service": "Cleaning",
+            "date": date, "time": slot}}]},
+        {"type": "agent_text", "text": "See you then."},
+        {"type": "turn_complete"},
+    ])
+    bridge = make_bridge(fake_llm, live, [])
+    asyncio.run(bridge.pump_gemini())
+    order = [(m["role"], m.get("text") or m.get("name")) for m in bridge.agent.history]
+    assert order == [("user", "book me"), ("assistant", "You're booked!"),
+                     ("assistant", None), ("tool", "book_appointment"),
+                     ("assistant", "See you then.")]
+
+
+def test_a_booking_call_without_a_transcript_still_gets_a_record(tmp_storage, fake_llm):
+    """Review C5 (QA capture 006): speech transcription can come back empty on
+    phone audio while tools still run. A call that booked a slot must not
+    vanish from the call history and leave no trace."""
+    date = open_day()
+    slot = open_times(date=date)[0]
+    live = FakeLive(events=[
+        {"type": "tool_calls", "calls": [{"id": "t1", "name": "book_appointment", "args": {
+            "customer_name": "Ravi", "phone": "9876543210", "service": "Cleaning",
+            "date": date, "time": slot}}]},
+        {"type": "turn_complete"},
+    ])
+    bridge = make_bridge(fake_llm, live, [])
+    asyncio.run(bridge.pump_gemini())
+    bridge.finish()
+    logs = storage.read_call_logs("demo_clinic")
+    assert len(logs) == 1 and logs[0]["turns"] == 0
+    assert "book_appointment" in logs[0]["transcript"]
+
+
+def test_two_calls_in_the_same_second_keep_separate_records(tmp_storage, fake_llm):
+    """Review C2 (QA capture 005): phone call ids were "<start second>_phone",
+    so two calls starting in the same second overwrote each other's call
+    record and trace. The Twilio call SID makes them unique."""
+    import datetime as dt
+    for sid, caller in (("CA" + "1" * 32, "+911111111111"), ("CA" + "2" * 32, "+912222222222")):
+        agent = ReceptionistAgent("demo_clinic", llm=fake_llm([]))
+
+        async def collect(msg):
+            pass
+        bridge = TwilioBridge(agent, FakeLive(events=[
+            {"type": "user_text", "text": "hello"}, {"type": "turn_complete"}]),
+            collect, caller=caller, call_sid=sid)
+        bridge.started = dt.datetime(2026, 10, 17, 10, 0, 0)
+        asyncio.run(bridge.pump_gemini())
+        bridge.finish()
+    logs = storage.read_call_logs("demo_clinic")
+    assert sorted(r["caller"] for r in logs) == ["+911111111111", "+912222222222"]
+    traces = sorted((storage.CALLS_DIR / "demo_clinic" / "traces").glob("*.json"))
+    assert len(traces) == 2
+
+
+def test_a_hostile_call_sid_cannot_reach_the_file_path(tmp_storage, fake_llm):
+    agent = ReceptionistAgent("demo_clinic", llm=fake_llm([]))
+
+    async def collect(msg):
+        pass
+    bridge = TwilioBridge(agent, FakeLive(events=[
+        {"type": "user_text", "text": "hello"}, {"type": "turn_complete"}]),
+        collect, caller="+911111111111", call_sid="../../etc/x")
+    asyncio.run(bridge.pump_gemini())
+    bridge.finish()
+    files = [p.name for p in (storage.CALLS_DIR / "demo_clinic").glob("*.json")]
+    assert len(files) == 1 and files[0].endswith("_phone_etcx.json")
+
+
 def test_hang_up_mid_turn_still_records_the_tool(tmp_storage, fake_llm):
     """The caller hangs up after a booking but before turn_complete: the
     booking must still be in the call record."""
@@ -172,6 +274,15 @@ def test_hang_up_mid_turn_still_records_the_tool(tmp_storage, fake_llm):
     roles = [m["role"] for m in bridge.agent.history]
     assert roles == ["user", "assistant", "tool"]
     assert bridge.agent.history[2]["result"]["status"] == "confirmed"
+    # Review C6: and it is in what was SAVED, not just in memory.
+    import json
+    [path] = (storage.CALLS_DIR / "demo_clinic" / "traces").glob("*.json")
+    trace = json.loads(path.read_text())
+    [action] = trace["actions"]
+    assert (action["type"], action["ok"]) == ("book", True)
+    assert action["turn_index"] == len(trace["turns"])     # no reply followed it
+    assert any(r["kind"] == "booking" and r["time"] == slot for r in trace["records_snapshot"])
+    assert "book_appointment" in storage.read_call_logs("demo_clinic")[0]["transcript"]
 
 
 # ---- the inbound webhook and the media stream (audit H1) -----------------------------

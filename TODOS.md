@@ -34,7 +34,7 @@
 
 **Why:** Names, phone numbers and caller IDs are stored indefinitely in plain files and printed to the console (audit M11). Any real pilot needs a defined policy, and obligations under India's DPDP Act still need to be assessed.
 
-**Context:** `storage.py` (call logs, leads, bookings DB), `agent.py` booking/lead `print` lines, `telephony.py` caller-ID line in transcripts. The first step is a policy decision by Sai (how long, who can delete); the code follows from that.
+**Context:** `storage.py` (call logs, leads, bookings DB, and per-call traces in `calls/<client>/traces/`, which hold the caller's own booking/lead rows and must be covered by any delete path), `agent.py` booking/lead `print` lines, `telephony.py` caller-ID line in transcripts. The first step is a policy decision by Sai (how long, who can delete); the code follows from that.
 
 **Effort:** M
 **Priority:** P2
@@ -135,3 +135,25 @@
 **Effort:** L (human ~3 days / CC ~2.5 hrs)
 **Priority:** P1 once triggered
 **Depends on:** Founder sends the Assignment messages; Lane A landed (E1, E3 provide real traces).
+
+## Deferred by /review of phase-3/lane-a (2026-10-19)
+
+### Test live_main.py's streaming wiring
+
+**What:** Move `live_main.pump_events` into a function that takes `(live, turn)` so it can be driven with `FakeLive`. Then test history order, barge-in, and that a turn cut off by Ctrl+C is flushed and logged.
+
+**Why:** Its old test moved to `agent.run_tool`, so nothing in `tests/` exercises the live mic channel. The shared `TurnRecorder` it uses is tested, but the wiring is not (review I9, skipped by the owner).
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
+### Lead snapshot re-reads leads.csv on a web test turn
+
+**What:** Stop the web test call's per-turn trace rewrite from re-parsing `leads.csv` on the turn that saved a lead. For example, build the lead rows from the trace's own `save_lead` actions, or snapshot leads only when the session ends.
+
+**Why:** After `save_lead` the leads cache is invalidated, and `_write_trace` re-reads the whole file before `/api/chat` replies. That's about 1 ms at 1k leads and about 7 ms at 10k (performance specialist measurement, temp data). It conflicts with the CLAUDE.md "no CSV scan on the reply path" rule, but only on the portal's test channel (review I11, skipped by the owner).
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None

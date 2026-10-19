@@ -604,13 +604,18 @@ FRONT_DESK_LINE = ("Sorry, our line is very busy right now — the front desk "
 @app.post("/api/chat")
 def chat(req: ChatRequest):
     session = get_session(req.session_id)
+    agent = session["agent"]
+    before = len(agent.history)
     # A model outage or rate limit must never show the customer an error page.
     try:
         return run_turn(session, req.message)
     except Exception as e:
         print(f"  [chat] degraded reply for {session['client_id']}: {type(e).__name__}: {e}")
-        session["agent"].history.append({"role": "user", "text": req.message})
-        session["agent"].history.append({"role": "assistant", "text": FRONT_DESK_LINE})
+        # agent.chat records the customer's message before calling the model,
+        # so only add it if the failure happened before that.
+        if not any(m["role"] == "user" for m in agent.history[before:]):
+            agent.history.append({"role": "user", "text": req.message, "at": agent.now()})
+        agent.history.append({"role": "assistant", "text": FRONT_DESK_LINE, "at": agent.now()})
         return {"reply": FRONT_DESK_LINE, "tools": [], "degraded": True}
 
 

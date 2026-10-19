@@ -257,11 +257,15 @@ class TwilioBridge:
     itself, so tests can drive it with fakes — same philosophy as FakeLLM.
     """
 
-    def __init__(self, agent: ReceptionistAgent, live, send_json, caller: str = ""):
+    def __init__(self, agent: ReceptionistAgent, live, send_json, caller: str = "",
+                 call_sid: str = ""):
         self.agent = agent
         self.live = live
         self.send_json = send_json
         self.caller = caller
+        # Twilio's id for this call. Only letters and digits ever reach a file
+        # name (real SIDs are "CA" + 32 hex characters).
+        self.call_sid = "".join(ch for ch in call_sid if ch.isascii() and ch.isalnum())
         self.converter = AudioConverter()
         self.stream_sid = None
         self.started = dt.datetime.now()
@@ -294,8 +298,11 @@ class TwilioBridge:
                      "media": {"payload": payload}}
                 )
             elif kind == "interrupted":
-                # Caller barged in: tell Twilio to drop buffered agent audio NOW.
+                # Caller barged in: tell Twilio to drop buffered agent audio NOW,
+                # and end the turn so the cut-off reply is recorded before the
+                # caller's next words.
                 await self.send_json({"event": "clear", "streamSid": self.stream_sid})
+                self.turn.flush()
             elif kind == "tool_calls":
                 await self.live.send_tool_results(self.turn.tool_calls(event["calls"]))
             elif kind == "user_text":
@@ -312,7 +319,13 @@ class TwilioBridge:
         it used to be inserted as a customer turn, which inflated the turn
         count and shifted every turn after it (audit M2)."""
         self.turn.flush()
-        storage.log_call_from_agent(self.agent, "phone", self.started, caller=self.caller)
+        # Two calls can start in the same second, so the call id carries the
+        # Twilio SID; without one it would overwrite the other call's record.
+        call_id = self.started.strftime("%Y%m%d_%H%M%S_phone")
+        if self.call_sid:
+            call_id += f"_{self.call_sid}"
+        storage.log_call_from_agent(self.agent, "phone", self.started,
+                                    call_id=call_id, caller=self.caller)
 
 
 # ---- HTTP: the webhook Twilio hits when a call starts -------------------------------
@@ -464,7 +477,8 @@ async def twilio_stream(ws: WebSocket):
             )
         live = GeminiLive()
         await live.connect(agent.system_prompt, TOOL_SCHEMAS)
-        bridge = TwilioBridge(agent, live, ws.send_json, caller=caller)
+        bridge = TwilioBridge(agent, live, ws.send_json, caller=caller,
+                              call_sid=str(params.get("call_sid", "")))
         await bridge.handle_twilio(start_msg)
 
         async def read_twilio():
@@ -478,6 +492,11 @@ async def twilio_stream(ws: WebSocket):
             await read_twilio()
         finally:
             pump.cancel()
+            # Let the pump finish unwinding BEFORE finish() runs on a worker
+            # thread, so nothing on the event loop can touch this call's
+            # history while it is being saved. return_exceptions also
+            # collects a pump crash instead of leaving it unretrieved.
+            await asyncio.gather(pump, return_exceptions=True)
     except WebSocketDisconnect:
         pass
     finally:

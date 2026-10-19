@@ -34,8 +34,11 @@ VoxAgent is now two programs that share one file format:
 | Change | Where | Why |
 |---|---|---|
 | `ReceptionistAgent.run_tool(call)` runs a tool, catches any exception with today's exact error text, and returns two timestamped history entries (tool call, tool result) | agent.py | The same 6 lines existed in 3 places (agent.py, telephony.py, live_main.py). Timestamps must be identical on every channel (D4). |
-| Phone and live calls collect tool entries during a turn and append them **between** the caller's words and the agent's reply, at the end of the turn and at hang-up | telephony.py, live_main.py | Speech is buffered until the turn ends, but tools run mid-turn. Appending immediately would put the booking before the request (D3). |
+| Phone and live calls buffer each turn (`agent.TurnRecorder`) and write it in order: caller's words, agent speech **before** the first tool, the tools, agent speech **after**. A turn ends at turn_complete, when the caller barges in, and at hang-up | agent.py, telephony.py, live_main.py | Speech is buffered until the turn ends, but tools run mid-turn. Appending immediately would put the booking before the request (D3); merging all agent speech would hide a "you're booked!" spoken before the booking ran (review C3); not ending the turn on barge-in merged two exchanges (review C4). History **order** is authoritative; `at` is when an entry's text started arriving and can go backwards. |
 | The caller's number moves from a fake `[caller id: …]` customer line into call metadata | telephony.py, storage.py | It was counted as a customer turn and shifted every turn index (audit M2). |
+| Phone call ids are `<start>_phone_<Twilio CallSid>` (letters and digits only) | telephony.py | Ids were the start second, so two calls in the same second overwrote each other's record and trace (review C2). |
+| A conversation with tool actions but no transcribed caller speech is still logged | storage.py | Phone transcription can come back empty while a booking still happened (review C5). |
+| Call records and traces are written to a temp file and renamed into place | storage.py | The web test call rewrites both after every turn; a crash mid-write left a truncated file (review I3). |
 | Every timestamp in a trace is timezone-aware. The default is `Asia/Kolkata`; a client YAML may set `timezone:` | agent.py, client YAML | "Tomorrow at 4" can't be checked without knowing whose tomorrow. VoxAgent had no timezone at all. |
 | `log_call_from_agent` also writes `calls/<client>/traces/<call_id>.json` | storage.py | The dashboard sends whole call files to the browser, and `read_call_logs` counts every `*.json` in the folder as a call, so traces live in a subfolder (D7). |
 | The phone hang-up save runs in a worker thread, inside a try/except that always lets the socket close | telephony.py | A save failure used to skip `ws.close()`, and the save blocked every other live call (D7, D8). Storage is already thread-safe. |
@@ -59,7 +62,7 @@ VoxAgent is now two programs that share one file format:
   "actions": [{"turn_index": 1, "at": "...", "type": "book", "name": "book_appointment",
                "args": {...}, "ok": true, "result": {...}}],
   "records_as_of": "2026-10-16T10:18:42+05:30",
-  "records_snapshot": [{"phone": "...", "name": "...", "date": "...", "time": "...",
+  "records_snapshot": [{"kind": "booking", "phone": "...", "name": "...", "date": "...", "time": "...",
                         "service": "...", "status": "confirmed"}]
 }
 ```
@@ -74,7 +77,9 @@ VoxAgent is now two programs that share one file format:
   book_appointment:   {type: book, ok_when: "result.status == 'confirmed'"}
   save_lead:          {type: lead, ok_when: "result.status == 'saved'"}
   ```
-- **Snapshot:** every confirmed booking for that business on each date the call touched, plus the caller's leads, as of call end.
+- **Snapshot:** every confirmed booking for that business on each date the call touched, plus the caller's leads, as of call end. Full rows only for this call's own phone numbers; other customers' bookings appear as `{kind, date, time, status}` (a taken slot), never with their name or number (review I1).
+- **Text sent with a tool call** is not a turn: `agent.chat` never shows it to the customer (review C1).
+- **`timezone`** is always an IANA name (`Asia/Kolkata` when the configured zone is unknown or the machine has no timezone database; review I2).
 - **Limits:** ≤ 1 MB per file and ≤ 500 turns, checked before parsing.
 
 ## 4. voxcheck modules (D2: four files)

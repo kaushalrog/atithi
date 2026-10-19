@@ -107,15 +107,20 @@ DEFAULT_TIMEZONE = "Asia/Kolkata"
 _IST = dt.timezone(dt.timedelta(hours=5, minutes=30), "IST")
 
 
-def _business_timezone(config: dict) -> dt.tzinfo:
+def _business_timezone(config: dict) -> tuple[dt.tzinfo, str]:
+    """(timezone, its IANA name). The name is what records store, so it stays
+    "Asia/Kolkata" even when the fixed-offset fallback is used."""
     name = config.get("timezone") or DEFAULT_TIMEZONE
     try:
-        return ZoneInfo(name)
+        return ZoneInfo(name), name
     except (ZoneInfoNotFoundError, ValueError):
         if name != DEFAULT_TIMEZONE:
             # A typo in one client's YAML must not stop its calls.
             print(f"  (unknown timezone {name!r} in client config; using {DEFAULT_TIMEZONE})")
-        return _IST
+    try:
+        return ZoneInfo(DEFAULT_TIMEZONE), DEFAULT_TIMEZONE
+    except (ZoneInfoNotFoundError, ValueError):
+        return _IST, DEFAULT_TIMEZONE
 
 
 def _phone_ok(phone: str) -> bool:
@@ -162,7 +167,7 @@ class ReceptionistAgent:
     def __init__(self, client_id: str, llm=None):
         self.client_id = client_id
         self.config = self._load_config(client_id)
-        self.tz = _business_timezone(self.config)
+        self.tz, self.tz_name = _business_timezone(self.config)
         # What's free right now. Refreshed from the bookings database on every
         # availability check and booking (see _refresh_slots), so a slot that
         # another conversation booked a minute ago is never offered here.
@@ -424,20 +429,30 @@ class TurnRecorder:
     WHY: on a streaming call the speech arrives as text fragments that are
     only complete when the turn ends, but tools run in the MIDDLE of the turn.
     Appending tool entries the moment they run would put "booked 10:30"
-    before the caller's "can I come at 10:30?". So tool entries wait in a
-    buffer and the whole turn is written at once:
+    before the caller's "can I come at 10:30?". So the turn is buffered and
+    written at once, keeping what the agent said BEFORE a tool separate from
+    what it said after (a "you're booked!" spoken before the booking ran is
+    exactly the premature claim the checker must be able to see):
 
-        user_text ... user_text   tool_calls(+results)   agent_text ... agent_text
-              |                          |                        |
-              v                          v                        v
-        [ user entry ] -> [ assistant tool_calls entry, tool result entries ] -> [ assistant entry ]
-                                   flush() at turn_complete and at hang-up
+        user_text ...   agent_text ...   tool_calls(+results)   agent_text ...
+             |               |                    |                    |
+             v               v                    v                    v
+        [ user ] -> [ assistant: before ] -> [ tool_calls, results ] -> [ assistant: after ]
+
+    flush() runs at turn_complete, when the caller barges in (interrupted),
+    and at hang-up. History ORDER is authoritative; an entry's "at" is when
+    its text started arriving, and speech transcription can lag behind a
+    tool call, so "at" values are not guaranteed to increase.
     """
 
     def __init__(self, agent: ReceptionistAgent):
         self.agent = agent
+        self._reset()
+
+    def _reset(self):
         self._user, self._user_at = "", None
-        self._said, self._said_at = "", None
+        self._before, self._before_at = "", None   # agent speech before the first tool
+        self._after, self._after_at = "", None     # agent speech after it
         self._tools: list[dict] = []
 
     def user_text(self, text: str):
@@ -446,9 +461,14 @@ class TurnRecorder:
         self._user += text
 
     def agent_text(self, text: str):
-        if not self._said:
-            self._said_at = self.agent.now()
-        self._said += text
+        if self._tools:
+            if not self._after:
+                self._after_at = self.agent.now()
+            self._after += text
+        else:
+            if not self._before:
+                self._before_at = self.agent.now()
+            self._before += text
 
     def tool_calls(self, calls: list[dict]) -> list[dict]:
         """Run the tools now (the model is waiting); record them at flush()."""
@@ -460,13 +480,16 @@ class TurnRecorder:
             results.append({"id": call.get("id"), "name": call["name"], "result": entry["result"]})
         return results
 
-    def flush(self):
+    def flush(self) -> tuple[str, str]:
+        """Write the buffered turn to history; returns (caller said, agent said)."""
         history = self.agent.history
-        if self._user.strip():
-            history.append({"role": "user", "text": self._user.strip(), "at": self._user_at})
+        user, before, after = self._user.strip(), self._before.strip(), self._after.strip()
+        if user:
+            history.append({"role": "user", "text": user, "at": self._user_at})
+        if before:
+            history.append({"role": "assistant", "text": before, "at": self._before_at})
         history.extend(self._tools)
-        if self._said.strip():
-            history.append({"role": "assistant", "text": self._said.strip(), "at": self._said_at})
-        self._user, self._user_at = "", None
-        self._said, self._said_at = "", None
-        self._tools = []
+        if after:
+            history.append({"role": "assistant", "text": after, "at": self._after_at})
+        self._reset()
+        return user, " ".join(t for t in (before, after) if t)
