@@ -471,6 +471,15 @@ def import_sheet(skip: bool = False):
     return counts
 
 
+# Bookings from this process take turns at the INSERT. Correctness doesn't
+# need it (the UNIQUE index decides every race, across processes too); speed
+# does. Phone tools run on parallel threads, and two simultaneous INSERTs on
+# separate connections make SQLite's busy handler sleep in millisecond steps
+# (bench: insert max 4-12 ms; with this lock 1.3-1.6 ms). A Python lock hands
+# over instantly. Held only for the one statement.
+_booking_insert_lock = threading.Lock()
+
+
 def reserve_booking(row: list) -> str | None:
     """Atomically book one slot. Returns where it was saved, or None if that
     slot already has a confirmed booking (another conversation won the race).
@@ -486,7 +495,7 @@ def reserve_booking(row: list) -> str | None:
             "Bookings are paused for a moment — apologise and offer to have the "
             "front desk call the customer back to confirm a slot."
         )
-    with perf.span("db.booking_insert"):
+    with perf.span("db.booking_insert"), _booking_insert_lock:
         try:
             conn.execute(_INSERT_BOOKING, tuple(row))
         except sqlite3.IntegrityError:

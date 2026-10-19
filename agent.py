@@ -520,7 +520,8 @@ class TurnRecorder:
             history.append({"role": "assistant", "text": after, "at": self._after_at})
         if self._user_last is not None:
             # From the caller's last transcribed words to the turn being
-            # written down: how long a finished turn waits to be recorded.
+            # written down. A turn is written when the agent's reply ends,
+            # so this spans the whole response: think time + reply length.
             perf.record("turn.finalize", (time.perf_counter() - self._user_last) * 1000,
                         call=self.agent.perf_id)
         self._reset()
