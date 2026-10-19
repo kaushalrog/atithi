@@ -1,6 +1,8 @@
-<p align="center"><img src="web/logo.svg" width="380" alt="VoxAgent"></p>
+<p align="center"><img src="web/logo.svg" width="380" alt="Atithi"></p>
 
-# VoxAgent
+# Atithi
+
+*Every caller, welcomed.* Named after **Atithi Devo Bhava**, "the guest is God": how a good front desk treats every caller. (Formerly VoxAgent; the code, folder and settings still use the `voxagent` name.)
 
 **An AI receptionist for Indian small service businesses** (clinics, salons, coaching institutes). It talks to customers by text, voice or phone, checks real availability, books appointments into a database that refuses double-bookings, saves leads, and logs every conversation for the business owner.
 

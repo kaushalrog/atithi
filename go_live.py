@@ -1,4 +1,4 @@
-"""go_live.py — one command puts VoxAgent on the phone network.
+"""go_live.py — one command puts Atithi on the phone network.
 
     run.bat phone        (or:  .venv\\Scripts\\python go_live.py)
 
@@ -9,7 +9,7 @@ What it does, in order:
   3. Saves the tunnel URL into .env (PUBLIC_BASE_URL)
   4. Points your Twilio number's incoming-call webhook at the tunnel,
      through Twilio's API — nothing to click in their console
-  5. Starts the VoxAgent server
+  5. Starts the Atithi server
 
 Then just CALL YOUR TWILIO NUMBER. Leave the window open while testing;
 Ctrl+C (or closing it) takes the phone line down again.
@@ -207,7 +207,7 @@ def main():
             return
         print()
         print("=" * 58)
-        print(f"  📞  VoxAgent is LIVE — call {number} now!")
+        print(f"  📞  Atithi is LIVE — call {number} now!")
         print("      (Trial accounts play a short Twilio message first —")
         print("       press any key when asked, then talk to your agent.)")
         print("      Ctrl+C here hangs up the phone line.")

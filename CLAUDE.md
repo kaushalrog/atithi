@@ -1,4 +1,8 @@
-# VoxAgent
+# Atithi (codebase: VoxAgent)
+
+Product name since 2026-10-20: **Atithi** ("Atithi Devo Bhava", the guest is God;
+tagline "Every caller, welcomed."). The rename is UI and docs only: code identifiers,
+env vars (`VOXAGENT_*`), file names and the `voxagent_auth` browser key keep the old name.
 
 AI receptionist for Indian small service businesses (clinics, salons, coaching institutes).
 

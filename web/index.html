@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>VoxAgent — Your AI Receptionist</title>
+<title>Atithi — Your AI Receptionist</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><defs><linearGradient id=%22g%22 x1=%220%22 y1=%220%22 x2=%221%22 y2=%221%22><stop stop-color=%22%2314b8a6%22/><stop offset=%221%22 stop-color=%22%230ea5e9%22/></linearGradient></defs><rect width=%22100%22 height=%22100%22 rx=%2224%22 fill=%22url(%23g)%22/><path d=%22M50 22a11 11 0 0 1 11 11v16a11 11 0 0 1-22 0V33a11 11 0 0 1 11-11z%22 fill=%22white%22/><path d=%22M30 47a3.5 3.5 0 0 1 7 0 13 13 0 0 0 26 0 3.5 3.5 0 0 1 7 0 20 20 0 0 1-16.5 19.7V73h7a3.5 3.5 0 0 1 0 7h-21a3.5 3.5 0 0 1 0-7h7v-6.3A20 20 0 0 1 30 47z%22 fill=%22white%22/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
@@ -286,8 +286,8 @@
 <!-- ================= login gate ================= -->
 <div class="gatewrap" id="gate">
   <div class="gatebox">
-    <img src="/logo.svg" alt="VoxAgent">
-    <p id="gateHint">Sign in to your VoxAgent dashboard.</p>
+    <img src="/logo.svg" alt="Atithi">
+    <p id="gateHint">Sign in to your Atithi dashboard.</p>
     <input type="email" id="gateEmail" placeholder="Email" autocomplete="email">
     <input type="password" id="gatePw" placeholder="Password" autocomplete="current-password">
     <input type="text" id="resetCode" placeholder="Reset code (e.g. RS-A1B2C3)" class="hidden" autocomplete="off">
@@ -307,7 +307,7 @@
 <aside class="side">
   <div class="brand">
     <div class="mark"><svg class="ic" viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="11.5" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3.5M8.5 21.5h7"/></svg></div>
-    <div><div class="name">VoxAgent</div><div class="tag">AI RECEPTIONIST</div></div>
+    <div><div class="name">Atithi</div><div class="tag">AI RECEPTIONIST</div></div>
   </div>
   <nav class="nav">
     <div class="sect">Workspace</div>
@@ -624,7 +624,7 @@ function renderBilling(b) {
   const pay = el("div");
   pay.style.cssText = "display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:9px;";
   pay.appendChild(el("span", "", "Pay ₹" + b.price_inr.toLocaleString("en-IN") + "/month" +
-                                 (b.upi ? " via UPI:" : " — the VoxAgent team will contact you.")));
+                                 (b.upi ? " via UPI:" : " — the Atithi team will contact you.")));
   if (b.upi) {
     const upi = el("code", "", b.upi);
     upi.style.cssText = "background:rgba(255,255,255,.07);border:1px solid var(--border);padding:3px 11px;border-radius:8px;";
@@ -647,7 +647,7 @@ function renderBilling(b) {
     renew.onclick = async () => {
       try {
         renderBilling(await api("/api/billing/renew", { client_id: CLIENT }));
-        toast("Thanks! The VoxAgent team will confirm your payment and activate.", 5000);
+        toast("Thanks! The Atithi team will confirm your payment and activate.", 5000);
       } catch (e) { toast("⚠ " + e.message, 5000); }
     };
     pay.appendChild(renew);
@@ -1059,7 +1059,7 @@ function setGateMode(signup) {
   $("gateBtn").textContent = signup ? "Create my account" : "Sign in";
   $("gateHint").textContent = signup
     ? "Create your account — then set up your business in a few minutes."
-    : "Sign in to your VoxAgent dashboard.";
+    : "Sign in to your Atithi dashboard.";
   $("gateToggle").textContent = signup
     ? "Already have an account? Sign in"
     : "New business? Create an account";

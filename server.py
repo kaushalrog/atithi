@@ -1,4 +1,4 @@
-"""server.py — the VoxAgent business portal.
+"""server.py — the Atithi business portal.
 
 This is the page a BUSINESS OWNER uses (the clinic, salon, institute):
   1. Onboard: fill a form with their business details -> we write
@@ -41,7 +41,7 @@ from tts import EdgeTTS, TTSTimeout
 
 BASE_DIR = Path(__file__).resolve().parent
 
-app = FastAPI(title="VoxAgent")
+app = FastAPI(title="Atithi")
 
 
 class BodySizeLimit:
@@ -110,7 +110,7 @@ def _warm_up():
 def _capacity_line() -> str:
     """The limits this process runs with, printed once at startup.
 
-    WHY: VoxAgent is ONE process (the phone tickets' signing key and the
+    WHY: Atithi is ONE process (the phone tickets' signing key and the
     session table live in its memory). Its capacity is these numbers, and
     nothing scales them for you — see SETUP.md "Capacity"."""
     try:
@@ -566,7 +566,7 @@ def auth_forgot(req: ForgotRequest):
             "message": ("Check your email for the reset code."
                         if emailed else
                         "If this account exists, a reset code was created — "
-                        "ask the VoxAgent team for it, then enter it below.")}
+                        "ask the Atithi team for it, then enter it below.")}
 
 
 @app.post("/api/auth/reset")
@@ -922,14 +922,14 @@ def transcript(session_id: str):
     agent = get_session(session_id)["agent"]
     return PlainTextResponse(
         agent.transcript_text(),
-        headers={"Content-Disposition": "attachment; filename=voxagent_transcript.txt"},
+        headers={"Content-Disposition": "attachment; filename=atithi_transcript.txt"},
     )
 
 
 def main():
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="VoxAgent business portal")
+    parser = argparse.ArgumentParser(description="Atithi business portal")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--host", default="127.0.0.1",
                         help="use 0.0.0.0 when hosting publicly / behind ngrok")
@@ -939,7 +939,7 @@ def main():
     url = f"http://127.0.0.1:{args.port}"
     if not args.no_browser:
         threading.Timer(1.5, webbrowser.open, args=(url,)).start()
-    print(f"VoxAgent portal: {url}")
+    print(f"Atithi portal: {url}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 

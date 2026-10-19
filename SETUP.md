@@ -1,4 +1,4 @@
-# VoxAgent Setup Guide
+# Atithi Setup Guide
 
 Two things need setting up: a **Gemini API key** (required — the brain) and
 **Google Sheets** (optional — bookings always live in the local `bookings.db`
@@ -18,7 +18,7 @@ Testing without spending money or touching real data: see
    choose **"Create API key in new project"** — you don't need to understand
    projects for this to work.
 4. Copy the key that appears (it looks like a long random string).
-5. In the VoxAgent folder, copy `.env.example` to a new file named exactly `.env`:
+5. In the Atithi folder, copy `.env.example` to a new file named exactly `.env`:
    ```
    copy .env.example .env
    ```
@@ -34,7 +34,7 @@ Testing without spending money or touching real data: see
 
 ## Part 2: Google Sheets for bookings (15 minutes, optional)
 
-The goal: create a robot account ("service account") that VoxAgent uses to write
+The goal: create a robot account ("service account") that Atithi uses to write
 booking rows into a Google Sheet you own.
 
 ### Step 1 — Create a Google Cloud project
@@ -68,7 +68,7 @@ booking rows into a Google Sheet you own.
    (`voxagent-sheets@voxagent-....iam.gserviceaccount.com`).
 2. Go to the **"Keys"** tab.
 3. Click **"Add key" → "Create new key"** → choose **JSON** → **Create**.
-4. A `.json` file downloads. Move it into the VoxAgent folder and rename it to
+4. A `.json` file downloads. Move it into the Atithi folder and rename it to
    exactly **`credentials.json`**.
 
 **This file is a secret** — anyone with it can write to sheets shared with the
@@ -77,8 +77,8 @@ robot. It's already in `.gitignore`.
 ### Step 5 — Create the bookings sheet and share it
 
 1. Go to **https://sheets.google.com** and create a blank spreadsheet.
-   Name it `VoxAgent Bookings`.
-2. (Optional — VoxAgent adds it automatically if missing) put this header in row 1:
+   Name it `Atithi Bookings`.
+2. (Optional — Atithi adds it automatically if missing) put this header in row 1:
    `timestamp | client_id | name | phone | service | date | time | status`
 3. Open `credentials.json` in an editor and copy the value of `"client_email"`
    (looks like `voxagent-sheets@voxagent-....iam.gserviceaccount.com`).
@@ -90,7 +90,7 @@ robot. It's already in `.gitignore`.
    `https://docs.google.com/spreadsheets/d/1AbC...XyZ/edit`, the ID is the long
    `1AbC...XyZ` part between `/d/` and `/edit`.
 
-### Step 6 — Point VoxAgent at it
+### Step 6 — Point Atithi at it
 
 In `.env`:
 ```
@@ -99,14 +99,14 @@ SHEET_ID=paste_the_sheet_id_here
 ```
 
 Done. Each new booking is saved in `bookings.db` first, then copied into the
-sheet. If anything about Sheets fails, VoxAgent prints a warning and the
+sheet. If anything about Sheets fails, Atithi prints a warning and the
 booking is still safe in `bookings.db` — the conversation never breaks.
 
-The Sheet is a **copy for you to read**. VoxAgent doesn't read it during
+The Sheet is a **copy for you to read**. Atithi doesn't read it during
 normal operation, so cancelling or editing a row there does NOT free the slot
 for the agent.
 
-**Upgrading from an older VoxAgent that used a Sheet?** Older versions saved
+**Upgrading from an older version (Atithi) that used a Sheet?** Older versions saved
 bookings *only* in the Sheet. Before taking new bookings, copy them in once:
 
 ```
@@ -174,7 +174,7 @@ on the audio connection can only be confirmed against real Twilio traffic.
 
 That's it. The command opens a free tunnel to your laptop, points your Twilio
 number's webhook at it automatically (through Twilio's API), and starts the
-server. When it prints **"VoxAgent is LIVE — call +1... now!"**, dial.
+server. When it prints **"Atithi is LIVE — call +1... now!"**, dial.
 
 Notes:
 - If your Wi-Fi blocks Cloudflare tunnels (some campus/office networks do),
@@ -207,7 +207,7 @@ short trial notice before connecting. Upgrading (adding a card) removes both.
 
 ## Capacity: what one server can carry (read before a pilot)
 
-VoxAgent runs as **one process**. Two things only exist in its memory: the
+Atithi runs as **one process**. Two things only exist in its memory: the
 key that signs phone tickets, and the portal's test-call sessions. So don't
 run it with several workers (`--workers 2`) or behind a load balancer. The
 server prints its limits at startup, in a line like:
@@ -231,7 +231,7 @@ server prints its limits at startup, in a line like:
 
 What has been measured: `python bench_load.py --suite full` runs an offline,
 fake-provider workload of 1–10 simultaneous calls or chats. Results are in
-`docs/perf/` and `docs/PERFORMANCE_AUDIT.md`. Those numbers measure VoxAgent's
+`docs/perf/` and `docs/PERFORMANCE_AUDIT.md`. Those numbers measure Atithi's
 own code only. They don't say how fast Gemini, Twilio or edge-tts will be, and
 they don't prove any number of real concurrent calls. For real numbers, set
 `VOXAGENT_PERF_LOG=perf.jsonl` during a pilot and read `/admin` → `/api/admin/perf`.
