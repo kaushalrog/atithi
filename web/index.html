@@ -123,9 +123,11 @@
   .empty { color: var(--muted); font-size: .92rem; padding: 10px 0; line-height: 1.6; }
 
   /* ================= dashboard ================= */
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
-  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; }
-  .stat .chip { display: none; }
+  /* One row of numbers, divided by rules: not five cards. */
+  .stats { display: grid; grid-template-columns: repeat(5, 1fr); margin-bottom: 16px;
+           background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+  .stat { padding: 16px 20px; border-left: 1px solid var(--border); min-width: 0; }
+  .stat:first-child { border-left: none; }
   .stat .num { font-size: 1.75rem; font-weight: 600; line-height: 1.1; color: var(--ink);
                font-variant-numeric: tabular-nums; }
   .stat .lbl { color: var(--muted); font-size: .86rem; margin-top: 4px; }
@@ -205,7 +207,7 @@
            overflow: hidden; box-shadow: 0 24px 48px -12px rgba(28,25,23,.25); animation: rise .2s ease-out; }
   .modal-head { padding: 14px 16px; display: flex; align-items: center; gap: 12px;
                 border-bottom: 1px solid var(--border); }
-  .avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--acc-soft);
+  .avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--acc-soft); flex-shrink: 0;
             display: flex; align-items: center; justify-content: center; }
   .avatar svg { width: 18px; height: 18px; stroke: var(--acc); }
   .modal-head .title { font-weight: 600; line-height: 1.3; }
@@ -253,6 +255,10 @@
   }
   @media (max-width: 940px) {
     .grid2, .pair { grid-template-columns: 1fr; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .stat { border-left: none; border-top: 1px solid var(--border); }
+    .stat:nth-child(-n+2) { border-top: none; }
+    .stat:nth-child(even) { border-left: 1px solid var(--border); }
     .side { width: 64px; }
     .brand { padding: 18px 0 14px; justify-content: center; }
     .brand .name, .brand .tag, .nav .sect, .nav button .txt, .sysline span { display: none; }
@@ -343,8 +349,8 @@
     <section class="view" id="view-dashboard">
       <div class="card hidden" id="billCard" style="margin-bottom:15px;padding:13px 20px;font-size:.93rem;line-height:1.5;"></div>
       <div class="card" id="phoneCard" style="display:flex;align-items:center;gap:14px;margin-bottom:15px;padding:15px 20px;">
-        <div class="stat chip" style="margin:0;width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:var(--acc-soft);border:none;">
-          <svg class="ic" viewBox="0 0 24 24" style="stroke:var(--acc)"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.13 1 .37 2 .72 2.9a2 2 0 0 1-.45 2.1L8.1 10a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.45c.94.35 1.9.6 2.9.72A2 2 0 0 1 22 16.9z"/></svg>
+        <div class="avatar">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.13 1 .37 2 .72 2.9a2 2 0 0 1-.45 2.1L8.1 10a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.45c.94.35 1.9.6 2.9.72A2 2 0 0 1 22 16.9z"/></svg>
         </div>
         <div style="line-height:1.45">
           <div style="font-weight:700" id="phoneTitle">Checking your phone line…</div>
@@ -352,16 +358,11 @@
         </div>
       </div>
       <div class="stats">
-        <div class="stat"><div class="chip"><svg class="ic" viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.13 1 .37 2 .72 2.9a2 2 0 0 1-.45 2.1L8.1 10a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.45c.94.35 1.9.6 2.9.72A2 2 0 0 1 22 16.9z"/></svg></div>
-          <div class="num" id="statCalls">–</div><div class="lbl">Calls handled</div></div>
-        <div class="stat"><div class="chip"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></div>
-          <div class="num" id="statMinutes">–</div><div class="lbl">Minutes talked</div></div>
-        <div class="stat"><div class="chip"><svg class="ic" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="17" rx="2.5"/><path d="M8 2.5v4M16 2.5v4M3 10h18"/><path d="M9 15l2 2 4-4"/></svg></div>
-          <div class="num" id="statBookings">–</div><div class="lbl">Bookings made</div></div>
-        <div class="stat"><div class="chip"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg></div>
-          <div class="num" id="statLeads">–</div><div class="lbl">Leads captured</div></div>
-        <div class="stat"><div class="chip"><svg class="ic" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg></div>
-          <div class="num" id="statConv">–</div><div class="lbl">Calls → bookings</div></div>
+        <div class="stat"><div class="num" id="statCalls">–</div><div class="lbl">Calls handled</div></div>
+        <div class="stat"><div class="num" id="statMinutes">–</div><div class="lbl">Minutes talked</div></div>
+        <div class="stat"><div class="num" id="statBookings">–</div><div class="lbl">Bookings made</div></div>
+        <div class="stat"><div class="num" id="statLeads">–</div><div class="lbl">Leads captured</div></div>
+        <div class="stat"><div class="num" id="statConv">–</div><div class="lbl">Calls → bookings</div></div>
       </div>
       <div class="card">
         <h3>Activity — last 7 days</h3>
