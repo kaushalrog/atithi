@@ -41,6 +41,9 @@ storage.BOOKINGS_CSV = _TMP / "bookings.csv"
 storage.LEADS_CSV = _TMP / "leads.csv"
 storage.CALLS_DIR = _TMP / "calls"
 storage.NOTIFY_LOG = _TMP / "notifications.jsonl"
+auth.DB_FILE = _TMP / "accounts.db"                 # never the real accounts database
+auth.LEGACY_USERS = _TMP / "no_users.json"
+auth.LEGACY_TOKENS = _TMP / "no_tokens.json"
 import telephony  # noqa: E402
 from agent import TOOL_SCHEMAS, ReceptionistAgent  # noqa: E402
 
@@ -71,11 +74,11 @@ def bench(label, fn, n=30, warmup=3):
 def main():
     print("\n=== VoxAgent hot paths ===\n")
 
-    token = auth.issue_token(auth.os.getenv("ADMIN_EMAIL", "bench@local"))["token"] \
-        if auth.os.getenv("ADMIN_EMAIL") else None
-
-    if token:
-        bench("auth check (every API request)", lambda: auth.user_for_token(token), n=50)
+    # A throwaway account in the temp database: the bench must work (and
+    # touch nothing real) whatever ADMIN_EMAIL says in .env.
+    auth.signup("bench@example.test", "Bench-Password-2026")
+    token = auth.issue_token("bench@example.test")["token"]
+    bench("auth check (every API request)", lambda: auth.user_for_token(token), n=50)
 
     bench("build an agent (every call / session)",
           lambda: ReceptionistAgent(CLIENT, llm=FakeLLM()))
