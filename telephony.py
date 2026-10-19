@@ -105,9 +105,12 @@ def call_io_pool() -> concurrent.futures.ThreadPoolExecutor:
     with _call_io_lock:
         if _call_io_pool is None:
             _call_io_pool = concurrent.futures.ThreadPoolExecutor(
-                max_workers=max(8, 2 * max_concurrent_calls()),
-                thread_name_prefix="call-io")
+                max_workers=call_io_workers(), thread_name_prefix="call-io")
         return _call_io_pool
+
+
+def call_io_workers() -> int:
+    return max(8, 2 * max_concurrent_calls())
 
 
 async def _off_loop(fn, *args):

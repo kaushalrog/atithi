@@ -104,6 +104,25 @@ def _warm_up():
     paused = storage.bookings_paused_reason()
     if paused:
         print(f"  [bookings] NEW BOOKINGS ARE PAUSED: {paused}")
+    print(_capacity_line())
+
+
+def _capacity_line() -> str:
+    """The limits this process runs with, printed once at startup.
+
+    WHY: VoxAgent is ONE process (the phone tickets' signing key and the
+    session table live in its memory). Its capacity is these numbers, and
+    nothing scales them for you — see docs/SETUP.md "Capacity"."""
+    try:
+        import anyio.to_thread
+        portal = anyio.to_thread.current_default_thread_limiter().total_tokens
+    except Exception:            # no async backend in this thread: show the default
+        portal = "40 (anyio default)"
+    calls = telephony.max_concurrent_calls()
+    return (f"  [capacity] one process · portal worker threads: {portal} · "
+            f"phone call-I/O threads: {telephony.call_io_workers()} · "
+            f"MAX_CONCURRENT_CALLS={calls} (keep it within your Gemini Live tier) · "
+            f"web sessions: {MAX_SESSIONS_PER_BUSINESS}/business, {MAX_SESSIONS} total")
 
 
 # The pages change only when we deploy, so serve them from memory — but
