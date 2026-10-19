@@ -122,7 +122,7 @@ Tests never touch Google. To check the real connection once, with a **throwaway*
    paused until the Sheet's existing rows have been imported once (a blank Sheet
    imports nothing). This also proves the credentials can *read* the Sheet.
 3. `python main.py --client demo_clinic` and book a slot.
-4. Expect `saved to: bookings.db + Google Sheet copy` in the terminal and the row in the Sheet.
+4. Expect `saved to: bookings.db` in the terminal and, within a few seconds, the row in the Sheet. The copy is queued on a background thread, so it never delays the caller. A failed copy is retried for about 40 s, then logged as `Google Sheet copy dropped` and counted as `sheets.dropped` in `/api/admin/perf`.
 5. Put the real `SHEET_ID` back. VoxAgent has no cancel flow yet, so the test booking stays in `bookings.db` and blocks that slot; do this with a test business, or remove the row yourself with the `sqlite3` tool.
 
 ## 7. Known gaps (tracked, not fixed yet)

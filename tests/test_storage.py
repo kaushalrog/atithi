@@ -4,6 +4,7 @@ and call logs."""
 import csv
 import datetime as dt
 import threading
+import time
 
 import pytest
 
@@ -113,7 +114,8 @@ def test_sheet_gets_a_copy_but_is_never_the_source_of_truth(sheets_on):
     """Audit H3: in Sheets mode the booking used to go ONLY to the Sheet, so
     availability and the dashboard (reading the CSV) never saw it."""
     sheet = sheets_on(FakeWorksheet())
-    assert storage.reserve_booking(booking()) == "bookings.db + Google Sheet copy"
+    assert storage.reserve_booking(booking()) == "bookings.db"
+    assert storage._sheets_queue.drain(2) == 0
     assert sheet.rows == [booking()]
     assert storage.booked_pairs("clinic_a") == {(FUTURE, "09:30")}
     assert len(storage.read_bookings("clinic_a")) == 1
@@ -121,10 +123,90 @@ def test_sheet_gets_a_copy_but_is_never_the_source_of_truth(sheets_on):
     assert len(sheet.rows) == 1                                 # refused row not copied
 
 
-def test_sheet_failure_keeps_the_booking(sheets_on):
+def test_sheet_failure_keeps_the_booking(sheets_on, monkeypatch):
+    monkeypatch.setattr(storage, "SHEETS_RETRY_WAITS_S", (0.01, 0.01, 0.01))
     sheets_on(FakeWorksheet(fail=True))
     assert storage.reserve_booking(booking()) == "bookings.db"
     assert len(storage.read_bookings("clinic_a")) == 1
+    assert storage._sheets_queue.drain(2) == 0
+
+
+class SlowWorksheet(FakeWorksheet):
+    """A Google API that takes `delay` seconds per append, and can fail a few
+    times first. Records when each append started, to prove ordering."""
+
+    def __init__(self, delay=0.0, fail_times=0):
+        super().__init__()
+        self.delay, self.fail_times, self.calls = delay, fail_times, 0
+
+    def append_row(self, row):
+        self.calls += 1
+        # The booking is committed BEFORE any copy is attempted.
+        assert storage.read_bookings(row[1]), "copy ran before the booking committed"
+        time.sleep(self.delay)
+        if self.calls <= self.fail_times:
+            raise ConnectionError("Google said no")
+        self.rows.append(list(row))
+
+
+def test_a_slow_sheet_never_delays_the_booking(sheets_on):
+    """Audit F1: the copy ran inside the booking, so a 1 s Google API made
+    every phone caller on the server wait (5 s TTFA with 5 calls)."""
+    sheet = sheets_on(SlowWorksheet(delay=0.5))
+    t0 = time.perf_counter()
+    assert storage.reserve_booking(booking()) == "bookings.db"
+    assert time.perf_counter() - t0 < 0.1
+    assert sheet.rows == []                      # still copying...
+    assert storage._sheets_queue.drain(3) == 0
+    assert sheet.rows == [booking()]             # ...and then it lands
+
+
+def test_a_failing_copy_is_retried_then_dropped_and_counted(sheets_on, monkeypatch, capsys):
+    import perf
+    perf.reset()
+    monkeypatch.setattr(storage, "SHEETS_RETRY_WAITS_S", (0.01, 0.01, 0.01))
+    sheet = sheets_on(SlowWorksheet(fail_times=99))
+    storage.reserve_booking(booking())
+    assert storage._sheets_queue.drain(3) == 0
+    assert sheet.calls == 4                      # 1 try + 3 retries
+    assert perf.snapshot()["events"]["sheets.dropped"] == 1
+    log = capsys.readouterr().out
+    assert "dropped after 4 tries" in log and "safe in bookings.db" in log
+    assert "Ravi" not in log and "9876543210" not in log      # no customer details
+
+
+def test_a_flaky_copy_succeeds_on_retry(sheets_on, monkeypatch):
+    monkeypatch.setattr(storage, "SHEETS_RETRY_WAITS_S", (0.01, 0.01, 0.01))
+    sheet = sheets_on(SlowWorksheet(fail_times=2))
+    storage.reserve_booking(booking())
+    assert storage._sheets_queue.drain(3) == 0
+    assert sheet.rows == [booking()] and sheet.calls == 3
+
+
+def test_a_full_copy_queue_drops_without_blocking(sheets_on, monkeypatch, capsys):
+    import perf
+    perf.reset()
+    gate = threading.Event()
+
+    class Stuck(FakeWorksheet):
+        def append_row(self, row):
+            gate.wait(5)
+            self.rows.append(list(row))
+
+    small = storage._BackgroundQueue("sheets-test", storage._copy_to_sheet, maxsize=1)
+    monkeypatch.setattr(storage, "_sheets_queue", small)
+    sheet = sheets_on(Stuck())
+    t0 = time.perf_counter()
+    times = [f"{9 + i}:00".zfill(5) for i in range(4)]
+    for t in times:
+        assert storage.reserve_booking(booking(time=t)) == "bookings.db"
+    assert time.perf_counter() - t0 < 0.5        # never waited for the stuck Sheet
+    assert len(storage.read_bookings("clinic_a")) == 4   # every booking is real
+    assert perf.snapshot()["events"]["sheets.dropped"] >= 2
+    assert "queue full" in capsys.readouterr().out
+    gate.set()
+    assert small.drain(3) == 0
+    assert 1 <= len(sheet.rows) <= 2
 
 
 def test_test_mode_never_copies_to_sheets_even_with_sheet_id(tmp_storage, monkeypatch):

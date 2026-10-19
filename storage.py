@@ -9,8 +9,9 @@ When real scale demands a database, THIS is the only file that changes.
 What we store:
     bookings  -> bookings.db (SQLite) — the ONLY source of truth for bookings.
                  Google Sheets, if configured, gets a one-way copy after each
-                 booking commits. It's read exactly once, by the explicit
-                 `python storage.py import-sheet` upgrade step.
+                 booking commits, queued for a background thread so the
+                 caller never waits for Google. It's read exactly once, by the
+                 explicit `python storage.py import-sheet` upgrade step.
     leads     -> leads.csv        (callers who didn't book — follow-up gold)
     calls     -> calls/<client_id>/<call_id>.json  (one file per conversation)
 
@@ -40,6 +41,7 @@ places that mutate — the agent consuming a slot and billing editing a plan —
 copy what they change first.
 """
 
+import atexit
 import csv
 import datetime as dt
 import json
@@ -170,6 +172,68 @@ def clear_caches():
     with _cache_lock:
         _cache.clear()
         _version += 1
+
+
+# ---- background work (never on the call path) -------------------------------------
+
+class _BackgroundQueue:
+    """One daemon thread draining a BOUNDED queue.
+
+    WHY: work that is not the source of truth (the Google Sheet copy, the perf
+    log) must never make a caller wait, and must never pile up without limit
+    while its destination is slow or down. put() never blocks: when the queue
+    is full the item is dropped and counted, so memory stays capped whatever
+    the network does. The thread starts on first use, so importing storage
+    (tests, CLI commands) starts nothing.
+    """
+
+    def __init__(self, name: str, handle, maxsize: int):
+        self.name, self.handle = name, handle
+        self.queue: queue.Queue = queue.Queue(maxsize=maxsize)
+        self.dropped = 0
+        self._thread = None
+        self._start_lock = threading.Lock()
+
+    def put(self, item) -> bool:
+        """Queue an item; False (and counted) when the queue is full."""
+        self._ensure_thread()
+        try:
+            self.queue.put_nowait(item)
+            return True
+        except queue.Full:
+            self.dropped += 1
+            return False
+
+    def pending(self) -> int:
+        """Items queued or being handled right now."""
+        return self.queue.unfinished_tasks
+
+    def drain(self, timeout: float) -> int:
+        """Wait up to `timeout` seconds for the work to finish; returns what's left."""
+        deadline = time.monotonic() + timeout
+        while self.pending() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return self.pending()
+
+    def _ensure_thread(self):
+        if self._thread is not None and self._thread.is_alive():
+            return
+        with self._start_lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._run, name=self.name, daemon=True)
+                self._thread.start()
+
+    def _run(self):
+        while True:
+            item = self.queue.get()
+            try:
+                self.handle(item)
+            except Exception as e:
+                # A background worker must survive any error in its handler,
+                # or every later item would silently wait forever.
+                print(f"  [{self.name}] {type(e).__name__}: {e}")
+            finally:
+                self.queue.task_done()
 
 
 # ---- bookings ------------------------------------------------------------------
@@ -428,8 +492,12 @@ def reserve_booking(row: list) -> str | None:
         except sqlite3.IntegrityError:
             return None
     _invalidate(BOOKINGS_DB)   # keep the dashboard's counters and ETag honest
-    if _mirror_to_google_sheet(row):
-        return "bookings.db + Google Sheet copy"
+    # The booking is committed: it's real now, whatever happens next. The
+    # Sheet copy is queued, never awaited — it used to run right here, so a
+    # slow Google API made the caller (and, on the phone, every other
+    # caller) wait for a spreadsheet. See docs/PERFORMANCE_AUDIT.md F1.
+    if _sheets_target(quiet=True) is not None:
+        _queue_sheet_copy(row)
     return "bookings.db"
 
 
@@ -484,25 +552,64 @@ def booked_pairs(client_id: str) -> set[tuple[str, str]]:
     return {(r["date"], r["time"]) for r in rows}
 
 
-def _mirror_to_google_sheet(row: list) -> bool:
-    """Best-effort copy of a COMMITTED booking to the owner's Google Sheet.
+SHEETS_QUEUE_MAX = 1000          # copies waiting; beyond this they're dropped (and counted)
+SHEETS_RETRY_WAITS_S = (2, 8, 30)  # backoff between tries: 4 tries in all
+SHEETS_TIMEOUT_S = (5, 10)         # gspread (connect, read); its default is no timeout at all
+SHEETS_EXIT_DRAIN_S = 5
 
-    The booking is already safe in bookings.db, so a missing credentials file
-    or a flaky network only costs the Sheet a row (logged), never the booking.
-    Edits made in the Sheet do not reach VoxAgent (it's read only by the
-    one-time import-sheet step). Off entirely in test mode.
+
+def _copy_to_sheet(row: list):
+    """The Sheets worker: copy one COMMITTED booking to the owner's Sheet.
+
+    Runs on the background thread, never on a call. The booking is already
+    safe in bookings.db, so a missing credentials file or a Google outage
+    only costs the Sheet a row (retried, then logged and counted), never the
+    booking. Edits made in the Sheet do not reach VoxAgent (it's read only by
+    the one-time import-sheet step). Off entirely in test mode.
     """
     target = _sheets_target()
     if target is None:
-        return False
-    try:
-        worksheet = _sheet_handle(*target)
-        worksheet.append_row(row)
-        return True
-    except Exception as e:
-        _reset_sheet_handle()
-        print(f"  [warning] Google Sheets copy failed ({e}) — booking saved, Sheet not updated.")
-        return False
+        return
+    error = None
+    for wait in (0, *SHEETS_RETRY_WAITS_S):
+        if wait:
+            time.sleep(wait)
+        try:
+            with perf.span("sheets.copy"):
+                _sheet_handle(*target).append_row(row)
+            return
+        except Exception as e:
+            _reset_sheet_handle()       # a stale handle may be the problem
+            error = e
+    perf.event("sheets.dropped")
+    # Which booking, without the customer's name or number in the log.
+    print(f"  [warning] Google Sheet copy dropped after {1 + len(SHEETS_RETRY_WAITS_S)} tries "
+          f"({type(error).__name__}) — {row[1]} {row[5]} {row[6]} is safe in bookings.db; "
+          "the Sheet is missing that row.")
+
+
+_sheets_queue = _BackgroundQueue("sheets-copy", _copy_to_sheet, maxsize=SHEETS_QUEUE_MAX)
+
+
+def _queue_sheet_copy(row: list):
+    if not _sheets_queue.put(list(row)):
+        perf.event("sheets.dropped")
+        print(f"  [warning] Google Sheet copy queue full ({SHEETS_QUEUE_MAX}) — "
+              f"{row[1]} {row[5]} {row[6]} is safe in bookings.db; the Sheet is missing that row.")
+    perf.gauge("sheets.queue", _sheets_queue.pending())
+
+
+def _drain_sheets_at_exit():
+    """On shutdown, give queued copies a few seconds, then say what's left."""
+    if not _sheets_queue.pending():
+        return
+    left = _sheets_queue.drain(SHEETS_EXIT_DRAIN_S)
+    if left:
+        print(f"  [warning] {left} Google Sheet cop(ies) not written at shutdown — "
+              "the bookings are safe in bookings.db.")
+
+
+atexit.register(_drain_sheets_at_exit)
 
 
 def sheets_usable() -> bool:
@@ -539,7 +646,9 @@ def _sheet_handle(creds_path: str, sheet_id: str):
     if _sheet is None:
         import gspread  # imported here so everything runs without gspread installed
 
-        worksheet = gspread.service_account(filename=creds_path).open_by_key(sheet_id).sheet1
+        client = gspread.service_account(filename=creds_path)
+        client.set_timeout(SHEETS_TIMEOUT_S)
+        worksheet = client.open_by_key(sheet_id).sheet1
         if not worksheet.get_values("A1:H1"):
             worksheet.append_row(BOOKING_HEADER)
         _sheet = worksheet
@@ -859,68 +968,6 @@ def client_for_number(number: str) -> str | None:
         if str(entry["config"].get("twilio_number", "")).strip() == wanted:
             return entry["client_id"]
     return None
-
-
-# ---- background work (never on the call path) -------------------------------------
-
-class _BackgroundQueue:
-    """One daemon thread draining a BOUNDED queue.
-
-    WHY: work that is not the source of truth (the Google Sheet copy, the perf
-    log) must never make a caller wait, and must never pile up without limit
-    while its destination is slow or down. put() never blocks: when the queue
-    is full the item is dropped and counted, so memory stays capped whatever
-    the network does. The thread starts on first use, so importing storage
-    (tests, CLI commands) starts nothing.
-    """
-
-    def __init__(self, name: str, handle, maxsize: int):
-        self.name, self.handle = name, handle
-        self.queue: queue.Queue = queue.Queue(maxsize=maxsize)
-        self.dropped = 0
-        self._thread = None
-        self._start_lock = threading.Lock()
-
-    def put(self, item) -> bool:
-        """Queue an item; False (and counted) when the queue is full."""
-        self._ensure_thread()
-        try:
-            self.queue.put_nowait(item)
-            return True
-        except queue.Full:
-            self.dropped += 1
-            return False
-
-    def pending(self) -> int:
-        """Items queued or being handled right now."""
-        return self.queue.unfinished_tasks
-
-    def drain(self, timeout: float) -> int:
-        """Wait up to `timeout` seconds for the work to finish; returns what's left."""
-        deadline = time.monotonic() + timeout
-        while self.pending() and time.monotonic() < deadline:
-            time.sleep(0.02)
-        return self.pending()
-
-    def _ensure_thread(self):
-        if self._thread is not None and self._thread.is_alive():
-            return
-        with self._start_lock:
-            if self._thread is None or not self._thread.is_alive():
-                self._thread = threading.Thread(target=self._run, name=self.name, daemon=True)
-                self._thread.start()
-
-    def _run(self):
-        while True:
-            item = self.queue.get()
-            try:
-                self.handle(item)
-            except Exception as e:
-                # A background worker must survive any error in its handler,
-                # or every later item would silently wait forever.
-                print(f"  [{self.name}] {type(e).__name__}: {e}")
-            finally:
-                self.queue.task_done()
 
 
 # ---- the optional perf log (VOXAGENT_PERF_LOG) -------------------------------------
