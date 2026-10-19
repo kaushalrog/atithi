@@ -151,6 +151,20 @@ TOOL_SCHEMAS = [
 ]
 _TOOL_NAMES = frozenset(t["name"] for t in TOOL_SCHEMAS)
 
+# Languages a business can serve. The first in a client's `languages:` list
+# is the one the receptionist greets in; it always follows the customer's
+# own language after that. (Voices for each are picked in tts.py.)
+LANGUAGES = {"en": "English", "hi": "Hindi", "te": "Telugu", "ta": "Tamil"}
+
+
+def language_instruction(config: dict) -> str:
+    codes = [c for c in (config.get("languages") or ["en"]) if c in LANGUAGES] or ["en"]
+    names = [LANGUAGES[c] for c in codes]
+    spoken = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    return (f"This business's customers speak {spoken}. Start the conversation in {names[0]}. "
+            "After that, always reply in the language and script the customer uses, including "
+            "roman-script mixes such as Hinglish or Tenglish, even if it is not in that list.")
+
 
 # Every timestamp in a conversation record carries a UTC offset, so "tomorrow
 # at 4" can later be checked against the right calendar day. Indian businesses
@@ -266,6 +280,7 @@ class ReceptionistAgent:
             faq=faq,
             policies=policies,
             fallback_instruction=cfg.get("fallback", ""),
+            language_instruction=language_instruction(cfg),
             today=today.strftime("%A, %Y-%m-%d"),
         )
         with _prompt_lock:

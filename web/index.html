@@ -422,6 +422,23 @@
       </fieldset>
 
       <fieldset>
+        <legend>Languages</legend>
+        <label class="f">Languages your customers speak</label>
+        <div class="days" id="langBoxes">
+          <label><input type="checkbox" value="en" checked>English</label>
+          <label><input type="checkbox" value="hi">Hindi</label>
+          <label><input type="checkbox" value="te">Telugu</label>
+          <label><input type="checkbox" value="ta">Tamil</label>
+        </div>
+        <label class="f">Greet callers in</label>
+        <select id="greetLang" style="max-width:200px">
+          <option value="en">English</option><option value="hi">Hindi</option>
+          <option value="te">Telugu</option><option value="ta">Tamil</option>
+        </select>
+        <div class="empty" style="padding:8px 0 0">Your receptionist always answers in the language the customer uses.</div>
+      </fieldset>
+
+      <fieldset>
         <legend>Services &amp; prices *</legend>
         <div id="serviceRows"></div>
         <button type="button" class="addline" id="addService"><svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add another service</button>
@@ -905,7 +922,16 @@ function setFormMode(mode) {
   $("createBtn").textContent = edit ? "Save changes" : "Create my AI receptionist →";
   $("formMsg").textContent = "";
 }
+// Greeting language first, then the other ticked languages.
+function collectLanguages() {
+  const greet = $("greetLang").value;
+  const ticked = [...$("langBoxes").querySelectorAll("input:checked")].map(i => i.value);
+  return [greet, ...ticked.filter(c => c !== greet)];
+}
 function fillForm(s) {
+  const langs = s.languages && s.languages.length ? s.languages : ["en"];
+  for (const i of $("langBoxes").querySelectorAll("input")) i.checked = langs.includes(i.value);
+  $("greetLang").value = langs[0];
   $("bizName").value = s.business_name; $("bizPhone").value = s.phone;
   $("bizAddress").value = s.address; $("bizTimings").value = s.timings;
   $("serviceRows").innerHTML = ""; s.services.forEach(x => addServiceRow([x.name, x.price]));
@@ -961,6 +987,7 @@ async function createBusiness() {
     slot_days: [...$("dayBoxes").querySelectorAll("input:checked")].map(i => i.value),
     slot_ranges: [[$("r1start").value, $("r1end").value], [$("r2start").value, $("r2end").value]],
     slot_gap_min: parseInt($("slotGap").value, 10),
+    languages: collectLanguages(),
   };
   if (!payload.business_name || !services.length) {
     msg.className = "formmsg err";

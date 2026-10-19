@@ -89,3 +89,31 @@ def test_saving_never_mutates_the_shared_cached_config(client):
     body["timings"] = "changed"
     client.put("/api/business/demo_clinic/settings", json=body, headers={"X-Client-Key": DEMO_KEY})
     assert yaml.safe_dump(cached) == snapshot
+
+
+# ---- languages (Telugu / Hindi) -------------------------------------------------------
+
+def test_languages_are_saved_and_shape_the_receptionist(client):
+    from agent import ReceptionistAgent
+    from conftest import FakeLLM
+    body = settings(client).json()
+    assert body["languages"] == ["en"]                       # default for older businesses
+    body["languages"] = ["te", "en", "hi"]
+    res = client.put("/api/business/demo_clinic/settings", json=body, headers={"X-Client-Key": DEMO_KEY})
+    assert res.status_code == 200 and res.json()["languages"] == ["te", "en", "hi"]
+    prompt = ReceptionistAgent("demo_clinic", llm=FakeLLM([])).system_prompt
+    assert "Start the conversation in Telugu" in prompt
+    assert "Telugu, English and Hindi" in prompt
+
+
+def test_an_unknown_language_is_refused(client):
+    body = settings(client).json()
+    body["languages"] = ["en", "klingon"]
+    res = client.put("/api/business/demo_clinic/settings", json=body, headers={"X-Client-Key": DEMO_KEY})
+    assert res.status_code == 422
+
+
+def test_without_a_setting_the_receptionist_still_follows_the_customer():
+    from agent import language_instruction
+    text = language_instruction({})
+    assert "Start the conversation in English" in text and "language and script the customer uses" in text

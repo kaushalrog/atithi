@@ -249,6 +249,18 @@ class BusinessRequest(BaseModel):
     slot_days: list[str] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
     slot_ranges: list[list[str]] = [["10:00", "13:00"], ["16:00", "20:00"]]
     slot_gap_min: int = 30
+    languages: list[str] = ["en"]       # first = the greeting language
+
+
+def _clean_languages(codes: list[str]) -> list[str]:
+    from agent import LANGUAGES
+    out = []
+    for c in codes:
+        if c not in LANGUAGES:
+            raise HTTPException(status_code=422, detail=f"Unsupported language '{c}'")
+        if c not in out:
+            out.append(c)
+    return out or ["en"]
 
 
 # ---------- access control -------------------------------------------------------
@@ -628,6 +640,7 @@ def create_business(req: BusinessRequest,
         "faq": [{"q": f.q.strip(), "a": f.a.strip()} for f in req.faq if f.q.strip()],
         "policies": [p.strip() for p in req.policies if p.strip()],
         "fallback": req.fallback.strip() or DEFAULT_FALLBACK,
+        "languages": _clean_languages(req.languages),
         # Every new business starts on a free trial; after that the owner
         # pays and the admin activates (see billing.py).
         "billing": billing.new_trial(),
@@ -666,6 +679,7 @@ def _settings_view(cfg: dict) -> dict:
         "slot_days": list(sched.get("days") or []),
         "slot_ranges": ranges,
         "slot_gap_min": int(sched.get("gap_min") or 30),
+        "languages": list(cfg.get("languages") or ["en"]),
     }
 
 
@@ -713,6 +727,7 @@ def save_settings(client_id: str, req: BusinessRequest,
         "policies": [p.strip() for p in req.policies if p.strip()],
         "fallback": req.fallback.strip() or DEFAULT_FALLBACK,
         "schedule": schedule,
+        "languages": _clean_languages(req.languages),
     })
     cfg.pop("slots", None)                 # a saved rule replaces any legacy dated slots
     storage.write_client_config(client_id, cfg)
