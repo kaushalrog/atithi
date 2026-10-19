@@ -76,14 +76,16 @@ If you ever scale out, switch the key to one derived from `TWILIO_AUTH_TOKEN`
 ## 4. Checklist before setting `ENABLE_LIVE_CALLS=true`
 
 1. `python -m pytest tests -q` passes, and `python docs/audit_repro.py` shows
-   NOT REPRODUCED for R1, R2, R5–R9.
+   NOT REPRODUCED for every row (R1–R9).
 2. `ADMIN_PASSWORD` is strong (12+ characters), and `ADMIN_EMAIL` is your real
    email, not `you@example.com`.
 3. The business that answers has `twilio_number` set in its YAML and an
    active plan. Use a **test business** for the first calls, not a client.
 4. Your Twilio account is a trial or has a spending limit, and the only
    numbers that can call are ones you've verified.
-5. You've read the known gaps in §6.
+5. You've read the known gaps in §7.
+6. `MAX_CONCURRENT_CALLS` matches your Gemini Live tier, and the server runs as
+   ONE process (SETUP.md, "Capacity"). Check the `[capacity]` line it prints at startup.
 
 ## 5. The first real call is a verification step, not a launch
 

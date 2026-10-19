@@ -1,0 +1,1487 @@
+{
+ "machine": {
+  "python": "3.13.13",
+  "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+  "cpus": 10
+ },
+ "results": [
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 4,
+    "p50": 251.04,
+    "p95": 253.18,
+    "p99": 253.18,
+    "max": 253.18
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 173,
+    "p50": 0.66,
+    "p95": 1.08,
+    "p99": 1.09,
+    "max": 1.1
+   },
+   "event_loop_lag_ms": {
+    "n": 323,
+    "p50": 0.89,
+    "p95": 1.1,
+    "p99": 1.13,
+    "max": 1.17
+   },
+   "finish_ms": {
+    "n": 1,
+    "p50": 6.61,
+    "p95": 6.61,
+    "p99": 6.61,
+    "max": 6.61
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.2,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 1,
+   "calls": 1,
+   "bookings_confirmed": 0,
+   "turns_per_s": 1.15,
+   "wall_s": 3.47,
+   "cpu_s": 0.06,
+   "scenario": "phone_avail",
+   "param": 1,
+   "peak_rss_mb": 87.6,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 8,
+    "p50": 251.02,
+    "p95": 251.71,
+    "p99": 251.71,
+    "max": 251.71
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 346,
+    "p50": 0.63,
+    "p95": 1.11,
+    "p99": 1.2,
+    "max": 1.87
+   },
+   "event_loop_lag_ms": {
+    "n": 323,
+    "p50": 0.91,
+    "p95": 1.12,
+    "p99": 1.16,
+    "max": 1.3
+   },
+   "finish_ms": {
+    "n": 2,
+    "p50": 5.44,
+    "p95": 6.93,
+    "p99": 6.93,
+    "max": 6.93
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.2,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 2,
+   "calls": 2,
+   "bookings_confirmed": 0,
+   "turns_per_s": 2.3,
+   "wall_s": 3.47,
+   "cpu_s": 0.07,
+   "scenario": "phone_avail",
+   "param": 2,
+   "peak_rss_mb": 87.8,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 20,
+    "p50": 251.84,
+    "p95": 255.52,
+    "p99": 256.4,
+    "max": 256.4
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 865,
+    "p50": 0.69,
+    "p95": 1.12,
+    "p99": 1.19,
+    "max": 3.6
+   },
+   "event_loop_lag_ms": {
+    "n": 324,
+    "p50": 0.86,
+    "p95": 1.12,
+    "p99": 1.23,
+    "max": 2.66
+   },
+   "finish_ms": {
+    "n": 5,
+    "p50": 12.57,
+    "p95": 14.76,
+    "p99": 14.76,
+    "max": 14.76
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.3,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 5,
+   "calls": 5,
+   "bookings_confirmed": 0,
+   "turns_per_s": 5.74,
+   "wall_s": 3.49,
+   "cpu_s": 0.12,
+   "scenario": "phone_avail",
+   "param": 5,
+   "peak_rss_mb": 89.4,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 40,
+    "p50": 252.19,
+    "p95": 258.98,
+    "p99": 260.16,
+    "max": 260.16
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 1730,
+    "p50": 0.67,
+    "p95": 1.2,
+    "p99": 1.35,
+    "max": 4.71
+   },
+   "event_loop_lag_ms": {
+    "n": 324,
+    "p50": 0.93,
+    "p95": 1.13,
+    "p99": 1.21,
+    "max": 2.56
+   },
+   "finish_ms": {
+    "n": 10,
+    "p50": 19.44,
+    "p95": 22.04,
+    "p99": 22.04,
+    "max": 22.04
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.4,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 10,
+   "calls": 10,
+   "bookings_confirmed": 0,
+   "turns_per_s": 11.46,
+   "wall_s": 3.49,
+   "cpu_s": 0.18,
+   "scenario": "phone_avail",
+   "param": 10,
+   "peak_rss_mb": 92.6,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 4,
+    "p50": 250.59,
+    "p95": 255.11,
+    "p99": 255.11,
+    "max": 255.11
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 173,
+    "p50": 0.7,
+    "p95": 1.08,
+    "p99": 1.09,
+    "max": 1.09
+   },
+   "event_loop_lag_ms": {
+    "n": 323,
+    "p50": 0.85,
+    "p95": 1.1,
+    "p99": 1.13,
+    "max": 1.19
+   },
+   "finish_ms": {
+    "n": 1,
+    "p50": 5.21,
+    "p95": 5.21,
+    "p99": 5.21,
+    "max": 5.21
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.2,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 1,
+   "calls": 1,
+   "bookings_confirmed": 1,
+   "turns_per_s": 1.15,
+   "wall_s": 3.47,
+   "cpu_s": 0.06,
+   "scenario": "phone_book",
+   "param": 1,
+   "peak_rss_mb": 87.2,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 8,
+    "p50": 250.75,
+    "p95": 256.46,
+    "p99": 256.46,
+    "max": 256.46
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 346,
+    "p50": 0.67,
+    "p95": 1.11,
+    "p99": 1.17,
+    "max": 1.33
+   },
+   "event_loop_lag_ms": {
+    "n": 323,
+    "p50": 0.91,
+    "p95": 1.1,
+    "p99": 1.13,
+    "max": 1.14
+   },
+   "finish_ms": {
+    "n": 2,
+    "p50": 7.47,
+    "p95": 7.66,
+    "p99": 7.66,
+    "max": 7.66
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.2,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 2,
+   "calls": 2,
+   "bookings_confirmed": 2,
+   "turns_per_s": 2.3,
+   "wall_s": 3.48,
+   "cpu_s": 0.08,
+   "scenario": "phone_book",
+   "param": 2,
+   "peak_rss_mb": 87.1,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 20,
+    "p50": 251.19,
+    "p95": 256.99,
+    "p99": 257.36,
+    "max": 257.36
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 865,
+    "p50": 0.67,
+    "p95": 1.15,
+    "p99": 1.19,
+    "max": 2.36
+   },
+   "event_loop_lag_ms": {
+    "n": 324,
+    "p50": 0.81,
+    "p95": 1.12,
+    "p99": 1.16,
+    "max": 1.21
+   },
+   "finish_ms": {
+    "n": 5,
+    "p50": 11.62,
+    "p95": 13.08,
+    "p99": 13.08,
+    "max": 13.08
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.9,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 5,
+   "calls": 5,
+   "bookings_confirmed": 5,
+   "turns_per_s": 5.75,
+   "wall_s": 3.48,
+   "cpu_s": 0.11,
+   "scenario": "phone_book",
+   "param": 5,
+   "peak_rss_mb": 89.7,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 40,
+    "p50": 250.56,
+    "p95": 258.24,
+    "p99": 258.4,
+    "max": 258.4
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 1730,
+    "p50": 0.68,
+    "p95": 1.21,
+    "p99": 1.37,
+    "max": 5.91
+   },
+   "event_loop_lag_ms": {
+    "n": 325,
+    "p50": 0.89,
+    "p95": 1.13,
+    "p99": 1.19,
+    "max": 5.75
+   },
+   "finish_ms": {
+    "n": 10,
+    "p50": 21.35,
+    "p95": 22.32,
+    "p99": 22.32,
+    "max": 22.32
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.4,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 10,
+   "calls": 10,
+   "bookings_confirmed": 10,
+   "turns_per_s": 11.43,
+   "wall_s": 3.5,
+   "cpu_s": 0.18,
+   "scenario": "phone_book",
+   "param": 10,
+   "peak_rss_mb": 91.1,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 4,
+    "p50": 251.24,
+    "p95": 252.99,
+    "p99": 252.99,
+    "max": 252.99
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 119,
+    "p50": 0.72,
+    "p95": 1.09,
+    "p99": 1.1,
+    "max": 1.13
+   },
+   "event_loop_lag_ms": {
+    "n": 222,
+    "p50": 1.02,
+    "p95": 1.1,
+    "p99": 1.14,
+    "max": 1.18
+   },
+   "finish_ms": {
+    "n": 1,
+    "p50": 6.59,
+    "p95": 6.59,
+    "p99": 6.59,
+    "max": 6.59
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.1,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 1,
+   "calls": 1,
+   "bookings_confirmed": 0,
+   "turns_per_s": 1.67,
+   "wall_s": 2.4,
+   "cpu_s": 0.04,
+   "scenario": "phone_interrupt",
+   "param": 1,
+   "peak_rss_mb": 86.6,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 8,
+    "p50": 251.65,
+    "p95": 254.48,
+    "p99": 254.48,
+    "max": 254.48
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 238,
+    "p50": 0.7,
+    "p95": 1.12,
+    "p99": 1.18,
+    "max": 1.35
+   },
+   "event_loop_lag_ms": {
+    "n": 221,
+    "p50": 1.03,
+    "p95": 1.11,
+    "p99": 1.15,
+    "max": 1.34
+   },
+   "finish_ms": {
+    "n": 2,
+    "p50": 3.11,
+    "p95": 3.79,
+    "p99": 3.79,
+    "max": 3.79
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.2,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 2,
+   "calls": 2,
+   "bookings_confirmed": 0,
+   "turns_per_s": 3.35,
+   "wall_s": 2.39,
+   "cpu_s": 0.05,
+   "scenario": "phone_interrupt",
+   "param": 2,
+   "peak_rss_mb": 87.3,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 20,
+    "p50": 252.33,
+    "p95": 256.83,
+    "p99": 257.33,
+    "max": 257.33
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 600,
+    "p50": 0.7,
+    "p95": 1.15,
+    "p99": 1.22,
+    "max": 3.09
+   },
+   "event_loop_lag_ms": {
+    "n": 225,
+    "p50": 0.95,
+    "p95": 1.11,
+    "p99": 1.17,
+    "max": 1.54
+   },
+   "finish_ms": {
+    "n": 5,
+    "p50": 11.57,
+    "p95": 13.93,
+    "p99": 13.93,
+    "max": 13.93
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.0,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 5,
+   "calls": 5,
+   "bookings_confirmed": 0,
+   "turns_per_s": 8.24,
+   "wall_s": 2.43,
+   "cpu_s": 0.09,
+   "scenario": "phone_interrupt",
+   "param": 5,
+   "peak_rss_mb": 89.0,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 40,
+    "p50": 252.66,
+    "p95": 258.01,
+    "p99": 258.97,
+    "max": 258.97
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 1200,
+    "p50": 0.69,
+    "p95": 1.17,
+    "p99": 1.36,
+    "max": 5.51
+   },
+   "event_loop_lag_ms": {
+    "n": 225,
+    "p50": 0.99,
+    "p95": 1.14,
+    "p99": 1.19,
+    "max": 4.53
+   },
+   "finish_ms": {
+    "n": 10,
+    "p50": 20.17,
+    "p95": 22.42,
+    "p99": 22.42,
+    "max": 22.42
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.3,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 10,
+   "calls": 10,
+   "bookings_confirmed": 0,
+   "turns_per_s": 16.47,
+   "wall_s": 2.43,
+   "cpu_s": 0.13,
+   "scenario": "phone_interrupt",
+   "param": 10,
+   "peak_rss_mb": 91.2,
+   "python": "3.13.13"
+  },
+  {
+   "model_round_trip_ms": 150.0,
+   "turn_latency_ms": {
+    "n": 4,
+    "p50": 313.13,
+    "p95": 315.61,
+    "p99": 315.61,
+    "max": 315.61
+   },
+   "overhead_beyond_model_ms": {
+    "n": 4,
+    "p50": 4.67,
+    "p95": 5.37,
+    "p99": 5.37,
+    "max": 5.37
+   },
+   "model_rounds_per_turn": {
+    "mean": 2,
+    "max": 2
+   },
+   "degraded_replies": 0,
+   "errors": 0,
+   "sessions": 1,
+   "bookings_confirmed": 0,
+   "turns_per_s": 3.21,
+   "wall_s": 1.25,
+   "cpu_s": 0.02,
+   "scenario": "web_avail",
+   "param": 1,
+   "peak_rss_mb": 90.6,
+   "python": "3.13.13"
+  },
+  {
+   "model_round_trip_ms": 150.0,
+   "turn_latency_ms": {
+    "n": 8,
+    "p50": 312.19,
+    "p95": 313.13,
+    "p99": 313.13,
+    "max": 313.13
+   },
+   "overhead_beyond_model_ms": {
+    "n": 8,
+    "p50": 4.98,
+    "p95": 6.38,
+    "p99": 6.38,
+    "max": 6.38
+   },
+   "model_rounds_per_turn": {
+    "mean": 2,
+    "max": 2
+   },
+   "degraded_replies": 0,
+   "errors": 0,
+   "sessions": 2,
+   "bookings_confirmed": 0,
+   "turns_per_s": 6.4,
+   "wall_s": 1.25,
+   "cpu_s": 0.03,
+   "scenario": "web_avail",
+   "param": 2,
+   "peak_rss_mb": 91.8,
+   "python": "3.13.13"
+  },
+  {
+   "model_round_trip_ms": 150.0,
+   "turn_latency_ms": {
+    "n": 20,
+    "p50": 317.84,
+    "p95": 324.67,
+    "p99": 325.14,
+    "max": 325.14
+   },
+   "overhead_beyond_model_ms": {
+    "n": 20,
+    "p50": 10.3,
+    "p95": 13.46,
+    "p99": 14.06,
+    "max": 14.06
+   },
+   "model_rounds_per_turn": {
+    "mean": 2,
+    "max": 2
+   },
+   "degraded_replies": 0,
+   "errors": 0,
+   "sessions": 5,
+   "bookings_confirmed": 0,
+   "turns_per_s": 15.66,
+   "wall_s": 1.28,
+   "cpu_s": 0.08,
+   "scenario": "web_avail",
+   "param": 5,
+   "peak_rss_mb": 91.8,
+   "python": "3.13.13"
+  },
+  {
+   "model_round_trip_ms": 150.0,
+   "turn_latency_ms": {
+    "n": 40,
+    "p50": 325.21,
+    "p95": 331.74,
+    "p99": 332.63,
+    "max": 332.63
+   },
+   "overhead_beyond_model_ms": {
+    "n": 40,
+    "p50": 16.72,
+    "p95": 20.57,
+    "p99": 22.51,
+    "max": 22.51
+   },
+   "model_rounds_per_turn": {
+    "mean": 2,
+    "max": 2
+   },
+   "degraded_replies": 0,
+   "errors": 0,
+   "sessions": 10,
+   "bookings_confirmed": 0,
+   "turns_per_s": 30.66,
+   "wall_s": 1.3,
+   "cpu_s": 0.13,
+   "scenario": "web_avail",
+   "param": 10,
+   "peak_rss_mb": 91.7,
+   "python": "3.13.13"
+  },
+  {
+   "model_round_trip_ms": 150.0,
+   "turn_latency_ms": {
+    "n": 4,
+    "p50": 159.61,
+    "p95": 317.63,
+    "p99": 317.63,
+    "max": 317.63
+   },
+   "overhead_beyond_model_ms": {
+    "n": 4,
+    "p50": 4.41,
+    "p95": 7.27,
+    "p99": 7.27,
+    "max": 7.27
+   },
+   "model_rounds_per_turn": {
+    "mean": 1.25,
+    "max": 2
+   },
+   "degraded_replies": 0,
+   "errors": 0,
+   "sessions": 1,
+   "bookings_confirmed": 1,
+   "turns_per_s": 5.06,
+   "wall_s": 0.79,
+   "cpu_s": 0.02,
+   "scenario": "web_book",
+   "param": 1,
+   "peak_rss_mb": 90.1,
+   "python": "3.13.13"
+  },
+  {
+   "model_round_trip_ms": 150.0,
+   "turn_latency_ms": {
+    "n": 8,
+    "p50": 159.89,
+    "p95": 317.37,
+    "p99": 317.37,
+    "max": 317.37
+   },
+   "overhead_beyond_model_ms": {
+    "n": 8,
+    "p50": 6.07,
+    "p95": 9.64,
+    "p99": 9.64,
+    "max": 9.64
+   },
+   "model_rounds_per_turn": {
+    "mean": 1.25,
+    "max": 2
+   },
+   "degraded_replies": 0,
+   "errors": 0,
+   "sessions": 2,
+   "bookings_confirmed": 2,
+   "turns_per_s": 10.09,
+   "wall_s": 0.79,
+   "cpu_s": 0.04,
+   "scenario": "web_book",
+   "param": 2,
+   "peak_rss_mb": 92.1,
+   "python": "3.13.13"
+  },
+  {
+   "model_round_trip_ms": 150.0,
+   "turn_latency_ms": {
+    "n": 20,
+    "p50": 163.36,
+    "p95": 321.79,
+    "p99": 321.93,
+    "max": 321.93
+   },
+   "overhead_beyond_model_ms": {
+    "n": 20,
+    "p50": 9.54,
+    "p95": 12.75,
+    "p99": 13.39,
+    "max": 13.39
+   },
+   "model_rounds_per_turn": {
+    "mean": 1.25,
+    "max": 2
+   },
+   "degraded_replies": 0,
+   "errors": 0,
+   "sessions": 5,
+   "bookings_confirmed": 5,
+   "turns_per_s": 24.69,
+   "wall_s": 0.81,
+   "cpu_s": 0.07,
+   "scenario": "web_book",
+   "param": 5,
+   "peak_rss_mb": 92.2,
+   "python": "3.13.13"
+  },
+  {
+   "model_round_trip_ms": 150.0,
+   "turn_latency_ms": {
+    "n": 40,
+    "p50": 169.31,
+    "p95": 325.81,
+    "p99": 327.68,
+    "max": 327.68
+   },
+   "overhead_beyond_model_ms": {
+    "n": 40,
+    "p50": 15.55,
+    "p95": 19.31,
+    "p99": 19.7,
+    "max": 19.7
+   },
+   "model_rounds_per_turn": {
+    "mean": 1.25,
+    "max": 2
+   },
+   "degraded_replies": 0,
+   "errors": 0,
+   "sessions": 10,
+   "bookings_confirmed": 10,
+   "turns_per_s": 47.95,
+   "wall_s": 0.83,
+   "cpu_s": 0.12,
+   "scenario": "web_book",
+   "param": 10,
+   "peak_rss_mb": 93.3,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 4,
+    "p50": 250.84,
+    "p95": 255.08,
+    "p99": 255.08,
+    "max": 255.08
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 173,
+    "p50": 0.6,
+    "p95": 1.1,
+    "p99": 1.15,
+    "max": 1.26
+   },
+   "event_loop_lag_ms": {
+    "n": 323,
+    "p50": 0.9,
+    "p95": 1.12,
+    "p99": 1.15,
+    "max": 1.2
+   },
+   "finish_ms": {
+    "n": 1,
+    "p50": 5.65,
+    "p95": 5.65,
+    "p99": 5.65,
+    "max": 5.65
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.2,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 1,
+   "calls": 1,
+   "bookings_confirmed": 1,
+   "turns_per_s": 1.15,
+   "wall_s": 3.47,
+   "cpu_s": 0.06,
+   "scenario": "phone_book_sheets_slow",
+   "param": 1,
+   "peak_rss_mb": 87.2,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 20,
+    "p50": 252.62,
+    "p95": 256.08,
+    "p99": 256.73,
+    "max": 256.73
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 865,
+    "p50": 0.71,
+    "p95": 1.15,
+    "p99": 1.33,
+    "max": 2.49
+   },
+   "event_loop_lag_ms": {
+    "n": 323,
+    "p50": 0.95,
+    "p95": 1.12,
+    "p99": 1.15,
+    "max": 2.63
+   },
+   "finish_ms": {
+    "n": 5,
+    "p50": 12.3,
+    "p95": 14.08,
+    "p99": 14.08,
+    "max": 14.08
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.4,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 5,
+   "calls": 5,
+   "bookings_confirmed": 5,
+   "turns_per_s": 5.75,
+   "wall_s": 3.48,
+   "cpu_s": 0.11,
+   "scenario": "phone_book_sheets_slow",
+   "param": 5,
+   "peak_rss_mb": 89.8,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 4,
+    "p50": 251.06,
+    "p95": 255.14,
+    "p99": 255.14,
+    "max": 255.14
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 173,
+    "p50": 0.69,
+    "p95": 1.1,
+    "p99": 1.12,
+    "max": 1.23
+   },
+   "event_loop_lag_ms": {
+    "n": 322,
+    "p50": 0.95,
+    "p95": 1.12,
+    "p99": 1.18,
+    "max": 1.63
+   },
+   "finish_ms": {
+    "n": 1,
+    "p50": 4.66,
+    "p95": 4.66,
+    "p99": 4.66,
+    "max": 4.66
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.2,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 1,
+   "calls": 1,
+   "bookings_confirmed": 1,
+   "turns_per_s": 1.15,
+   "wall_s": 3.47,
+   "cpu_s": 0.06,
+   "scenario": "phone_book_sheets_down",
+   "param": 1,
+   "peak_rss_mb": 86.6,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 20,
+    "p50": 250.96,
+    "p95": 257.6,
+    "p99": 258.13,
+    "max": 258.13
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 865,
+    "p50": 0.68,
+    "p95": 1.13,
+    "p99": 1.23,
+    "max": 2.75
+   },
+   "event_loop_lag_ms": {
+    "n": 324,
+    "p50": 0.86,
+    "p95": 1.13,
+    "p99": 1.17,
+    "max": 1.23
+   },
+   "finish_ms": {
+    "n": 5,
+    "p50": 11.89,
+    "p95": 14.28,
+    "p99": 14.28,
+    "max": 14.28
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.4,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 5,
+   "calls": 5,
+   "bookings_confirmed": 5,
+   "turns_per_s": 5.74,
+   "wall_s": 3.48,
+   "cpu_s": 0.12,
+   "scenario": "phone_book_sheets_down",
+   "param": 5,
+   "peak_rss_mb": 89.1,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 4,
+    "p50": 250.51,
+    "p95": 373.53,
+    "p99": 373.53,
+    "max": 373.53
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 179,
+    "p50": 0.68,
+    "p95": 1.09,
+    "p99": 1.12,
+    "max": 1.13
+   },
+   "event_loop_lag_ms": {
+    "n": 334,
+    "p50": 0.88,
+    "p95": 1.1,
+    "p99": 1.13,
+    "max": 1.17
+   },
+   "finish_ms": {
+    "n": 1,
+    "p50": 5.68,
+    "p95": 5.68,
+    "p99": 5.68,
+    "max": 5.68
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.2,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 1,
+   "calls": 1,
+   "bookings_confirmed": 1,
+   "turns_per_s": 1.11,
+   "wall_s": 3.6,
+   "cpu_s": 0.06,
+   "scenario": "phone_book_slow_db",
+   "param": 1,
+   "peak_rss_mb": 86.8,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 20,
+    "p50": 250.7,
+    "p95": 380.53,
+    "p99": 381.15,
+    "max": 381.15
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 895,
+    "p50": 0.68,
+    "p95": 1.17,
+    "p99": 1.23,
+    "max": 2.34
+   },
+   "event_loop_lag_ms": {
+    "n": 335,
+    "p50": 0.84,
+    "p95": 1.12,
+    "p99": 1.17,
+    "max": 1.25
+   },
+   "finish_ms": {
+    "n": 5,
+    "p50": 12.53,
+    "p95": 13.8,
+    "p99": 13.8,
+    "max": 13.8
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.3,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 5,
+   "calls": 5,
+   "bookings_confirmed": 5,
+   "turns_per_s": 5.56,
+   "wall_s": 3.6,
+   "cpu_s": 0.12,
+   "scenario": "phone_book_slow_db",
+   "param": 5,
+   "peak_rss_mb": 87.9,
+   "python": "3.13.13"
+  },
+  {
+   "model_round_trip_ms": 150.0,
+   "turn_latency_ms": {
+    "n": 4,
+    "p50": 160.38,
+    "p95": 317.1,
+    "p99": 317.1,
+    "max": 317.1
+   },
+   "overhead_beyond_model_ms": {
+    "n": 4,
+    "p50": 5.16,
+    "p95": 8.57,
+    "p99": 8.57,
+    "max": 8.57
+   },
+   "model_rounds_per_turn": {
+    "mean": 1.25,
+    "max": 2
+   },
+   "degraded_replies": 0,
+   "errors": 0,
+   "sessions": 1,
+   "bookings_confirmed": 1,
+   "turns_per_s": 5.04,
+   "wall_s": 0.79,
+   "cpu_s": 0.02,
+   "scenario": "web_book_sheets_slow",
+   "param": 1,
+   "peak_rss_mb": 90.0,
+   "python": "3.13.13"
+  },
+  {
+   "model_round_trip_ms": 150.0,
+   "turn_latency_ms": {
+    "n": 20,
+    "p50": 163.69,
+    "p95": 319.25,
+    "p99": 319.77,
+    "max": 319.77
+   },
+   "overhead_beyond_model_ms": {
+    "n": 20,
+    "p50": 8.03,
+    "p95": 10.86,
+    "p99": 10.96,
+    "max": 10.96
+   },
+   "model_rounds_per_turn": {
+    "mean": 1.25,
+    "max": 2
+   },
+   "degraded_replies": 0,
+   "errors": 0,
+   "sessions": 5,
+   "bookings_confirmed": 5,
+   "turns_per_s": 24.86,
+   "wall_s": 0.8,
+   "cpu_s": 0.07,
+   "scenario": "web_book_sheets_slow",
+   "param": 5,
+   "peak_rss_mb": 91.7,
+   "python": "3.13.13"
+  },
+  {
+   "model_round_trip_ms": 150.0,
+   "turn_latency_ms": {
+    "n": 4,
+    "p50": 312.32,
+    "p95": 313.52,
+    "p99": 313.52,
+    "max": 313.52
+   },
+   "overhead_beyond_model_ms": {
+    "n": 4,
+    "p50": 3.31,
+    "p95": 6.03,
+    "p99": 6.03,
+    "max": 6.03
+   },
+   "model_rounds_per_turn": {
+    "mean": 1.5,
+    "max": 2
+   },
+   "degraded_replies": 2,
+   "errors": 0,
+   "sessions": 1,
+   "bookings_confirmed": 0,
+   "turns_per_s": 4.27,
+   "wall_s": 0.94,
+   "cpu_s": 0.01,
+   "scenario": "web_model_timeout",
+   "param": 1,
+   "peak_rss_mb": 90.0,
+   "python": "3.13.13"
+  },
+  {
+   "model_round_trip_ms": 150.0,
+   "turn_latency_ms": {
+    "n": 20,
+    "p50": 316.45,
+    "p95": 325.85,
+    "p99": 326.24,
+    "max": 326.24
+   },
+   "overhead_beyond_model_ms": {
+    "n": 20,
+    "p50": 9.41,
+    "p95": 14.63,
+    "p99": 15.29,
+    "max": 15.29
+   },
+   "model_rounds_per_turn": {
+    "mean": 1.5,
+    "max": 2
+   },
+   "degraded_replies": 10,
+   "errors": 0,
+   "sessions": 5,
+   "bookings_confirmed": 0,
+   "turns_per_s": 20.9,
+   "wall_s": 0.96,
+   "cpu_s": 0.05,
+   "scenario": "web_model_timeout",
+   "param": 5,
+   "peak_rss_mb": 91.8,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 8,
+    "p50": 251.04,
+    "p95": 256.62,
+    "p99": 256.62,
+    "max": 256.62
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 346,
+    "p50": 0.69,
+    "p95": 1.12,
+    "p99": 1.17,
+    "max": 1.38
+   },
+   "event_loop_lag_ms": {
+    "n": 323,
+    "p50": 0.95,
+    "p95": 1.11,
+    "p99": 1.14,
+    "max": 1.21
+   },
+   "finish_ms": {
+    "n": 2,
+    "p50": 6.66,
+    "p95": 6.83,
+    "p99": 6.83,
+    "max": 6.83
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.3,
+   "silent_hangups": 0,
+   "server_hangups": 0,
+   "calls_ok": 2,
+   "calls": 2,
+   "bookings_confirmed": 2,
+   "turns_per_s": 2.3,
+   "wall_s": 3.48,
+   "cpu_s": 0.08,
+   "scenario": "phone_book_sheets_stall",
+   "param": 2,
+   "peak_rss_mb": 88.4,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 1,
+    "p50": 253.91,
+    "p95": 253.91,
+    "p99": 253.91,
+    "max": 253.91
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 59,
+    "p50": 0.54,
+    "p95": 1.08,
+    "p99": 1.1,
+    "max": 1.12
+   },
+   "event_loop_lag_ms": {
+    "n": 111,
+    "p50": 0.93,
+    "p95": 1.1,
+    "p99": 1.12,
+    "max": 1.13
+   },
+   "finish_ms": {
+    "n": 1,
+    "p50": 6.25,
+    "p95": 6.25,
+    "p99": 6.25,
+    "max": 6.25
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 21.2,
+   "silent_hangups": 0,
+   "server_hangups": 1,
+   "calls_ok": 0,
+   "calls": 1,
+   "bookings_confirmed": 0,
+   "turns_per_s": 3.35,
+   "wall_s": 1.19,
+   "cpu_s": 0.03,
+   "scenario": "phone_model_drop",
+   "param": 1,
+   "peak_rss_mb": 86.6,
+   "python": "3.13.13"
+  },
+  {
+   "model_think_ms": 250.0,
+   "ttfa_ms": {
+    "n": 5,
+    "p50": 256.66,
+    "p95": 257.61,
+    "p99": 257.61,
+    "max": 257.61
+   },
+   "inbound_frame_lateness_ms": {
+    "n": 295,
+    "p50": 0.68,
+    "p95": 1.14,
+    "p99": 1.35,
+    "max": 2.55
+   },
+   "event_loop_lag_ms": {
+    "n": 111,
+    "p50": 0.92,
+    "p95": 1.1,
+    "p99": 1.11,
+    "max": 2.14
+   },
+   "finish_ms": {
+    "n": 5,
+    "p50": 11.41,
+    "p95": 12.16,
+    "p99": 12.16,
+    "max": 12.16
+   },
+   "audio_gaps_over_60ms": 0,
+   "max_audio_gap_ms": 20.8,
+   "silent_hangups": 0,
+   "server_hangups": 5,
+   "calls_ok": 0,
+   "calls": 5,
+   "bookings_confirmed": 0,
+   "turns_per_s": 16.68,
+   "wall_s": 1.2,
+   "cpu_s": 0.06,
+   "scenario": "phone_model_drop",
+   "param": 5,
+   "peak_rss_mb": 89.3,
+   "python": "3.13.13"
+  },
+  {
+   "runs": 1000,
+   "runs_with_broken_history": 0,
+   "broken_tool_pairs": 0,
+   "responses_by_status": {
+    "200": 1000,
+    "409": 1000
+   },
+   "scenario": "web_double_submit",
+   "param": 1000,
+   "peak_rss_mb": 102.1,
+   "python": "3.13.13"
+  },
+  {
+   "confirmed_replies": 1,
+   "failed_replies": 9,
+   "confirmed_rows": 1,
+   "scenario": "booking_race",
+   "param": 10,
+   "peak_rss_mb": 88.0,
+   "python": "3.13.13"
+  },
+  {
+   "confirmed_replies": 1,
+   "failed_replies": 49,
+   "confirmed_rows": 1,
+   "scenario": "booking_race",
+   "param": 50,
+   "peak_rss_mb": 93.5,
+   "python": "3.13.13"
+  },
+  {
+   "history_turns": 20,
+   "history_entries": 50,
+   "turn_ms_excl_model": 0.96,
+   "log_and_trace_ms": 0.71,
+   "model_request_chars": 13709,
+   "ended_at_cap": false,
+   "trace_kb": 9.4,
+   "scenario": "long_history",
+   "param": 20,
+   "peak_rss_mb": 89.9,
+   "python": "3.13.13"
+  },
+  {
+   "history_turns": 59,
+   "history_entries": 144,
+   "turn_ms_excl_model": 1.24,
+   "log_and_trace_ms": 1.1,
+   "model_request_chars": 28884,
+   "ended_at_cap": false,
+   "trace_kb": 26.9,
+   "scenario": "long_history",
+   "param": 59,
+   "peak_rss_mb": 89.6,
+   "python": "3.13.13"
+  },
+  {
+   "history_turns": 200,
+   "history_entries": 480,
+   "turn_ms_excl_model": 0.02,
+   "log_and_trace_ms": 1.9,
+   "model_request_chars": 0,
+   "ended_at_cap": true,
+   "trace_kb": 90.7,
+   "scenario": "long_history",
+   "param": 200,
+   "peak_rss_mb": 89.8,
+   "python": "3.13.13"
+  },
+  {
+   "history_turns": 800,
+   "history_entries": 1920,
+   "turn_ms_excl_model": 0.05,
+   "log_and_trace_ms": 5.5,
+   "model_request_chars": 0,
+   "ended_at_cap": true,
+   "trace_kb": 366.2,
+   "scenario": "long_history",
+   "param": 800,
+   "peak_rss_mb": 91.6,
+   "python": "3.13.13"
+  },
+  {
+   "calls_on_disk": 100,
+   "cold_ms": 5.14,
+   "warm_ms": {
+    "n": 20,
+    "p50": 0.4,
+    "p95": 0.65,
+    "p99": 0.69,
+    "max": 0.69
+   },
+   "etag_check_ms": {
+    "n": 50,
+    "p50": 0.01,
+    "p95": 0.02,
+    "p99": 0.02,
+    "max": 0.02
+   },
+   "scenario": "dashboard",
+   "param": 100,
+   "peak_rss_mb": 90.5,
+   "python": "3.13.13"
+  },
+  {
+   "calls_on_disk": 1000,
+   "cold_ms": 32.14,
+   "warm_ms": {
+    "n": 20,
+    "p50": 4.18,
+    "p95": 4.99,
+    "p99": 8.22,
+    "max": 8.22
+   },
+   "etag_check_ms": {
+    "n": 50,
+    "p50": 0.01,
+    "p95": 0.01,
+    "p99": 0.03,
+    "max": 0.03
+   },
+   "scenario": "dashboard",
+   "param": 1000,
+   "peak_rss_mb": 91.8,
+   "python": "3.13.13"
+  },
+  {
+   "calls_on_disk": 5000,
+   "cold_ms": 122.03,
+   "warm_ms": {
+    "n": 20,
+    "p50": 21.86,
+    "p95": 22.59,
+    "p99": 23.01,
+    "max": 23.01
+   },
+   "etag_check_ms": {
+    "n": 50,
+    "p50": 0.01,
+    "p95": 0.02,
+    "p99": 0.03,
+    "max": 0.03
+   },
+   "scenario": "dashboard",
+   "param": 5000,
+   "peak_rss_mb": 104.0,
+   "python": "3.13.13"
+  }
+ ]
+}

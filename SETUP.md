@@ -202,3 +202,35 @@ One number per business — each new client gets their own Twilio number
 **Trial-account limits:** until you upgrade the Twilio account, it can only
 call/receive from phone numbers you have verified in the console, and plays a
 short trial notice before connecting. Upgrading (adding a card) removes both.
+
+---
+
+## Capacity: what one server can carry (read before a pilot)
+
+VoxAgent runs as **one process**. Two things only exist in its memory: the
+key that signs phone tickets, and the portal's test-call sessions. So don't
+run it with several workers (`--workers 2`) or behind a load balancer. The
+server prints its limits at startup, in a line like:
+
+```
+[capacity] one process · portal worker threads: 40 · phone call-I/O threads: 8 · MAX_CONCURRENT_CALLS=3 …
+```
+
+- **`MAX_CONCURRENT_CALLS`** (default 3) caps live phone calls. Set it to what
+  your Gemini Live tier allows (free tier: about 3 sessions). Callers beyond it
+  hear "all our lines are busy".
+- **Phone call-I/O threads:** `max(8, 2 × MAX_CONCURRENT_CALLS)`. They run each
+  call's database work, so a slow booking never freezes other callers' audio.
+- **Portal worker threads:** 40, shared by every portal request. A typed or
+  voice turn holds one for as long as the model takes to answer. The model's
+  retry waits are capped at 25 s and speech at 15 s, so one turn can't hold a
+  thread for much longer than that.
+- **Web test-call sessions:** 20 per business, 500 in total, 60 turns each.
+  Idle ones are cleared after 2 hours.
+
+What has been measured: `python bench_load.py --suite full` runs an offline,
+fake-provider workload of 1–10 simultaneous calls or chats. Results are in
+`docs/perf/` and `docs/PERFORMANCE_AUDIT.md`. Those numbers measure VoxAgent's
+own code only. They don't say how fast Gemini, Twilio or edge-tts will be, and
+they don't prove any number of real concurrent calls. For real numbers, set
+`VOXAGENT_PERF_LOG=perf.jsonl` during a pilot and read `/admin` → `/api/admin/perf`.

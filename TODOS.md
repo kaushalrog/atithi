@@ -2,18 +2,6 @@
 
 ## Telephony
 
-### End phone calls cleanly when the model stream fails; keep the event loop non-blocking
-
-**What:** When the Gemini Live stream errors or ends, play a short apology and hang up. Run tool calls (SQLite write, Sheets mirror) off the async event loop.
-
-**Why:** Today a dropped model stream leaves the caller in silence until they hang up (audit M7), and one booking's Sheets network write stalls every other live call (audit M8).
-
-**Context:** `telephony.py` `twilio_stream` starts `pump_gemini` as a task but only awaits `read_twilio()`, so pump exceptions are never observed. `pump_gemini` calls `agent._execute_tool` synchronously. (Update 2026-10-16, eng review D8: the hang-up save is planned to move to `asyncio.to_thread` inside a guard, task E7 in docs/IMPLEMENTATION_PLAN.md, not yet built. Tool execution during the call stays on the loop and stays open here.) Start with an `asyncio.wait(..., return_when=FIRST_COMPLETED)` over both tasks and `asyncio.to_thread` for tool execution. Must be done before live calls are enabled for a paying client.
-
-**Effort:** M
-**Priority:** P2
-**Depends on:** Phase 0.5 hardening branch (`harden/phase-0.5`) landing first.
-
 ## Security
 
 ### Rate-limit credential endpoints
@@ -70,19 +58,15 @@
 
 ## Metrics
 
+## Completed
+
+### End phone calls cleanly when the model stream fails; keep the event loop non-blocking
+
+**Completed:** perf/audit branch, 2026-10-19 (commits 922027a, 6f0fcb2). Phone tools, agent setup and the record save run on a dedicated call-I/O pool. The stream waits FIRST_COMPLETED on caller and model, so a dropped session closes our side at once. The Live connect is bounded at 10 s. TwiML has an apology `<Say>` after `</Connect>`; it's unverified until SAFE_TESTING §5. The Sheets copy is a bounded background queue (836cdb7). Before/after: docs/PERFORMANCE_AUDIT.md §6.
+
 ### Compute call metrics from structured history, not transcript substrings
 
-**What:** Derive conversion from confirmed bookings. (The second half, recording phone/live tool calls in history, was done on 2026-10-17 in `phase-3/lane-a`, eng review E2.)
-
-**Why:** The dashboard shows 100% conversion for a call whose booking failed (audit M1) and 0% for real phone bookings, because phone/live channels drop tool calls from history (audit M2).
-
-**Context:** `server.py` `_stats_from` and admin overview use `"book_appointment" in transcript`. `telephony.py` `pump_gemini` and `live_main.py` execute tools without appending them to `agent.history`. This is the same evidence layer the Phase 3 evaluator needs, so design the persisted conversation format once in Phase 2.
-
-**Effort:** M
-**Priority:** P2
-**Depends on:** Nothing now: per-call traces (`calls/<client>/traces/<id>.json`, `actions[].type/ok`) carry the outcome; count calls with a `book` action where `ok` is true.
-
-## Completed
+**Completed:** perf/audit branch, 2026-10-19 (commit 7d57cbe). Call records store `outcome: {booked, lead}` from the tools' results. Conversion, the admin flags and the portal badge use it; old records fall back to the substring rule.
 
 ## Claim-vs-records checker (deferred by /plan-ceo-review, 2026-10-15)
 

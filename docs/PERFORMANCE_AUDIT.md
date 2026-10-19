@@ -1,6 +1,6 @@
 # Performance, latency and scale audit
 
-**Date:** 2026-10-19. **Branch:** `perf/audit` (from `main` @ `e181c9c`). **Baseline commit for all "before" numbers:** `ceba04f` (benchmark only, no application change).
+**Date:** 2026-10-19. **Branch:** `perf/audit` (from `main` @ `e181c9c`). **Baseline commit for all "before" numbers:** `ceba04f` (benchmark only, no application change). **After:** `bad773e`; see §6 for what changed and the before/after numbers.
 
 **Rule:** a finding is **Measured** only if `bench_load.py` or a probe observed it on this code. **Static** means it comes from reading the code (the evidence is a file and line). **Unverified** means it needs a real provider (Gemini, Twilio, Google Sheets, Microsoft TTS) that wasn't used.
 
@@ -153,9 +153,9 @@ There are no timings for model requests, tools, database or Sheets, no event-loo
 | Login / code throttling | **Missing** | No limiter anywhere in server.py or auth.py (audit M9) |
 | Demo access codes | **Committed** | `clients/*.yaml` `access_key:` (audit M10); rotate before any public repo or server |
 | Privacy / retention | **Open** | No retention or delete path for calls, traces, leads or bookings (TODOS) |
-| Session resource limits | **Missing** | F8 |
-| Cost caps | **Missing** | No per-session or per-day model-call cap; F5 and F8 multiply cost under abuse |
-| Conversion metric | **Wrong** | A substring test, `"book_appointment" in transcript` (server.py:388, 657), counts failed attempts (audit M1). Traces now hold the real outcome |
+| Session resource limits | **Fixed** (bad773e line) | 60 turns, 20 sessions per business, 500 total, idle purge per request, 409 per-session lock (§6) |
+| Cost caps | **Partial** | Per session: 60 turns, at most 60 sessions' worth per business, 25 s retry budget. No per-day or per-business model-call budget yet |
+| Conversion metric | **Fixed** (7d57cbe) | Call records store `outcome` from the tools' results; `docs/audit_repro.py` R3 now NOT REPRODUCED |
 | Single process | Required | Stream tickets use a per-process secret (telephony.py:162); the call counter is in-process |
 | Live calls | **Off** | `ENABLE_LIVE_CALLS` gate (telephony.py:93); stays off |
 
@@ -165,9 +165,84 @@ There are no timings for model requests, tools, database or Sheets, no event-loo
 
 - Real Gemini chat latency, first-token time, rate limits and retry behaviour.
 - Gemini Live first-audio latency, session time limits, what happens on a network drop, and whether `HttpOptions.timeout` bounds the websocket handshake.
-- Twilio media timing, jitter and buffering, and whether TwiML after `<Connect>` plays when our stream closes.
+- Twilio media timing, jitter and buffering, and whether TwiML after `<Connect>` plays when our stream closes. The apology `<Say>` (§6, F3) depends on that; SAFE_TESTING §5 has the check.
 - Google Sheets latency and failure modes. Only gspread's lack of a timeout is verified, by reading its code.
 - Microsoft edge-tts latency.
 - Behaviour on Windows (the `os.replace` retry path) and on a Linux VM.
 
-These are the first things to measure once a real phone pilot runs: see the instrumentation in [PERFORMANCE_PLAN.md](PERFORMANCE_PLAN.md).
+These are the first things to measure once a real phone pilot runs. The instrumentation for it is now in the code (§6): `/api/admin/perf` and `VOXAGENT_PERF_LOG`.
+
+---
+
+## 6. After the fixes (2026-10-19)
+
+Same machine, same Python (3.13.13), same harness and fake providers as §2. Raw results: [docs/perf/after.json](perf/after.json), from `python bench_load.py --suite full --out docs/perf/after.json` at `bad773e`. Both suites pass: 217 tests on Python 3.11.15 and 3.13.13. `docs/audit_repro.py` shows NOT REPRODUCED for R1–R9.
+
+**These are still fake-provider numbers.** They show that VoxAgent's own stalls are gone. They say nothing about real Gemini, Twilio or Google latency, and they don't establish any real concurrent-call capacity.
+
+### What changed
+
+| Finding | Change | Commit |
+|---|---|---|
+| F9 no instrumentation | `perf.py` spans, events and gauges; `/api/admin/perf`; opt-in JSONL via `VOXAGENT_PERF_LOG`. One span costs 0.8 µs (bench.py) | 8492dda |
+| F1 Sheets inside the booking | Copy queued after COMMIT on a bounded worker (1,000 items; gspread timeout 5/10 s; 3 retries; drop+count+log) | 836cdb7 |
+| F2 tools on the loop | Phone tools, agent setup, business checks and the record save run on a dedicated call-I/O pool; hang-up waits ≤15 s for a running booking | 922027a |
+| F3, F4 silent line, no connect timeout | The stream ends when either side does; Live connect bounded at 10 s; TwiML apology after `</Connect>` (**unverified**) | 6f0fcb2 |
+| F7, F8 double submit, unbounded sessions | Per-session lock (409), caps 60/20/500, idle purge per request | b4574b9 |
+| F5, F6 retry and TTS waits | 25 s retry-wait budget per model request; TTS 15 s timeout → 504 | a7c338d |
+| Phase 5: conversion | `outcome` stored per call; used for conversion, admin flags and the portal badge | 7d57cbe |
+| Regression found and fixed | In-process lock around the booking INSERT (see "Regressions") | bad773e |
+| Benchmark safety | `bench.py` now uses temporary storage. It had created an empty `bookings.db` in the repo when none existed | 92b2589 |
+
+### Before and after: the failures
+
+| Scenario | Metric | Before | After |
+|---|---|---|---|
+| Phone booking, Sheets 1 s, 5 calls | TTFA p99 | 5,030.9 ms | **256.7 ms** |
+| | Event-loop lag max | 5,020.9 ms | **2.6 ms** |
+| Phone booking, Sheets stalls 8 s, 2 calls | TTFA p99 | 16,008.9 ms | **256.6 ms** |
+| | Event-loop lag max | 15,999.5 ms | **1.2 ms** |
+| Phone booking, DB write lock held, 5 calls | Event-loop lag max | 134.0 ms | **1.2 ms** |
+| | Other calls' inbound audio lateness max | 123.8 ms | **2.2 ms** (from the run in 922027a) |
+| | TTFA p99 (this caller waits for the lock) | 389.7 ms | 381.1 ms |
+| Live session drops, 5 calls | Callers left on a silent line | **5 / 5** | **0 / 5** (our side hangs up; 5 server hang-ups) |
+| Web booking, Sheets 1 s, 5 sessions | VoxAgent's own time p99 | 1,016.1 ms | **11.0 ms** |
+| Two requests on one session, 1,000 runs | Runs with a broken history | 18 of 20 (§2 probe) | **0 of 1,000** (1,000 × 200, 1,000 × 409) |
+| Web turn with 200 / 800 prior turns | Request sent to the model | 84.8k / 324k chars | Refused politely at the 60-turn cap, no model call. The largest possible request is now turn 60: **28.9k chars** |
+
+The baseline JSON's `web_double_submit` row is a single run that happened to show 0 broken pairs. The 18/20 figure comes from the 20-run probe in §2; the scenario now runs 1,000 times itself.
+
+### Before and after: the healthy paths (regression check)
+
+Target from the plan: within ±10% of baseline.
+
+| Scenario | Metric | Before | After | Change |
+|---|---|---|---|---|
+| Phone availability, 10 calls | TTFA p99 | 250.8 ms | 260.2 ms | +3.7% |
+| Phone booking, 5 calls | TTFA p99 | 251.4 ms | 257.4 ms | +2.4% |
+| Phone booking, 10 calls | TTFA p99 | 251.6 ms | 258.4 ms | +2.7% |
+| Phone barge-in, 10 calls | TTFA p99 | 251.1 ms | 259.0 ms | +3.1% |
+| Web availability, 10 sessions | Own time p99 | 21.1 ms | 22.5 ms | +1.4 ms |
+| Web booking, 10 sessions | Own time p99 | 28.2 ms | 19.7 ms | −8.5 ms |
+| Booking race, 10 / 50 callers | Confirmed rows for one slot | 1 / 1 | 1 / 1 | invariant holds |
+| Dashboard, 5,000 calls | Warm p50 | 22.0 ms | 21.9 ms | — |
+| Peak RSS (largest scenario) | | 103.1 MB | 104.0 MB | — |
+
+### Regressions, explained
+
+**Phone TTFA p99 is 0.3–9.4 ms higher on healthy and Sheets-down calls** (+0.1% to +3.7%; the largest is 10 simultaneous availability calls).
+
+*Cause, measured:* tools now run on worker threads instead of the event loop. In the scripted workload, every call books or checks availability at the same instant, so 5–10 tools run at once on 5–10 threads. Their Python work shares one GIL, so each tool's wall time stretches toward the batch's total. In the bench, a booking tool takes 4–6 ms instead of 0.4 ms on the loop. A micro-probe (one tool at a time on a pool thread, with the loop busy with audio) costs 0.1–1.4 ms, so the cost comes from the coincidence of many tools at once, not from the thread itself.
+
+*A second cause, fixed:* simultaneous INSERTs on separate SQLite connections made SQLite's busy handler sleep in millisecond steps (insert max 4–12 ms, TTFA p99 up to 284 ms). A dedicated in-process lock around the single INSERT (bad773e) brought insert max to 1.4–1.7 ms. The UNIQUE index still decides every race, and the booking-race scenario still gives exactly one confirmed row.
+
+*Why it's accepted:* the cost lands only on the callers whose tools are running, and it's a few milliseconds. Before, one slow database or Sheets call froze **every** call's audio for 0.1–16 s. With a real model in the loop (hundreds of milliseconds per reply) a few milliseconds is not expected to be audible, but that's **unverified** until a pilot.
+
+**Nothing else regressed beyond noise.** Web own time moved by −8.5 to +2.9 ms across rows. Dashboard and memory are unchanged.
+
+### Still open
+
+- **Real-provider behaviour (§5).** Nothing here measures it. The pilot should run with `VOXAGENT_PERF_LOG` set and read `call.first_audio`, `call.model_connect`, `model.request` and `loop.lag`.
+- **The TwiML apology** plays only if Twilio continues after a stream we close. It's documented by Twilio but unverified (SAFE_TESTING §5).
+- **Deferred by decision:** login and code throttling (D1), access-code rotation (D2, by hand), and a retention policy (needs the owner's policy).
+- **Capacity claim:** none. One process (SETUP.md "Capacity"). The fake-provider runs went up to 10 calls and 10 sessions without stalls. That's all they show.

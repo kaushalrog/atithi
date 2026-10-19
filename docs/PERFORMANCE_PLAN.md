@@ -641,37 +641,39 @@ Approval readiness: PASS (D1, D2, D3, D4, D5, D6, D7, D8, D9, D10)
 
 ## Implementation Tasks
 
+**Status 2026-10-19:** all eight done on `perf/audit` (commits 8492dda to bad773e); results in PERFORMANCE_AUDIT.md §6.
+
 Synthesized from this review's findings. Run with Claude Code or Codex; checkbox as you ship. Ratios: features ~30x, tests ~50x.
 
-- [ ] **P1 (P1, human: ~1 day / CC: ~40min)**: perf. Add `perf.py`, spans at the plan sites, the loop monitor, `/api/admin/perf`, and the JSONL writer in storage with 20 MB rollover.
+- [x] **P1 (P1, human: ~1 day / CC: ~40min)**: perf. Add `perf.py`, spans at the plan sites, the loop monitor, `/api/admin/perf`, and the JSONL writer in storage with 20 MB rollover.
   - Surfaced by: PD1 (D5), D4, audit F9
   - Files: perf.py, storage.py, agent.py, telephony.py, live_main.py, server.py, bench.py, tests/test_perf.py
   - Verify: `python -m pytest tests -q`; `python bench.py` shows span cost under 10 µs
-- [ ] **P2 (P1, human: ~5h / CC: ~25min)**: storage. Add the bounded Sheets copy queue and worker (timeout, retry 2/8/30 s, drop+count, atexit drain); the booking returns after COMMIT.
+- [x] **P2 (P1, human: ~5h / CC: ~25min)**: storage. Add the bounded Sheets copy queue and worker (timeout, retry 2/8/30 s, drop+count, atexit drain); the booking returns after COMMIT.
   - Surfaced by: F1, plan §2.5
   - Files: storage.py, tests/test_storage.py
   - Verify: tests; bench `phone_book_sheets_*`, `web_book_sheets_slow`
-- [ ] **P3 (P1, human: ~4h / CC: ~20min)**: telephony and live. Run tools and agent construction on the call-I/O executor; await the in-flight tool before finish (≤15 s).
+- [x] **P3 (P1, human: ~4h / CC: ~20min)**: telephony and live. Run tools and agent construction on the call-I/O executor; await the in-flight tool before finish (≤15 s).
   - Surfaced by: F2, R1 (D6), Section 1 executor sizing
   - Files: telephony.py, live_main.py, tests/test_telephony.py
   - Verify: tests; bench `phone_book_slow_db`
-- [ ] **P4 (P1, human: ~3h / CC: ~15min)**: telephony. Close on pump death (FIRST_COMPLETED), add a 10 s Live connect timeout, and the TwiML apology.
+- [x] **P4 (P1, human: ~3h / CC: ~15min)**: telephony. Close on pump death (FIRST_COMPLETED), add a 10 s Live connect timeout, and the TwiML apology.
   - Surfaced by: F3, F4, PD7 (D9)
   - Files: telephony.py, tests/test_telephony.py, docs/SAFE_TESTING.md
   - Verify: tests; bench `phone_model_drop` gives 0 silent
-- [ ] **P5 (P1, human: ~3h / CC: ~15min)**: server. Add the per-session lock (409), caps 60/20/500, and idle purge per request.
+- [x] **P5 (P1, human: ~3h / CC: ~15min)**: server. Add the per-session lock (409), caps 60/20/500, and idle purge per request.
   - Surfaced by: F7, F8, PD2 (D7)
   - Files: server.py, tests/test_access.py
   - Verify: tests; bench `web_double_submit` ×1000 gives 0 broken
-- [ ] **P6 (P2, human: ~2h / CC: ~10min)**: llm and tts. Add the 25 s retry budget and the 15 s TTS timeout returning 504.
+- [x] **P6 (P2, human: ~2h / CC: ~10min)**: llm and tts. Add the 25 s retry budget and the 15 s TTS timeout returning 504.
   - Surfaced by: F5 (D8), F6
   - Files: llm.py, tts.py, server.py, tests/test_agent.py, tests/test_tts.py
   - Verify: tests
-- [ ] **P7 (P2, human: ~3h / CC: ~15min)**: dashboard. Add the `outcome` field in call records and use it for conversion, the admin flags and the portal badge.
+- [x] **P7 (P2, human: ~3h / CC: ~15min)**: dashboard. Add the `outcome` field in call records and use it for conversion, the admin flags and the portal badge.
   - Surfaced by: D3, CV1 (D10)
   - Files: storage.py, server.py, web/index.html, tests/test_dashboard.py
   - Verify: tests; a failed booking is not counted
-- [ ] **P8 (P2, human: ~2h / CC: ~10min)**: measurement. Run the full bench into `docs/perf/after.json`, add a before/after table in PERFORMANCE_AUDIT.md §6, and update the docs (SETUP/SAFE_TESTING single-process and pool sizes, TODOS).
+- [x] **P8 (P2, human: ~2h / CC: ~10min)**: measurement. Run the full bench into `docs/perf/after.json`, add a before/after table in PERFORMANCE_AUDIT.md §6, and update the docs (SETUP/SAFE_TESTING single-process and pool sizes, TODOS).
   - Surfaced by: brief Phase 6
   - Files: docs/
   - Verify: the table matches the JSON

@@ -84,6 +84,14 @@ AI receptionist for Indian small service businesses (clinics, salons, coaching i
   parsed once and cached until it changes (our writes invalidate exactly;
   outside edits are caught by an mtime+size check). **Cached values are
   shared — treat them as read-only and copy before mutating.**
+- Instrumentation: perf.py (stdlib, no disk): spans/events/gauges with a
+  monotonic clock, allowlisted labels, a random per-conversation id, fixed
+  memory; `/api/admin/perf` shows them, VOXAGENT_PERF_LOG=<path> adds a JSONL
+  log written by storage.py's bounded background thread. The Sheets copy is a
+  bounded background queue too, never on the call path. Phone calls run
+  blocking work (tools, agent setup, record save) on telephony's call-I/O
+  pool, never on the shared event loop. `python bench_load.py --suite full`
+  is the offline fake-provider load benchmark (docs/perf/).
 - Safety: VOXAGENT_ENV=test (tests, evals) disables the Sheets copy and makes
   writes to real data files raise. Live phone calls are off unless
   ENABLE_LIVE_CALLS=true; see docs/SAFE_TESTING.md before enabling.
@@ -91,7 +99,7 @@ AI receptionist for Indian small service businesses (clinics, salons, coaching i
 ## Performance rules
 
 - `python bench.py` measures the hot paths offline. Run it after touching
-  agent.py, storage.py, auth.py, llm.py or scheduling.py.
+  agent.py, storage.py, auth.py, llm.py, perf.py or scheduling.py.
 - Anything on the path between a caller speaking and the agent answering is
   latency the customer hears. Never construct a provider client, parse a
   YAML, or scan a CSV inside that path.

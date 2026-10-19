@@ -336,6 +336,7 @@ class SleepyLLM:
         self.responses, self.model_s, self.fail_every = list(responses), model_s, fail_every
         self.calls, self.lock = 0, threading.Lock()
         self.spent_s = 0.0    # ACTUAL time inside send() (sleep overshoots by ~4 ms on macOS)
+        self.sent_chars = 0   # size of the last request (0 = the model was never called)
 
     def send(self, messages, tools=None):
         t0 = time.perf_counter()
@@ -494,7 +495,9 @@ def run_booking_race(sessions, *_):
 
 
 def run_long_history(turns, *_):
-    """Cost of one web turn when the conversation is already `turns` long."""
+    """Cost of one web turn when the conversation is already `turns` long.
+    Past server.MAX_TURNS_PER_SESSION the turn is refused politely without a
+    model call (ended_at_cap), so 60 turns is the most a request can carry."""
     import server
     sid = new_web_session(SleepyLLM([{"text": "ok", "tool_calls": []}], 0.0))
     agent = server.sessions[sid]["agent"]
@@ -506,7 +509,7 @@ def run_long_history(turns, *_):
             agent.history.append(agent.run_tool({"name": "check_availability", "args": {"date": d}}))
         agent.history.append({"role": "assistant", "text": f"answer number {i} " * 6, "at": agent.now()})
     t0 = time.perf_counter()
-    server.chat(server.ChatRequest(session_id=sid, message="one more"))
+    reply = server.chat(server.ChatRequest(session_id=sid, message="one more"))
     turn_s = time.perf_counter() - t0
     t1 = time.perf_counter()
     storage.log_call_from_agent(agent, "web-test", server.sessions[sid]["started"],
@@ -515,7 +518,8 @@ def run_long_history(turns, *_):
     trace = storage.CALLS_DIR / CLIENT / "traces" / f"{server.sessions[sid]['call_id']}.json"
     return {"history_turns": turns, "history_entries": len(agent.history),
             "turn_ms_excl_model": round(turn_s * 1000, 2), "log_and_trace_ms": round(log_s * 1000, 2),
-            "model_request_chars": agent.llm.sent_chars, "trace_kb": round(trace.stat().st_size / 1024, 1)}
+            "model_request_chars": agent.llm.sent_chars, "ended_at_cap": bool(reply.get("ended")),
+            "trace_kb": round(trace.stat().st_size / 1024, 1)}
 
 
 def run_dashboard(n_calls, *_):
@@ -587,7 +591,7 @@ SUITES = {
                         "web_book_sheets_slow", "web_model_timeout") for n in (1, 5)]
     + [("phone_book_sheets_stall", 2), ("phone_model_drop", 1), ("phone_model_drop", 5),
        ("web_double_submit", 1000), ("booking_race", 10), ("booking_race", 50)]
-    + [("long_history", n) for n in (20, 200, 800)]
+    + [("long_history", n) for n in (20, 59, 200, 800)]
     + [("dashboard", n) for n in (100, 1000, 5000)],
 }
 
@@ -614,7 +618,7 @@ def main():
                               capture_output=True, text=True, timeout=600)
         # The result is the last JSON line: agent.py prints booking lines
         # before it, and storage's shutdown report can print after it.
-        line = next((ln for ln in reversed(proc.stdout.splitlines()) if ln.startswith("{")), "{}")
+        line = next((ln for ln in reversed(proc.stdout.splitlines()) if ln.startswith("{")), "")
         try:
             data = json.loads(line)
         except json.JSONDecodeError:
