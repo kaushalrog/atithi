@@ -152,7 +152,8 @@ log = storage.read_call_logs("demo_clinic")[0]
 report("R4 phone-call bookings missing from transcript + conversion",
        stats["bookings"] == 1 and stats["conversion"] == 0,
        f"bookings={stats['bookings']}, conversion={stats['conversion']}%, turns={log['turns']} "
-       f"(caller-id line counted as a customer turn), 'book_appointment' in transcript: "
+       f"(1 = one customer exchange; 2 meant the caller-id line was counted), "
+       f"'book_appointment' in transcript: "
        f"{'book_appointment' in log['transcript']}")
 
 # R5..R8 via HTTP.

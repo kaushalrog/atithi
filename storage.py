@@ -44,8 +44,10 @@ import csv
 import datetime as dt
 import json
 import os
+import re
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 import yaml
@@ -564,15 +566,22 @@ def read_leads(client_id: str) -> list[dict]:
 # ---- call logs -----------------------------------------------------------------
 
 def log_call_from_agent(agent, channel: str, started: dt.datetime,
-                        call_id: str | None = None):
+                        call_id: str | None = None, caller: str | None = None):
     """Write (or rewrite) the call record for one conversation.
 
     Works for every channel: the web server calls this after each turn with a
     stable call_id; the terminal/voice/live wrappers call it once on exit.
-    Conversations with zero customer turns are not calls, so nothing is logged.
+    A conversation with no customer turn AND no tool action is not a call, so
+    nothing is logged. (Tools count: on a phone line the speech transcript can
+    come back empty while a booking still happened.)
+
+    Also writes the call's TRACE (see _write_trace) next to it, in a traces/
+    subfolder: the dashboard ships whole call records to the browser and
+    read_call_logs counts every *.json in the folder as a call, so the trace
+    must live elsewhere.
     """
     turns = sum(1 for m in agent.history if m["role"] == "user")
-    if turns == 0:
+    if turns == 0 and not any(m["role"] == "tool" for m in agent.history):
         return
     if call_id is None:
         call_id = started.strftime("%Y%m%d_%H%M%S_") + channel
@@ -587,14 +596,176 @@ def log_call_from_agent(agent, channel: str, started: dt.datetime,
         "turns": turns,
         "transcript": agent.transcript_text(),
     }
+    if caller:
+        # Who called is metadata, not something the customer said (audit M2).
+        record["caller"] = caller
+        record["transcript"] = f"Caller: {caller}\n\n" + record["transcript"]
     folder = CALLS_DIR / agent.client_id
     path = folder / f"{call_id}.json"
-    _guard_write(path)
-    with _write_lock:
-        folder.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(record, f, ensure_ascii=False, indent=1)
+    _write_json_atomic(path, record)
     _invalidate(path)
+    try:
+        _write_trace(agent, channel, started, call_id, caller, folder / "traces" / f"{call_id}.json")
+    except Exception as e:
+        # A trace bug must never cost the business its call record. The
+        # checker reports a call without a trace as "skipped", never as clean.
+        print(f"  (trace for call {call_id} not written: {type(e).__name__}: {e})")
+
+
+# ---- call traces (the evidence voxcheck reads) ------------------------------------
+
+TRACE_VERSION = 1
+# How VoxAgent's tools map onto the neutral action types the checker reasons
+# about. Kept in step with voxcheck's built-in mapping (docs/ARCHITECTURE.md §3).
+_TOOL_TYPES = {"check_availability": "availability", "book_appointment": "book",
+               "save_lead": "lead"}
+_OK_STATUS = {"book": "confirmed", "lead": "saved"}
+
+
+def _phone10(phone) -> str:
+    """Last 10 digits: the same number written +91 98..., 098... or 98... ."""
+    return re.sub(r"\D", "", str(phone or ""))[-10:]
+
+
+def _action_ok(kind: str, result: dict) -> bool:
+    if "error" in result and "status" not in result:
+        return False  # the tool raised (run_tool turned it into an error)
+    if kind in _OK_STATUS:
+        return result.get("status") == _OK_STATUS[kind]
+    return True  # availability answers have no status: an answer is success
+
+
+def _trace_turns_and_actions(history: list[dict]):
+    """Split agent.history into spoken turns and tool actions.
+
+    Each action belongs to the reply it was made for, so its turn_index is the
+    index of the NEXT agent turn (len(turns) if the call ended first). The
+    checker counts an action as "at or before" a claim when its turn_index is
+    not after the claim's turn.
+    """
+    turns, actions, pending = [], [], []
+    calls_by_name: dict[str, list] = {}
+    for msg in history:
+        if msg["role"] == "user":
+            turns.append({"index": len(turns), "speaker": "caller", "text": msg["text"], "at": msg.get("at")})
+        elif msg["role"] == "assistant":
+            for call in msg.get("tool_calls") or []:
+                calls_by_name.setdefault(call["name"], []).append(call)
+            # Text that came WITH a tool call was never shown to the customer
+            # (agent.chat only returns the final text-only reply), so it is not
+            # something the agent said.
+            if msg.get("text") and not msg.get("tool_calls"):
+                for action in pending:
+                    action["turn_index"] = len(turns)
+                pending = []
+                turns.append({"index": len(turns), "speaker": "agent", "text": msg["text"], "at": msg.get("at")})
+        elif msg["role"] == "tool":
+            queue = calls_by_name.get(msg["name"])
+            call = queue.pop(0) if queue else {}
+            kind = _TOOL_TYPES.get(msg["name"], "other")
+            result = msg.get("result") or {}
+            action = {"turn_index": None, "at": msg.get("at"), "type": kind, "name": msg["name"],
+                      "args": call.get("args", {}), "ok": _action_ok(kind, result), "result": result}
+            actions.append(action)
+            pending.append(action)
+    for action in pending:
+        action["turn_index"] = len(turns)
+    return turns, actions
+
+
+def _write_trace(agent, channel: str, started: dt.datetime, call_id: str,
+                 caller: str | None, path: Path):
+    """The machine-readable record of one call: what was said, which tools ran
+    and what they returned, plus the business's booking rows as of call end.
+
+    The snapshot is what makes the verdict reproducible: a booking edited next
+    week cannot change what this call is judged against. It holds full rows
+    only for this call's own phone numbers; other customers' same-day
+    bookings appear as taken slots (date, time, status) with no name or phone.
+    """
+    tz = agent.tz
+    turns, actions = _trace_turns_and_actions(agent.history)
+    ended = dt.datetime.now(tz).isoformat(timespec="seconds")
+
+    dates, phones = set(), {_phone10(caller)} - {""}
+    for a in actions:
+        for source in (a["args"], a["result"]):
+            if isinstance(source, dict):
+                if source.get("date"):
+                    dates.add(str(source["date"]))
+                if a["type"] in ("book", "lead") and source.get("phone"):
+                    phones.add(_phone10(source["phone"]))
+    snapshot = []
+    if dates:
+        marks = ",".join("?" * len(dates))
+        rows = _bookings_db().execute(
+            "SELECT timestamp, name, phone, service, date, time, status FROM bookings "
+            f"WHERE client_id=? AND status='confirmed' AND date IN ({marks}) ORDER BY id",
+            (agent.client_id, *sorted(dates)),
+        ).fetchall()
+        for r in rows:
+            if _phone10(r["phone"]) in phones:
+                snapshot.append(dict(r, kind="booking"))
+            else:
+                # Another customer's booking: the checker only needs to know
+                # the slot was taken, so their name and number stay out of
+                # this call's trace (traces are kept even when a booking is
+                # later deleted).
+                snapshot.append({"kind": "booking", "date": r["date"], "time": r["time"],
+                                 "status": r["status"]})
+    if phones:
+        snapshot += [dict(r, kind="lead") for r in read_leads(agent.client_id)
+                     if _phone10(r.get("phone")) in phones]
+
+    trace = {
+        "trace_version": TRACE_VERSION,
+        "call_id": call_id,
+        "client_id": agent.client_id,
+        "channel": channel,
+        "caller": caller or "",
+        "started_at": started.astimezone(tz).isoformat(timespec="seconds"),
+        "ended_at": ended,
+        "timezone": agent.tz_name,
+        "turns": turns,
+        "actions": actions,
+        "records_as_of": ended,
+        "records_snapshot": snapshot,
+    }
+    _write_json_atomic(path, trace)
+
+
+# Windows refuses to rename over a file another handle has open (e.g. the
+# dashboard reading that call record right now); such a hold lasts
+# milliseconds, so retry briefly instead of failing the customer's turn.
+_REPLACE_TRIES = 5
+_REPLACE_RETRY_S = 0.02
+
+
+def _write_json_atomic(path: Path, data):
+    """Write a JSON file so a reader never sees half of it.
+
+    The web test call rewrites its record and trace after every turn; a crash
+    or a full disk mid-write used to leave a truncated file. Writing a temp
+    file in the same folder and renaming it over the old one is atomic: the
+    reader sees either the old version or the new one.
+    """
+    _guard_write(path)
+    tmp = path.with_name(path.name + ".tmp")
+    with _write_lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=1)
+            for attempt in range(_REPLACE_TRIES):
+                try:
+                    os.replace(tmp, path)
+                    break
+                except PermissionError:
+                    if attempt == _REPLACE_TRIES - 1:
+                        raise
+                    time.sleep(_REPLACE_RETRY_S)
+        finally:
+            tmp.unlink(missing_ok=True)
 
 
 def read_call_logs(client_id: str) -> list[dict]:

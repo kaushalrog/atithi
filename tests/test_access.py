@@ -279,3 +279,21 @@ def test_body_without_content_length_is_refused(client):
         yield b'"message": "hi"}'
     res = client.post("/api/chat", content=chunks(), headers={"Content-Type": "application/json"})
     assert res.status_code == 411
+
+
+def test_a_failed_model_call_records_the_customer_turn_once(client, session):
+    """Review I5: agent.chat records the customer's message before calling the
+    model, and the degraded fallback recorded it again, so every outage
+    showed the customer saying everything twice (and the trace got a turn
+    with no timestamp)."""
+    agent = server.get_session(session)["agent"]
+
+    class Down:
+        def send(self, messages, tools=None):
+            raise ConnectionError("model unreachable")
+    agent.llm = Down()
+    res = client.post("/api/chat", json={"session_id": session, "message": "hello?"})
+    assert res.status_code == 200 and res.json()["degraded"] is True
+    users = [m for m in agent.history if m["role"] == "user"]
+    assert [m["text"] for m in users] == ["hello?"]
+    assert all(m.get("at") for m in agent.history)

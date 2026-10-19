@@ -8,7 +8,7 @@
 
 **Why:** Today a dropped model stream leaves the caller in silence until they hang up (audit M7), and one booking's Sheets network write stalls every other live call (audit M8).
 
-**Context:** `telephony.py` `twilio_stream` starts `pump_gemini` as a task but only awaits `read_twilio()`, so pump exceptions are never observed. `pump_gemini` calls `agent._execute_tool` synchronously. Start with an `asyncio.wait(..., return_when=FIRST_COMPLETED)` over both tasks and `asyncio.to_thread` for tool execution. Must be done before live calls are enabled for a paying client.
+**Context:** `telephony.py` `twilio_stream` starts `pump_gemini` as a task but only awaits `read_twilio()`, so pump exceptions are never observed. `pump_gemini` calls `agent._execute_tool` synchronously. (Update 2026-10-16, eng review D8: the hang-up save is planned to move to `asyncio.to_thread` inside a guard, task E7 in docs/IMPLEMENTATION_PLAN.md, not yet built. Tool execution during the call stays on the loop and stays open here.) Start with an `asyncio.wait(..., return_when=FIRST_COMPLETED)` over both tasks and `asyncio.to_thread` for tool execution. Must be done before live calls are enabled for a paying client.
 
 **Effort:** M
 **Priority:** P2
@@ -34,7 +34,7 @@
 
 **Why:** Names, phone numbers and caller IDs are stored indefinitely in plain files and printed to the console (audit M11). Any real pilot needs a defined policy, and obligations under India's DPDP Act still need to be assessed.
 
-**Context:** `storage.py` (call logs, leads, bookings DB), `agent.py` booking/lead `print` lines, `telephony.py` caller-ID line in transcripts. The first step is a policy decision by Sai (how long, who can delete); the code follows from that.
+**Context:** `storage.py` (call logs, leads, bookings DB, and per-call traces in `calls/<client>/traces/`, which hold the caller's own booking/lead rows and must be covered by any delete path), `agent.py` booking/lead `print` lines, `telephony.py` caller-ID line in transcripts. The first step is a policy decision by Sai (how long, who can delete); the code follows from that.
 
 **Effort:** M
 **Priority:** P2
@@ -72,7 +72,7 @@
 
 ### Compute call metrics from structured history, not transcript substrings
 
-**What:** Derive conversion from confirmed bookings, and record phone/live tool calls in conversation history.
+**What:** Derive conversion from confirmed bookings. (The second half, recording phone/live tool calls in history, was done on 2026-10-17 in `phase-3/lane-a`, eng review E2.)
 
 **Why:** The dashboard shows 100% conversion for a call whose booking failed (audit M1) and 0% for real phone bookings, because phone/live channels drop tool calls from history (audit M2).
 
@@ -80,6 +80,80 @@
 
 **Effort:** M
 **Priority:** P2
-**Depends on:** Phase 2 architecture decision on the persisted conversation format.
+**Depends on:** Nothing now: per-call traces (`calls/<client>/traces/<id>.json`, `actions[].type/ok`) carry the outcome; count calls with a `book` action where `ok` is true.
 
 ## Completed
+
+## Claim-vs-records checker (deferred by /plan-ceo-review, 2026-10-15)
+
+### Check 5: spoken time differs from the booking
+
+**What:** A heuristic check that normalises spoken dates and times ("4 PM", "tomorrow", "next Monday") against the call's `started_at` and timezone, and flags a confirmed booking whose spoken time differs from the `book` action's args.
+
+**Why:** It catches "booked you at 4" when the record says 14:00. It was deferred because it's the noisiest check and there are no real logs to tune it on (CEO review D3).
+
+**Context:** `docs/designs/claim-vs-records-checker.md` (Checks §5). Build it after the day-10 demand checkpoint. Use real builder or VoxAgent traces as tuning fixtures. Its recall fixture returns with it.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** The first checker release; real traces to tune on.
+
+### Check 2b: spoken slot offer never returned by availability
+
+**What:** A heuristic sub-check that flags a spoken offer of a date/time no `availability` result contained, even when nothing was booked.
+
+**Why:** It catches hallucinated availability the caller declined. Deferred with check 5 because it needs the same normaliser (CEO review D4). Check 2a still catches bookings on unavailable slots.
+
+**Context:** design doc Checks §2b. Build it right after check 5 and reuse its normaliser.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** Check 5's normaliser.
+
+### `redact` command for shared logs
+
+**What:** Replace caller names with tokens and phones with a keyed hash. Normalise phones to the last 10 digits before hashing, use one key across the trace and records files, and scrub names and phones inside turn text.
+
+**Why:** It's needed only if builders want to send logs instead of running the checker locally (CEO review D6). It could later serve VoxAgent's own retention work (Security: personal-data retention).
+
+**Context:** design doc "Input safety and personal data" plus review concern R3-11. Build it only when a builder asks to share data.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** A builder request.
+
+## voxcheck build gate (CEO re-review D2, 2026-10-17)
+
+### Build voxcheck (Lane B: E4, E5, E6, E8) once outreach is sent
+
+**What:** Implement the voxcheck checker exactly as approved in `docs/IMPLEMENTATION_PLAN.md` (eng review D2, D5, D6): `inputs.py`, `checks.py`, `outputs.py`, `__main__.py`, the fixtures, and the recall and false-positive suite.
+
+**Why:** The design's Sequencing step 1 puts outreach before checker code. The checker is the speculative half of the bet, and builder answers should shape it. Lane A (receptionist traces, M2) is built regardless.
+
+**Context:** The design is fully approved; only the start is gated. **Trigger:** the founder confirms the 10 Assignment messages were sent. Then E9's README and end-to-end parts follow.
+
+**Effort:** L (human ~3 days / CC ~2.5 hrs)
+**Priority:** P1 once triggered
+**Depends on:** Founder sends the Assignment messages; Lane A landed (E1, E3 provide real traces).
+
+## Deferred by /review of phase-3/lane-a (2026-10-19)
+
+### Test live_main.py's streaming wiring
+
+**What:** Move `live_main.pump_events` into a function that takes `(live, turn)` so it can be driven with `FakeLive`. Then test history order, barge-in, and that a turn cut off by Ctrl+C is flushed and logged.
+
+**Why:** Its old test moved to `agent.run_tool`, so nothing in `tests/` exercises the live mic channel. The shared `TurnRecorder` it uses is tested, but the wiring is not (review I9, skipped by the owner).
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
+### Lead snapshot re-reads leads.csv on a web test turn
+
+**What:** Stop the web test call's per-turn trace rewrite from re-parsing `leads.csv` on the turn that saved a lead. For example, build the lead rows from the trace's own `save_lead` actions, or snapshot leads only when the session ends.
+
+**Why:** After `save_lead` the leads cache is invalidated, and `_write_trace` re-reads the whole file before `/api/chat` replies. That's about 1 ms at 1k leads and about 7 ms at 10k (performance specialist measurement, temp data). It conflicts with the CLAUDE.md "no CSV scan on the reply path" rule, but only on the portal's test channel (review I11, skipped by the owner).
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None

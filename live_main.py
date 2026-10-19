@@ -28,23 +28,13 @@ from datetime import datetime
 import sounddevice as sd
 
 import storage
-from agent import TOOL_SCHEMAS, ReceptionistAgent
+from agent import TOOL_SCHEMAS, ReceptionistAgent, TurnRecorder
 from llm import GeminiLive
 from main import save_transcript
 
 MIC_RATE = 16000       # what the Live API expects in
 SPEAKER_RATE = 24000   # what the Live API sends back
 MIC_CHUNK = 800        # 50 ms of mic audio per network packet
-
-
-def run_tool(agent, call: dict) -> dict:
-    """Run one tool call. A failure (bookings paused, database busy) must not
-    end the call: report it to the model, which apologises and offers a
-    callback — the same rule the phone bridge and agent.chat follow."""
-    try:
-        return agent._execute_tool(call["name"], call["args"])
-    except Exception as e:
-        return {"error": f"{type(e).__name__}: {e}"}
 
 
 async def run(client_id: str, half_duplex: bool):
@@ -76,35 +66,32 @@ async def run(client_id: str, half_duplex: bool):
                 continue  # agent is speaking and we have no headphones: drop mic audio
             await live.send_audio(chunk)
 
+    # Same recorder as the phone bridge: tools run mid-turn but are written
+    # to history between the caller's words and the agent's reply.
+    turn = TurnRecorder(agent)
+
     async def pump_events():
-        user_line, agent_line = "", ""
         async for event in live.events():
             kind = event["type"]
             if kind == "audio":
                 playback.extend(event["data"])
             elif kind == "interrupted":
                 playback.clear()  # caller barged in — go silent immediately
+                turn.flush()      # ...and end the turn the agent was speaking in
             elif kind == "user_text":
-                user_line += event["text"]
+                turn.user_text(event["text"])
             elif kind == "agent_text":
-                agent_line += event["text"]
+                turn.agent_text(event["text"])
             elif kind == "tool_calls":
-                results = []
                 for call in event["calls"]:
                     print(f"  [tool] {call['name']}({call['args']})")
-                    result = run_tool(agent, call)
-                    results.append({"id": call["id"], "name": call["name"], "result": result})
-                await live.send_tool_results(results)
+                await live.send_tool_results(turn.tool_calls(event["calls"]))
             elif kind == "turn_complete":
-                # Log the finished exchange in the agent's normal history format,
-                # so /transcript-style saving works identically to text mode.
-                if user_line.strip():
-                    print(f"You said: {user_line.strip()}")
-                    agent.history.append({"role": "user", "text": user_line.strip()})
-                if agent_line.strip():
-                    print(f"Agent:    {agent_line.strip()}\n")
-                    agent.history.append({"role": "assistant", "text": agent_line.strip()})
-                user_line, agent_line = "", ""
+                user_line, agent_line = turn.flush()
+                if user_line:
+                    print(f"You said: {user_line}")
+                if agent_line:
+                    print(f"Agent:    {agent_line}\n")
 
     business = agent.config["business_name"]
     mode = "half-duplex (mic muted while agent speaks)" if half_duplex else "full-duplex (🎧 headphones!)"
@@ -120,7 +107,11 @@ async def run(client_id: str, half_duplex: bool):
         ):
             await asyncio.gather(pump_mic(), pump_events())
     finally:
-        await live.close()
+        turn.flush()  # a turn cut off by Ctrl+C still belongs in the record
+        try:
+            await live.close()
+        except Exception as e:  # a dropped session must not cost us the call record
+            print(f"  (live session did not close cleanly: {type(e).__name__}: {e})")
         if agent.history:
             print(f"\n(transcript saved to {save_transcript(agent)})")
             storage.log_call_from_agent(agent, "live", started)

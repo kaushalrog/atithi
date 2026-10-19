@@ -5,8 +5,11 @@ old suite pinned a literal date, which drifted into the past and let a total
 booking outage pass every test for two months.
 """
 
+import datetime as dt
+
 import pytest
 
+import agent as agent_module
 import storage
 from agent import ReceptionistAgent
 from conftest import open_day, open_times
@@ -198,13 +201,88 @@ def test_gemini_timeout_setting_is_guarded(monkeypatch, raw, ms):
 
 # ---- channels -------------------------------------------------------------------
 
-def test_live_call_tool_error_is_reported_not_fatal():
-    """Cycle-1 fix with no test (cycle-2 finding): a tool failure (e.g.
-    bookings paused) must come back to the model as an error, not end the call."""
-    import live_main
+def test_tool_error_is_reported_not_fatal(tmp_storage, fake_llm, monkeypatch):
+    """A tool failure (e.g. bookings paused) must come back to the model as an
+    error, not end the call. Every channel runs tools through run_tool, and
+    the model reads this exact text, so it must not change."""
+    agent = make_agent(fake_llm, [])
 
-    class Broken:
-        def _execute_tool(self, name, args):
-            raise storage.BookingsUnavailable("paused")
-    result = live_main.run_tool(Broken(), {"name": "book_appointment", "args": {}})
-    assert result == {"error": "BookingsUnavailable: paused"}
+    def broken(name, args):
+        raise storage.BookingsUnavailable("paused")
+    monkeypatch.setattr(agent, "_execute_tool", broken)
+    entry = agent.run_tool({"name": "book_appointment", "args": {}})
+    assert entry["result"] == {"error": "BookingsUnavailable: paused"}
+    assert entry["role"] == "tool" and entry["name"] == "book_appointment"
+
+
+def test_history_timestamps_carry_the_business_timezone(tmp_storage, fake_llm):
+    """"Tomorrow at 4" can only be checked later if every entry says whose
+    tomorrow. Default Asia/Kolkata (+05:30)."""
+    date = open_day()
+    agent = make_agent(fake_llm, [
+        {"text": None, "tool_calls": [{"name": "check_availability", "args": {"date": date}}]},
+        {"text": "We have slots.", "tool_calls": []},
+    ])
+    agent.chat("any slots?")
+    assert [m["role"] for m in agent.history] == ["user", "assistant", "tool", "assistant"]
+    for msg in agent.history:
+        assert dt.datetime.fromisoformat(msg["at"]).utcoffset() == dt.timedelta(hours=5, minutes=30)
+
+
+def _has_tz_database():
+    try:
+        agent_module.ZoneInfo("Asia/Dubai")
+        return True
+    except Exception:
+        return False
+
+
+@pytest.mark.parametrize("name,offset", [
+    pytest.param("Asia/Dubai", 4, marks=pytest.mark.skipif(
+        not _has_tz_database(), reason="no system timezone database (Windows without tzdata)")),
+    ("Not/AZone", 5.5),
+])
+def test_client_yaml_can_set_the_timezone(tmp_storage, fake_llm, monkeypatch, name, offset):
+    """The agent reads `timezone:` from the client YAML; a typo must not stop
+    its calls, so it falls back to India time."""
+    config = dict(storage.read_client_config("demo_clinic"), timezone=name)  # copy: cache is shared
+    monkeypatch.setattr(storage, "read_client_config", lambda cid: config)
+    agent = make_agent(fake_llm, [])
+    assert dt.datetime.fromisoformat(agent.now()).utcoffset() == dt.timedelta(hours=offset)
+
+
+def test_turn_recorder_writes_tools_between_the_request_and_the_reply(tmp_storage, fake_llm):
+    """On a streaming call the tool runs mid-turn, before the caller's words
+    are complete. History must still read: request, tool, reply."""
+    date = open_day()
+    agent = make_agent(fake_llm, [])
+    turn = agent_module.TurnRecorder(agent)
+    results = turn.tool_calls([{"id": "t1", "name": "check_availability", "args": {"date": date}}])
+    turn.user_text("any slots ")
+    turn.user_text("tomorrow?")
+    turn.agent_text("Yes, 10 AM is free.")
+    assert agent.history == []                       # nothing written mid-turn
+    turn.flush()
+    assert [m["role"] for m in agent.history] == ["user", "assistant", "tool", "assistant"]
+    assert agent.history[0]["text"] == "any slots tomorrow?"
+    assert results[0]["id"] == "t1" and results[0]["result"]["available_slots"]
+    turn.flush()                                     # a second flush adds nothing
+    assert len(agent.history) == 4
+
+
+def test_streaming_history_order_is_authoritative_not_timestamps(tmp_storage, fake_llm, monkeypatch):
+    """Review I6: on a stream the tool can run before the caller's words finish
+    transcribing. The contract: history ORDER is request -> tool -> reply;
+    "at" is when each text started arriving, so it may go backwards."""
+    agent = make_agent(fake_llm, [])
+    ticks = iter(f"2026-01-01T10:00:0{i}+05:30" for i in range(9))
+    monkeypatch.setattr(agent, "now", lambda: next(ticks))
+    turn = agent_module.TurnRecorder(agent)
+    turn.tool_calls([{"id": "t1", "name": "check_availability", "args": {"date": open_day()}}])
+    turn.user_text("any slots?")              # transcript arrives after the tool ran
+    turn.agent_text("Yes.")
+    turn.flush()
+    roles = [m["role"] for m in agent.history]
+    assert roles == ["user", "assistant", "tool", "assistant"]
+    user_at, tool_at = agent.history[0]["at"], agent.history[2]["at"]
+    assert tool_at < user_at                  # documented: "at" is arrival time, not order

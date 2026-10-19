@@ -24,7 +24,8 @@ Plan and decisions: `docs/HARDENING_PLAN.md` (eng review D2–D7). Safe testing 
 | M9 secrets / brute force | static | `hmac.compare_digest` for admin key, business codes, password hashes | covered by access tests | **Partly fixed**: no attempt rate limits yet (TODOS.md) |
 | L1 `/api/admin/login` 500 (R6a) | REPRODUCED: 500 | NOT REPRODUCED: 200/401 | `test_admin_login_endpoint_never_crashes` | **Fixed** |
 | L2 TwiML injection via `From` (R8b) | REPRODUCED (signed request) | NOT REPRODUCED | `test_twiml_attributes_are_escaped` | **Fixed** |
-| M1/M2 metrics (R3/R4) | REPRODUCED | REPRODUCED | none | **Open**: out of scope, TODOS.md |
+| M2 phone/live tool calls lost (R4) | REPRODUCED | NOT REPRODUCED (branch `phase-3/lane-a`) | `tests/test_telephony.py` tool order + hang-up mid-turn; `tests/test_agent.py` TurnRecorder | **Fixed** (2026-10-17): streaming calls record tool calls between request and reply; caller id is call metadata, not a turn |
+| M1 conversion metric (R3) | REPRODUCED | REPRODUCED | none | **Open**: TODOS.md (traces now provide the structured outcomes it needs) |
 | M7 dead air, M8 blocking loop | static | unchanged | none | **Open**: TODOS.md |
 | M10 committed demo codes, M11 PII retention | static | unchanged (`bookings.db` now gitignored) | none | **Open**: M11 in TODOS.md |
 

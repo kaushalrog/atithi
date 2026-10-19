@@ -429,3 +429,229 @@ def test_sheets_usable_requires_the_credentials_file(sheets_on, monkeypatch):
     assert storage.sheets_usable() is True
     monkeypatch.setenv("GOOGLE_SHEETS_CREDENTIALS_PATH", "/nonexistent/credentials.json")
     assert storage.sheets_usable() is False
+
+
+# ---- call traces (eng review E3, D7) --------------------------------------------------
+
+import json  # noqa: E402
+
+from agent import ReceptionistAgent  # noqa: E402
+from conftest import open_day, open_times  # noqa: E402
+
+
+def booked_conversation(fake_llm, name="Ravi", phone="+91 98765 43210"):
+    date = open_day()
+    slot = open_times(date=date)[0]
+    agent = ReceptionistAgent("demo_clinic", llm=fake_llm([
+        {"text": None, "tool_calls": [{"name": "check_availability", "args": {"date": date}}]},
+        {"text": f"{slot} is free.", "tool_calls": []},
+        {"text": None, "tool_calls": [{"name": "book_appointment", "args": {
+            "customer_name": name, "phone": phone, "service": "Cleaning",
+            "date": date, "time": slot}}]},
+        {"text": "You're booked!", "tool_calls": []},
+    ]))
+    agent.chat("any slots?")
+    agent.chat("book the first one")
+    return agent, date, slot
+
+
+def read_trace(call_id="c1"):
+    return json.loads((storage.CALLS_DIR / "demo_clinic" / "traces" / f"{call_id}.json").read_text())
+
+
+def test_trace_records_turns_actions_and_the_booking_snapshot(tmp_storage, fake_llm):
+    agent, date, slot = booked_conversation(fake_llm)
+    storage.save_lead("demo_clinic", "Ravi", "9876543210", "whitening", "")
+    storage.log_call_from_agent(agent, "web-test", dt.datetime.now(), call_id="c1")
+
+    trace = read_trace()
+    assert trace["trace_version"] == 1 and trace["timezone"] == "Asia/Kolkata"
+    assert dt.datetime.fromisoformat(trace["started_at"]).utcoffset() is not None
+    assert [t["speaker"] for t in trace["turns"]] == ["caller", "agent", "caller", "agent"]
+    book = trace["actions"][1]
+    assert (book["type"], book["ok"], book["args"]["time"]) == ("book", True, slot)
+    # The booking belongs to the agent turn that announces it ("You're booked!").
+    assert trace["turns"][book["turn_index"]]["text"] == "You're booked!"
+    kinds = [(r["kind"], r["date"] if r["kind"] == "booking" else r["phone"])
+             for r in trace["records_snapshot"]]
+    assert ("booking", date) in kinds and ("lead", "9876543210") in kinds
+
+
+def test_failed_booking_is_recorded_as_not_ok(tmp_storage, fake_llm):
+    agent = ReceptionistAgent("demo_clinic", llm=fake_llm([
+        {"text": None, "tool_calls": [{"name": "book_appointment", "args": {
+            "customer_name": "A", "phone": "123", "service": "x", "date": open_day(),
+            "time": "03:00"}}]},
+        {"text": "That slot is taken.", "tool_calls": []},
+    ]))
+    agent.chat("book 3am")
+    storage.log_call_from_agent(agent, "web-test", dt.datetime.now(), call_id="c1")
+    action = read_trace()["actions"][0]
+    assert action["type"] == "book" and action["ok"] is False
+    assert read_trace()["records_snapshot"] == []
+
+
+def test_traces_do_not_count_as_calls_or_reach_the_dashboard(tmp_storage, fake_llm):
+    """Eng review D7: read_call_logs treats every *.json in the folder as a
+    call, and the dashboard ships call records to the browser."""
+    agent, _, _ = booked_conversation(fake_llm)
+    storage.log_call_from_agent(agent, "web-test", dt.datetime.now(), call_id="c1")
+    calls = storage.read_call_logs("demo_clinic")
+    assert len(calls) == 1
+    assert "actions" not in calls[0] and "records_snapshot" not in calls[0]
+
+
+def test_a_trace_failure_never_costs_the_call_record(tmp_storage, fake_llm, monkeypatch, capsys):
+    agent, _, _ = booked_conversation(fake_llm)
+
+    def broken(*a, **k):
+        raise RuntimeError("bug in trace builder")
+    monkeypatch.setattr(storage, "_write_trace", broken)
+    storage.log_call_from_agent(agent, "web-test", dt.datetime.now(), call_id="c1")
+    assert len(storage.read_call_logs("demo_clinic")) == 1
+    assert "trace for call c1 not written: RuntimeError" in capsys.readouterr().out
+
+
+def test_text_sent_with_a_tool_call_is_not_a_spoken_turn(tmp_storage, fake_llm):
+    """Review C1: Gemini can return text AND a function call in one reply.
+    agent.chat never shows that text to the customer, so the trace must not
+    record it as something the agent said (it would invent a claim and shift
+    the booking to the wrong turn)."""
+    date = open_day()
+    slot = open_times(date=date)[0]
+    agent = ReceptionistAgent("demo_clinic", llm=fake_llm([
+        {"text": "I've booked you!", "tool_calls": [{"name": "book_appointment", "args": {
+            "customer_name": "Ravi", "phone": "9876543210", "service": "Cleaning",
+            "date": date, "time": slot}}]},
+        {"text": "Done, see you then.", "tool_calls": []},
+    ]))
+    assert agent.chat("book me") == "Done, see you then."
+    storage.log_call_from_agent(agent, "web-test", dt.datetime.now(), call_id="c1")
+    trace = read_trace()
+    assert [t["text"] for t in trace["turns"]] == ["book me", "Done, see you then."]
+    assert trace["actions"][0]["turn_index"] == 1
+
+
+def test_an_interrupted_rewrite_keeps_the_previous_record_and_trace(tmp_storage, fake_llm, monkeypatch):
+    """Review I3: the web test call rewrites its call record and trace after
+    every turn. A crash mid-write used to leave a truncated file, which the
+    dashboard silently drops and the checker cannot read."""
+    agent, _, _ = booked_conversation(fake_llm)
+    storage.log_call_from_agent(agent, "web-test", dt.datetime.now(), call_id="c1")
+    before = (storage.CALLS_DIR / "demo_clinic" / "c1.json").read_text()
+
+    real_dump = json.dump
+
+    def dies_halfway(obj, f, **kw):
+        f.write('{"partial": ')
+        raise OSError("disk full")
+    monkeypatch.setattr(storage.json, "dump", dies_halfway)
+    with pytest.raises(OSError):
+        storage.log_call_from_agent(agent, "web-test", dt.datetime.now(), call_id="c1")
+    monkeypatch.setattr(storage.json, "dump", real_dump)
+
+    assert (storage.CALLS_DIR / "demo_clinic" / "c1.json").read_text() == before
+    assert read_trace()["call_id"] == "c1"          # previous trace still parses
+    assert not list((storage.CALLS_DIR / "demo_clinic").rglob("*.tmp"))
+
+
+def test_snapshot_holds_only_this_business_this_call_s_dates_and_phones(tmp_storage, fake_llm):
+    """Review I8: a trace must never carry another business's rows, cancelled
+    bookings, other days, or leads from unrelated people."""
+    agent, date, slot = booked_conversation(fake_llm)
+    other_day = open_day(skip=1)
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    other_slot = open_times(date=date)[1]
+    storage.reserve_booking([now, "lakshmi_beauty_salon", "Other Biz", "9000000001", "x", date, slot, "confirmed"])
+    storage.reserve_booking([now, "demo_clinic", "Cancelled", "9000000002", "x", date, other_slot, "cancelled"])
+    storage.reserve_booking([now, "demo_clinic", "Other Day", "9000000003", "x", other_day, slot, "confirmed"])
+    storage.save_lead("demo_clinic", "Stranger", "9000000004", "braces", "")
+    storage.save_lead("demo_clinic", "Ravi again", "09876543210", "whitening", "")  # same number, other spelling
+    storage.save_lead("lakshmi_beauty_salon", "Same phone, other biz", "9876543210", "hair", "")
+    storage.log_call_from_agent(agent, "phone", dt.datetime.now(), call_id="c1", caller="+91 98765 43210")
+
+    rows = read_trace()["records_snapshot"]
+    names = sorted(r["name"] for r in rows)
+    assert names == ["Ravi", "Ravi again"]
+    assert {(r["kind"], r["date"] if r["kind"] == "booking" else r["phone"]) for r in rows} == {
+        ("booking", date), ("lead", "09876543210")}
+
+
+def test_other_customers_appear_in_the_snapshot_only_as_taken_slots(tmp_storage, fake_llm):
+    """Review I1: the snapshot used to copy every same-day customer's name and
+    phone into every trace, where deleting a booking never removed them. The
+    checker only needs to know those slots were taken."""
+    agent, date, slot = booked_conversation(fake_llm)
+    other_slot = open_times(date=date)[1]
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    storage.reserve_booking([now, "demo_clinic", "Meena", "9000000009", "Filling", date, other_slot, "confirmed"])
+    storage.log_call_from_agent(agent, "web-test", dt.datetime.now(), call_id="c1")
+
+    rows = {r["time"]: r for r in read_trace()["records_snapshot"] if r["kind"] == "booking"}
+    assert rows[other_slot] == {"kind": "booking", "date": date, "time": other_slot, "status": "confirmed"}
+    assert rows[slot]["name"] == "Ravi" and rows[slot]["phone"] == "+91 98765 43210"
+
+
+@pytest.mark.parametrize("configured,tz_database", [("Not/AZone", True), (None, False)],
+                         ids=["typo-in-yaml", "no-tz-database"])
+def test_trace_names_the_timezone_by_its_iana_name(tmp_storage, fake_llm, monkeypatch,
+                                                    configured, tz_database):
+    """Review I2: the fallback wrote "IST" into the trace instead of the
+    documented IANA name. Both a YAML typo and a machine without a timezone
+    database (Windows without tzdata) must still say Asia/Kolkata, +05:30."""
+    import agent as agent_module
+    if not tz_database:
+        def no_db(name):
+            raise agent_module.ZoneInfoNotFoundError(name)
+        monkeypatch.setattr(agent_module, "ZoneInfo", no_db)
+    config = dict(storage.read_client_config("demo_clinic"))
+    if configured:
+        config["timezone"] = configured
+    monkeypatch.setattr(storage, "read_client_config", lambda cid: config)
+    agent, _, _ = booked_conversation(fake_llm)
+    storage.log_call_from_agent(agent, "web-test", dt.datetime.now(), call_id="c1")
+    trace = read_trace()
+    assert trace["timezone"] == "Asia/Kolkata"
+    assert dt.datetime.fromisoformat(trace["ended_at"]).utcoffset() == dt.timedelta(hours=5, minutes=30)
+
+
+def test_trace_builder_pairs_calls_results_and_success_flags():
+    """Review I7: two same-name tool calls in one reply each keep their own
+    arguments; save_lead's "saved" is success; a raised tool is a failure."""
+    history = [
+        {"role": "user", "text": "slots on two days, and call me back", "at": "t0"},
+        {"role": "assistant", "text": None, "at": "t1", "tool_calls": [
+            {"name": "check_availability", "args": {"date": "2026-10-20"}},
+            {"name": "check_availability", "args": {"date": "2026-10-21"}},
+            {"name": "save_lead", "args": {"phone": "9876543210"}}]},
+        {"role": "tool", "name": "check_availability", "result": {"date": "2026-10-20"}, "at": "t2"},
+        {"role": "tool", "name": "check_availability", "result": {"error": "OperationalError: locked"}, "at": "t3"},
+        {"role": "tool", "name": "save_lead", "result": {"status": "saved"}, "at": "t4"},
+        {"role": "assistant", "text": "Done.", "at": "t5"},
+    ]
+    turns, actions = storage._trace_turns_and_actions(history)
+    assert [t["speaker"] for t in turns] == ["caller", "agent"]
+    assert [a["args"].get("date") for a in actions] == ["2026-10-20", "2026-10-21", None]
+    assert [(a["type"], a["ok"]) for a in actions] == [
+        ("availability", True), ("availability", False), ("lead", True)]
+    assert all(a["turn_index"] == 1 for a in actions)
+
+
+def test_atomic_write_survives_a_reader_holding_the_file_on_windows(tmp_storage, fake_llm, monkeypatch):
+    """Cycle-2 review: on Windows, renaming over a file another handle has open
+    raises PermissionError. The dashboard can be reading a call record at the
+    moment /api/chat rewrites it; that must not turn a good reply into the
+    "line is busy" fallback."""
+    agent, _, _ = booked_conversation(fake_llm)
+    real_replace, calls = storage.os.replace, []
+
+    def busy_once(src, dst):
+        calls.append(dst)
+        if len(calls) == 1:
+            raise PermissionError(13, "file in use")
+        real_replace(src, dst)
+    monkeypatch.setattr(storage.os, "replace", busy_once)
+    monkeypatch.setattr(storage, "_REPLACE_RETRY_S", 0)
+    storage.log_call_from_agent(agent, "web-test", dt.datetime.now(), call_id="c1")
+    assert len(storage.read_call_logs("demo_clinic")) == 1
+    assert read_trace()["call_id"] == "c1"
