@@ -158,8 +158,11 @@
   .txrow.agent .av { background: var(--acc); color: #fff; }
   .txrow .t { white-space: pre-wrap; background: var(--surface); border: 1px solid var(--border);
               border-radius: var(--radius-sm); padding: 7px 12px; flex: 1; }
-  .txchip { font-size: .82rem; color: var(--muted); align-self: flex-start; margin-left: 36px;
+  .txchip { font-size: .84rem; color: var(--muted); align-self: flex-start; margin-left: 36px;
             max-width: 90%; overflow-wrap: anywhere; display: flex; align-items: center; gap: 6px; }
+  .txchip svg { width: 14px; height: 14px; stroke: var(--acc); }
+  .txchip.bad { color: var(--danger); }
+  .txchip.bad svg { stroke: var(--danger); }
 
   table { width: 100%; border-collapse: collapse; font-size: .92rem; }
   th { text-align: left; color: var(--muted); font-weight: 500; font-size: .84rem;
@@ -747,10 +750,29 @@ function renderTranscript(text) {
     if (!line) continue;
     if (line.startsWith("Customer:")) last = txRow(box, "cust", line.slice(9).trim());
     else if (line.startsWith("Agent:")) last = txRow(box, "agent", line.slice(6).trim());
-    else if (line.startsWith("[tool")) { box.appendChild(el("div", "txchip", line)); last = null; }
+    else if (line.startsWith("[tool")) { box.appendChild(transcriptAction(line)); last = null; }
     else if (last) last.querySelector(".t").textContent += "\n" + line;
   }
   return box;
+}
+// Saved transcripts hold "[tool call] name({...})" and "[tool result] {...}"
+// lines (Python reprs); show them as the same plain-word actions.
+function transcriptAction(line) {
+  const pick = k => (line.match(new RegExp("'" + k + "': '([^']*)'")) || [])[1];
+  const call = line.match(/^\[tool call\] (\w+)\(/);
+  if (call) {
+    const t = actionText(call[1], { date: pick("date"), time: pick("time"), service: pick("service"),
+                                    name: pick("customer_name") || pick("name"), phone: pick("phone") });
+    return actionChip("txchip", t.icon, t.text, line);
+  }
+  const status = pick("status");
+  if (status) {
+    const ok = status === "confirmed" || status === "saved";
+    return actionChip("txchip" + (ok ? "" : " bad"), ok ? "check" : "x", "Result: " + status, line);
+  }
+  const slots = (line.match(/\d{2}:\d{2}/g) || []).length;
+  return actionChip("txchip", "check", slots ? "Found " + slots + " free slot" + (slots === 1 ? "" : "s")
+                                             : "Result received", line);
 }
 function txRow(box, who, text) {
   const row = el("div", "txrow " + who);
@@ -892,8 +914,32 @@ function addBubble(kind, text) {
   $("chat").appendChild(div); $("chat").scrollTop = $("chat").scrollHeight;
   return div;
 }
+// What the agent did, in words an owner reads at a glance; the raw call is
+// kept in the tooltip for anyone debugging.
+function fmtDay(iso) {
+  const d = new Date((iso || "") + "T00:00:00");
+  return isNaN(d) ? (iso || "") : d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+}
+function actionText(name, a) {
+  a = a || {};
+  if (name === "check_availability") return { icon: "calendar", text: "Checked availability for " + fmtDay(a.date) };
+  if (name === "book_appointment")
+    return { icon: "calendar", text: "Booking request: " + (a.service || "appointment") + ", " +
+                                     fmtDay(a.date) + " at " + (a.time || "?") };
+  if (name === "save_lead") return { icon: "user", text: "Saved a lead: " + (a.name || a.phone || "caller") };
+  return { icon: "tool", text: name };
+}
+function actionChip(cls, icon, text, raw) {
+  const chip = el("div", cls);
+  chip.innerHTML = ICONS[icon] || ICONS.tool;
+  chip.appendChild(el("span", "", text));
+  if (raw) chip.title = raw;
+  return chip;
+}
 function addToolChip(tool) {
-  $("chat").appendChild(el("div", "tool-chip", "⚙ " + tool.name + "(" + JSON.stringify(tool.args) + ")"));
+  const t = actionText(tool.name, tool.args);
+  $("chat").appendChild(actionChip("tool-chip", t.icon, t.text,
+                                   tool.name + "(" + JSON.stringify(tool.args) + ")"));
 }
 function showTyping() {
   const div = el("div", "typing bubble agent"); div.id = "typing";
