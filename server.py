@@ -15,6 +15,7 @@ Run:  python server.py            (opens http://127.0.0.1:8765)
 
 import argparse
 import contextlib
+import copy
 import datetime as dt
 import hmac
 import os
@@ -645,6 +646,78 @@ def create_business(req: BusinessRequest,
 
 
 # ---------- talking to the agent (the Test-agent widget) ------------------------
+
+# ---------- business settings (the owner edits what onboarding created) ----------
+
+def _settings_view(cfg: dict) -> dict:
+    """The editable part of a client YAML, in the onboarding form's shape."""
+    sched = cfg.get("schedule") or {}
+    ranges = [list(r) for r in sched.get("ranges") or []][:2]
+    return {
+        "business_name": cfg.get("business_name", ""),
+        "phone": cfg.get("phone", ""),
+        "address": cfg.get("address", ""),
+        "timings": cfg.get("timings", ""),
+        "services": [{"name": s.get("name", ""), "price": str(s.get("price", ""))}
+                     for s in cfg.get("services") or []],
+        "faq": [{"q": f.get("q", ""), "a": f.get("a", "")} for f in cfg.get("faq") or []],
+        "policies": list(cfg.get("policies") or []),
+        "fallback": cfg.get("fallback", DEFAULT_FALLBACK),
+        "slot_days": list(sched.get("days") or []),
+        "slot_ranges": ranges,
+        "slot_gap_min": int(sched.get("gap_min") or 30),
+    }
+
+
+@app.get("/api/business/{client_id}/settings")
+def get_settings(client_id: str,
+                 x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+                 x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+                 authorization: str | None = Header(default=None)):
+    authorize_client(client_id, x_client_key, x_admin_key, authorization)
+    cfg = storage.read_client_config(client_id)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail=f"No client '{client_id}'")
+    return _settings_view(cfg)
+
+
+@app.put("/api/business/{client_id}/settings")
+def save_settings(client_id: str, req: BusinessRequest,
+                  x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+                  x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+                  authorization: str | None = Header(default=None)):
+    """Update what the receptionist knows. Everything else in the YAML (the
+    owner's code, billing, phone-number mapping, client id) is kept as is.
+    A test call already open keeps the old details; the next one gets these."""
+    authorize_client(client_id, x_client_key, x_admin_key, authorization)
+    current = storage.read_client_config(client_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail=f"No client '{client_id}'")
+    services = [s for s in req.services if s.name.strip()]
+    if not req.business_name.strip() or not services:
+        raise HTTPException(status_code=422, detail="Business name and at least one service are required")
+    schedule = scheduling.schedule_from_form(
+        req.slot_days, req.slot_ranges, req.slot_gap_min,
+        horizon_days=(current.get("schedule") or {}).get("horizon_days",
+                                                         scheduling.DEFAULT_HORIZON_DAYS))
+    if not schedule["days"] or not schedule["ranges"]:
+        raise HTTPException(status_code=422, detail="Choose at least one open day and one time range")
+    cfg = copy.deepcopy(current)          # the cached parse is shared: never mutate it
+    cfg.update({
+        "business_name": req.business_name.strip(),
+        "address": req.address.strip(),
+        "phone": req.phone.strip(),
+        "timings": req.timings.strip(),
+        "services": [{"name": s.name.strip(), "price": s.price.strip()} for s in services],
+        "faq": [{"q": f.q.strip(), "a": f.a.strip()} for f in req.faq if f.q.strip()],
+        "policies": [p.strip() for p in req.policies if p.strip()],
+        "fallback": req.fallback.strip() or DEFAULT_FALLBACK,
+        "schedule": schedule,
+    })
+    cfg.pop("slots", None)                 # a saved rule replaces any legacy dated slots
+    storage.write_client_config(client_id, cfg)
+    return _settings_view(cfg)
+
 
 @app.post("/api/session")
 def create_session(req: SessionRequest,

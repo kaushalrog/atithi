@@ -324,6 +324,9 @@
     <button data-view="leads">
       <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg>
       <span class="txt">Leads</span></button>
+    <button data-view="settings" id="settingsNav">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+      <span class="txt">Settings</span></button>
   </nav>
   <div class="grow"></div>
   <div class="bottom">
@@ -400,8 +403,8 @@
 
     <!-- ============ ONBOARDING ============ -->
     <section class="view onboard hidden" id="view-onboard">
-      <h2>Set up your AI receptionist</h2>
-      <div class="sub">Tell us about your business — your agent answers ONLY from what you enter here, and starts taking calls and bookings immediately.</div>
+      <h2 id="formTitle">Set up your AI receptionist</h2>
+      <div class="sub" id="formSub">Tell us about your business — your agent answers ONLY from what you enter here, and starts taking calls and bookings immediately.</div>
 
       <fieldset>
         <legend>Business</legend>
@@ -564,10 +567,11 @@ function setStat(id, target, suffix = "") {
 
 /* ============ view router ============ */
 const TITLES = { dashboard: "Dashboard", calls: "Calls", bookings: "Bookings",
-                 leads: "Leads", onboard: "Add a business" };
+                 leads: "Leads", onboard: "Add a business", settings: "Settings" };
 function showView(name) {
   for (const sec of document.querySelectorAll(".view")) sec.classList.add("hidden");
-  $("view-" + name).classList.remove("hidden");
+  // Settings is the onboarding form, filled in and saving instead of creating.
+  $("view-" + (name === "settings" ? "onboard" : name)).classList.remove("hidden");
   $("viewTitle").textContent = TITLES[name];
   for (const b of document.querySelectorAll(".nav button"))
     b.classList.toggle("active", b.dataset.view === name);
@@ -846,20 +850,74 @@ function buildDayBoxes() {
     $("dayBoxes").appendChild(lab);
   }
 }
-function addRow(holder, cls, fields) {
+function addRow(holder, cls, fields, values = []) {
   const row = el("div", cls);
-  fields.forEach(ph => {
-    const i = document.createElement("input"); i.type = "text"; i.placeholder = ph; row.appendChild(i);
+  fields.forEach((ph, k) => {
+    const i = document.createElement("input"); i.type = "text"; i.placeholder = ph;
+    i.value = values[k] || ""; row.appendChild(i);
   });
   const del = el("button", "del"); del.type = "button"; del.title = "Remove"; del.setAttribute("aria-label", "Remove");
   del.innerHTML = ICONS.x; del.onclick = () => row.remove();
   row.appendChild(del);
   $(holder).appendChild(row);
 }
-const addServiceRow = () => addRow("serviceRows", "rowline", ["Service name", "Price (e.g. ₹500)"]);
-const addFaqRow = () => addRow("faqRows", "rowline2", ["Question customers ask", "The answer"]);
+const addServiceRow = (v) => addRow("serviceRows", "rowline", ["Service name", "Price (e.g. ₹500)"], v);
+const addFaqRow = (v) => addRow("faqRows", "rowline2", ["Question customers ask", "The answer"], v);
 function collectRows(holder) {
   return [...$(holder).children].map(r => [...r.querySelectorAll("input")].map(i => i.value.trim()));
+}
+
+/* The same form creates a business ("create") or edits the current one ("edit"). */
+let FORM_MODE = "create";
+function setFormMode(mode) {
+  FORM_MODE = mode;
+  const edit = mode === "edit";
+  $("formTitle").textContent = edit ? "Business settings" : "Set up your AI receptionist";
+  $("formSub").textContent = edit
+    ? "Your receptionist answers only from these details. Changes apply from the next conversation."
+    : "Tell us about your business — your agent answers ONLY from what you enter here, and starts taking calls and bookings immediately.";
+  $("createBtn").textContent = edit ? "Save changes" : "Create my AI receptionist →";
+  $("formMsg").textContent = "";
+}
+function fillForm(s) {
+  $("bizName").value = s.business_name; $("bizPhone").value = s.phone;
+  $("bizAddress").value = s.address; $("bizTimings").value = s.timings;
+  $("serviceRows").innerHTML = ""; s.services.forEach(x => addServiceRow([x.name, x.price]));
+  if (!s.services.length) addServiceRow();
+  $("faqRows").innerHTML = ""; s.faq.forEach(x => addFaqRow([x.q, x.a]));
+  if (!s.faq.length) addFaqRow();
+  $("bizPolicies").value = s.policies.join("\n"); $("bizFallback").value = s.fallback;
+  for (const i of $("dayBoxes").querySelectorAll("input")) i.checked = s.slot_days.includes(i.value);
+  const [r1 = ["", ""], r2 = ["", ""]] = s.slot_ranges;
+  $("r1start").value = r1[0]; $("r1end").value = r1[1];
+  $("r2start").value = r2[0]; $("r2end").value = r2[1];
+  const gap = String(s.slot_gap_min);
+  if (![...$("slotGap").options].some(o => o.value === gap))
+    $("slotGap").appendChild(new Option(gap + " minutes", gap));
+  $("slotGap").value = gap;
+}
+async function openSettings() {
+  if (!CLIENT) return;
+  try {
+    fillForm(await api("/api/business/" + encodeURIComponent(CLIENT) + "/settings"));
+    setFormMode("edit");
+    $("cancelOnboard").classList.remove("hidden");
+    showView("settings");
+  } catch (e) { toast(e.message, 5000); }
+}
+async function saveSettings(payload) {
+  const res = await fetch("/api/business/" + encodeURIComponent(CLIENT) + "/settings", {
+    method: "PUT", headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+  const saved = await res.json();
+  if (AUTH.role !== "admin") {
+    AUTH.business_name = saved.business_name;
+    localStorage.setItem("voxagent_auth", JSON.stringify(AUTH));
+    $("bizLabel").textContent = saved.business_name;
+  }
+  toast("Saved. Your receptionist uses these details from the next conversation.", 5000);
 }
 
 async function createBusiness() {
@@ -885,6 +943,11 @@ async function createBusiness() {
   }
   $("createBtn").disabled = true;
   try {
+    if (FORM_MODE === "edit") {
+      await saveSettings(payload);
+      if (AUTH.role === "admin") await loadClients(CLIENT);
+      return;
+    }
     const created = await api("/api/business", payload);
     if (AUTH.role === "admin") {
       await loadClients(created.client_id);
@@ -1217,7 +1280,8 @@ $("clientSelect").onchange = () => {
   DASH_ETAG = null;            // different business, different data
   loadAll();
 };
-$("addBizBtn").onclick = () => showView("onboard");
+$("addBizBtn").onclick = () => { setFormMode("create"); showView("onboard"); };
+$("settingsNav").onclick = openSettings;
 $("cancelOnboard").onclick = () => showView("dashboard");
 $("createBtn").onclick = createBusiness;
 $("testBtn").onclick = () => { if (CLIENT) openTest(); };
