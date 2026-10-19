@@ -169,6 +169,9 @@
        padding: 0 12px 8px 0; white-space: nowrap; }
   td { padding: 10px 12px 10px 0; border-top: 1px solid var(--border); vertical-align: top;
        font-variant-numeric: tabular-nums; }
+  tr.inactive td { color: var(--muted); }
+  td.actions { text-align: right; padding-right: 0; }
+  .btn.small { padding: 4px 10px; font-size: .82rem; font-weight: 500; }
 
   /* ================= onboarding ================= */
   .onboard { max-width: 760px; margin: 0 auto; }
@@ -788,19 +791,42 @@ function txRow(box, who, text) {
 
 function renderBookings(box, rows, compact) {
   box.innerHTML = "";
+  if (compact) rows = rows.filter(r => r.status === "confirmed");
   if (!rows.length) { box.appendChild(el("div", "empty", "No bookings yet.")); return; }
   const t = el("table");
   const head = compact ? ["Name", "Service", "When"]
-                       : ["Name", "Phone", "Service", "When", "Status"];
+                       : ["Name", "Phone", "Service", "When", "Status", ""];
   const tr = el("tr"); head.forEach(h => tr.appendChild(el("th", "", h))); t.appendChild(tr);
+  const today = new Date().toISOString().slice(0, 10);
   for (const r of rows) {
-    const row = el("tr");
+    const row = el("tr", r.status === "confirmed" ? "" : "inactive");
     const cells = compact ? [r.name, r.service, r.date + " " + r.time]
-                          : [r.name, r.phone, r.service, r.date + " " + r.time, r.status];
+                          : [r.name, r.phone, r.service, r.date + " " + r.time];
     cells.forEach(v => row.appendChild(el("td", "", v)));
+    if (!compact) {
+      const st = el("td");
+      st.appendChild(el("span", "badge " + (r.status === "confirmed" ? "booked" : ""), r.status));
+      row.appendChild(st);
+      const act = el("td", "actions");
+      if (r.status === "confirmed" && r.date >= today && r.id !== undefined) {
+        const b = el("button", "btn ghost small", "Cancel");
+        b.onclick = () => cancelBooking(r, b);
+        act.appendChild(b);
+      }
+      row.appendChild(act);
+    }
     t.appendChild(row);
   }
   box.appendChild(t);
+}
+async function cancelBooking(r, btn) {
+  if (!confirm(`Cancel ${r.name}'s ${r.service} on ${r.date} at ${r.time}? The slot becomes free for others.`)) return;
+  btn.disabled = true;
+  try {
+    await api("/api/bookings/cancel", { client_id: CLIENT, booking_id: r.id });
+    toast("Booking cancelled. " + r.date + " " + r.time + " is free again.");
+    await loadAll();
+  } catch (e) { toast(e.message, 5000); btn.disabled = false; }
 }
 
 function renderLeads(box, rows) {
