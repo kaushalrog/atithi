@@ -146,6 +146,13 @@ Tests never touch Google. To check the real connection once, with a **throwaway*
 4. Expect `saved to: bookings.db` in the terminal and, within a few seconds, the row in the Sheet. The copy is queued on a background thread, so it never delays the caller. A failed copy is retried for about 40 s, then logged as `Google Sheet copy dropped` and counted as `sheets.dropped` in `/api/admin/perf`. A copy whose answer timed out is not retried, because Google may already have added the row and a retry would duplicate it. It's logged as `may or may not have landed` (`sheets.unconfirmed`); check the Sheet for that booking.
 5. Put the real `SHEET_ID` back. VoxAgent has no cancel flow yet, so the test booking stays in `bookings.db` and blocks that slot; do this with a test business, or remove the row yourself with the `sqlite3` tool.
 
+## 6b. Customer texts (SMS)
+
+`ENABLE_SMS` stays `false` until you have checked the dry runs: make a test
+booking, then read `notifications.jsonl`, which shows the number and the exact
+text. For the first real text, use a test business whose phone numbers are
+your own, and a Twilio trial account (it can only text verified numbers).
+
 ## 7. Known gaps (tracked, not fixed yet)
 
 From `docs/AUDIT.md` and `TODOS.md`. All matter before a paying client goes live:

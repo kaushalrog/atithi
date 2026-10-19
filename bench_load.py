@@ -50,6 +50,7 @@ storage.BOOKINGS_DB = _TMP / "bookings.db"
 storage.BOOKINGS_CSV = _TMP / "bookings.csv"
 storage.LEADS_CSV = _TMP / "leads.csv"
 storage.CALLS_DIR = _TMP / "calls"
+storage.NOTIFY_LOG = _TMP / "notifications.jsonl"
 storage.clear_caches()
 for _p in (storage.BOOKINGS_DB, storage.BOOKINGS_CSV, storage.LEADS_CSV, storage.CALLS_DIR):
     if REPO in _p.resolve().parents and _TMP not in _p.resolve().parents:

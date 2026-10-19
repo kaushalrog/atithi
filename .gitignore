@@ -25,3 +25,6 @@ voxagent.db-*
 # Bookings (customer names + phone numbers) — the single source of truth
 bookings.db
 bookings.db-*
+
+# every customer SMS (phone numbers): never commit
+notifications.jsonl

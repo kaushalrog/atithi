@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import notify
 import perf
 import scheduling
 import storage
@@ -475,6 +476,8 @@ class ReceptionistAgent:
                 "available_slots": self._refresh_slots().get(date) or [],
             }
         self.slots[date].remove(time)   # keep this view current without a re-query
+        notify.booking_event(self.client_id, "confirmed", dict(
+            name=customer_name, phone=phone, service=service, date=date, time=time))
         print(
             f"\n  ✅ BOOKING CONFIRMED — {customer_name} | {phone} | {service} "
             f"| {date} {time}\n     saved to: {saved_to}\n"
@@ -515,6 +518,7 @@ class ReceptionistAgent:
                     "error": f"There is no appointment at {time} on {date} for that number. "
                              "Call find_booking and confirm which appointment the customer means."}
         self.slots = self._refresh_slots()      # the slot is free again
+        notify.booking_event(self.client_id, "cancelled", done)
         print(f"\n  ✖ BOOKING CANCELLED — {done['name']} | {date} {time}\n")
         return {"status": "cancelled", "date": date, "time": time, "service": done["service"]}
 
@@ -539,6 +543,7 @@ class ReceptionistAgent:
                              "Apologise and offer one of the available slots.",
                     "available_slots": self._refresh_slots().get(new_date) or []}
         self.slots = self._refresh_slots()
+        notify.booking_event(self.client_id, "rescheduled", new)
         print(f"\n  ↻ BOOKING MOVED — {new['name']} | {date} {time} -> {new_date} {new_time}\n")
         return {"status": "rescheduled", "from": {"date": date, "time": time},
                 "to": {"date": new_date, "time": new_time}, "service": new["service"]}

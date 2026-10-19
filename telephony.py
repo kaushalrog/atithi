@@ -126,6 +126,23 @@ def twilio_config() -> dict:
     }
 
 
+def sms_enabled() -> bool:
+    """Texting customers is OFF unless ENABLE_SMS=true AND Twilio is set up.
+    Off, notify.py records what it would have sent (a dry run) instead."""
+    cfg = twilio_config()
+    return (os.getenv("ENABLE_SMS", "").strip().lower() == "true"
+            and bool(cfg["sid"] and cfg["token"] and cfg["number"]))
+
+
+def send_sms(to: str, body: str) -> str:
+    """Send one SMS from the business line; returns Twilio's message SID.
+    Raises on any failure (notify.py logs it; the booking is never affected)."""
+    from twilio.rest import Client
+    cfg = twilio_config()
+    return Client(cfg["sid"], cfg["token"]).messages.create(
+        to=to, from_=cfg["number"], body=body).sid
+
+
 def is_configured() -> bool:
     cfg = twilio_config()
     return bool(cfg["sid"] and cfg["token"] and cfg["public_url"])

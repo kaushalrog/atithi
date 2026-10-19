@@ -66,10 +66,11 @@ BOOKINGS_DB = BASE_DIR / "bookings.db"
 BOOKINGS_CSV = BASE_DIR / "bookings.csv"   # legacy: read once by the import, never written
 LEADS_CSV = BASE_DIR / "leads.csv"
 CALLS_DIR = BASE_DIR / "calls"
+NOTIFY_LOG = BASE_DIR / "notifications.jsonl"   # every customer SMS, sent or dry-run
 CLIENTS_DIR = BASE_DIR / "clients"
 
 # The real data locations, captured before tests repoint the paths above.
-_REAL_DATA = (BOOKINGS_DB, BOOKINGS_CSV, LEADS_CSV, CALLS_DIR, CLIENTS_DIR)
+_REAL_DATA = (BOOKINGS_DB, BOOKINGS_CSV, LEADS_CSV, CALLS_DIR, CLIENTS_DIR, NOTIFY_LOG)
 
 
 def in_test_mode() -> bool:
@@ -1134,6 +1135,27 @@ def client_for_number(number: str) -> str | None:
         if str(entry["config"].get("twilio_number", "")).strip() == wanted:
             return entry["client_id"]
     return None
+
+
+# ---- customer notifications log -------------------------------------------------
+
+def log_notification(entry: dict):
+    """Append one notification record (sent, dry-run, failed, skipped)."""
+    _guard_write(NOTIFY_LOG)
+    with _write_lock:
+        with open(NOTIFY_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def read_notifications() -> list[dict]:
+    """Every notification record, oldest first (small file; read on demand)."""
+    if not NOTIFY_LOG.exists():
+        return []
+    with open(NOTIFY_LOG, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+BackgroundQueue = _BackgroundQueue      # for other modules' off-the-call-path work
 
 
 # ---- the optional perf log (VOXAGENT_PERF_LOG) -------------------------------------

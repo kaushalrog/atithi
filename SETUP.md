@@ -235,3 +235,29 @@ fake-provider workload of 1–10 simultaneous calls or chats. Results are in
 own code only. They don't say how fast Gemini, Twilio or edge-tts will be, and
 they don't prove any number of real concurrent calls. For real numbers, set
 `VOXAGENT_PERF_LOG=perf.jsonl` during a pilot and read `/admin` → `/api/admin/perf`.
+
+---
+
+## Customer texts (booking confirmations and reminders)
+
+When a booking is made, moved or cancelled, Atithi can text the customer from
+your Twilio number, and remind them the day before. Each business can turn it
+off in **Settings → Customer texts**.
+
+It is **off** until you set `ENABLE_SMS=true` in `.env` (and Twilio is set up,
+Part 3). While it's off, nothing is sent: every message is written to
+`notifications.jsonl` as a `dry-run`, so you can read exactly what customers
+would get first.
+
+Reminders run once a day from a scheduled command (cron, or Task Scheduler on
+Windows):
+
+```
+python notify.py reminders
+```
+
+It texts tomorrow's appointments, each only once, so running it twice is safe.
+
+**India:** texts to Indian numbers are only delivered after DLT registration
+(your sender ID and message templates) with a telecom operator. Register
+before switching it on for a real business.

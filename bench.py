@@ -40,6 +40,7 @@ storage.BOOKINGS_DB = _TMP / "bookings.db"
 storage.BOOKINGS_CSV = _TMP / "bookings.csv"
 storage.LEADS_CSV = _TMP / "leads.csv"
 storage.CALLS_DIR = _TMP / "calls"
+storage.NOTIFY_LOG = _TMP / "notifications.jsonl"
 import telephony  # noqa: E402
 from agent import TOOL_SCHEMAS, ReceptionistAgent  # noqa: E402
 

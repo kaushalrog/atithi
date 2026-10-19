@@ -96,6 +96,10 @@ AI receptionist for Indian small service businesses (clinics, salons, coaching i
   blocking work (tools, agent setup, record save) on telephony's call-I/O
   pool, never on the shared event loop. `python bench_load.py --suite full`
   is the offline fake-provider load benchmark (docs/perf/).
+- Customer texts: notify.py (booking confirmed/moved/cancelled + day-before
+  reminders via `python notify.py reminders`) on a bounded background queue;
+  telephony.send_sms is the only sender. OFF unless ENABLE_SMS=true: until then
+  every text is a dry-run line in notifications.jsonl (gitignored, PII).
 - Safety: VOXAGENT_ENV=test (tests, evals) disables the Sheets copy and makes
   writes to real data files raise. Live phone calls are off unless
   ENABLE_LIVE_CALLS=true; see docs/SAFE_TESTING.md before enabling.

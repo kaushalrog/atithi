@@ -29,6 +29,7 @@ def tmp_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "BOOKINGS_CSV", tmp_path / "bookings.csv")
     monkeypatch.setattr(storage, "LEADS_CSV", tmp_path / "leads.csv")
     monkeypatch.setattr(storage, "CALLS_DIR", tmp_path / "calls")
+    monkeypatch.setattr(storage, "NOTIFY_LOG", tmp_path / "notifications.jsonl")
     monkeypatch.setenv("SHEET_ID", "")  # belt and braces: test mode already disables Sheets
     # Caches are keyed by path, but a temp file can reuse a path from an
     # earlier test — start every test from a cold cache.

@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 import auth
 import billing
 import llm as llm_module
+import notify
 import perf
 import scheduling
 import storage
@@ -250,6 +251,7 @@ class BusinessRequest(BaseModel):
     slot_ranges: list[list[str]] = [["10:00", "13:00"], ["16:00", "20:00"]]
     slot_gap_min: int = 30
     languages: list[str] = ["en"]       # first = the greeting language
+    sms_confirmations: bool = True      # still needs ENABLE_SMS=true to actually send
 
 
 def _clean_languages(codes: list[str]) -> list[str]:
@@ -641,6 +643,7 @@ def create_business(req: BusinessRequest,
         "policies": [p.strip() for p in req.policies if p.strip()],
         "fallback": req.fallback.strip() or DEFAULT_FALLBACK,
         "languages": _clean_languages(req.languages),
+        "sms_confirmations": bool(req.sms_confirmations),
         # Every new business starts on a free trial; after that the owner
         # pays and the admin activates (see billing.py).
         "billing": billing.new_trial(),
@@ -680,6 +683,7 @@ def _settings_view(cfg: dict) -> dict:
         "slot_ranges": ranges,
         "slot_gap_min": int(sched.get("gap_min") or 30),
         "languages": list(cfg.get("languages") or ["en"]),
+        "sms_confirmations": cfg.get("sms_confirmations", True) is not False,
     }
 
 
@@ -728,6 +732,7 @@ def save_settings(client_id: str, req: BusinessRequest,
         "fallback": req.fallback.strip() or DEFAULT_FALLBACK,
         "schedule": schedule,
         "languages": _clean_languages(req.languages),
+        "sms_confirmations": bool(req.sms_confirmations),
     })
     cfg.pop("slots", None)                 # a saved rule replaces any legacy dated slots
     storage.write_client_config(client_id, cfg)
@@ -950,6 +955,7 @@ def owner_cancel_booking(req: CancelRequest,
     done = storage.cancel_booking(req.client_id, booking_id=req.booking_id)
     if done is None:
         raise HTTPException(status_code=404, detail="That booking is not confirmed any more")
+    notify.booking_event(req.client_id, "cancelled", done)
     return {"ok": True, "booking": done}
 
 
