@@ -12,6 +12,15 @@ import asyncio
 
 import edge_tts
 
+# A reply is a few seconds of speech; edge-tts normally streams it in about
+# a second. A stalled stream used to hold the request (and a worker thread)
+# for as long as the network allowed. The portal shows the text reply either way.
+TTS_TIMEOUT_S = 15
+
+
+class TTSTimeout(Exception):
+    """Speech took longer than TTS_TIMEOUT_S; the text reply still stands."""
+
 VOICES = {
     "en": "en-IN-NeerjaNeural",
     "hi": "hi-IN-SwaraNeural",
@@ -65,7 +74,10 @@ class EdgeTTS:
         hearing it.
         """
         voice = VOICES[detect_language(text)]
-        return asyncio.run(self._collect(text, voice))
+        try:
+            return asyncio.run(asyncio.wait_for(self._collect(text, voice), TTS_TIMEOUT_S))
+        except TimeoutError as e:
+            raise TTSTimeout(f"no speech after {TTS_TIMEOUT_S}s") from e
 
     async def _collect(self, text: str, voice: str) -> bytes:
         chunks = bytearray()

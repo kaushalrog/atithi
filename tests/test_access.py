@@ -387,3 +387,13 @@ def test_a_session_mid_turn_is_never_purged(client, session):
         assert session in server.sessions
     finally:
         s["lock"].release()
+
+
+def test_a_slow_voice_reply_is_a_504_not_a_hang(client, session, monkeypatch):
+    from tts import TTSTimeout
+
+    def stalled(text):
+        raise TTSTimeout("no speech after 15s")
+    monkeypatch.setattr(server.tts, "synthesize_bytes", stalled)
+    res = client.post("/api/tts", json={"session_id": session, "text": "hi"})
+    assert res.status_code == 504 and "text reply stands" in res.json()["detail"]

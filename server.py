@@ -37,7 +37,7 @@ import scheduling
 import storage
 import telephony
 from agent import ReceptionistAgent
-from tts import EdgeTTS
+from tts import EdgeTTS, TTSTimeout
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -709,7 +709,12 @@ def speak(req: TTSRequest):
     get_session(req.session_id)
     clean = re.sub(r"[*_#`]", "", req.text)
     # Straight from the network into the response — no temp file round trip.
-    return Response(content=tts.synthesize_bytes(clean), media_type="audio/mpeg")
+    try:
+        audio = tts.synthesize_bytes(clean)
+    except TTSTimeout:
+        perf.event("timeout.tts")
+        raise HTTPException(status_code=504, detail="Voice reply took too long — the text reply stands.")
+    return Response(content=audio, media_type="audio/mpeg")
 
 
 # ---------- dashboard data -------------------------------------------------------

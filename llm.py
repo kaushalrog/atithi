@@ -30,6 +30,8 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import errors, types
 
+import perf
+
 load_dotenv()
 
 MODEL = "gemini-2.5-flash"
@@ -127,6 +129,13 @@ def _tools_to_gemini(tools):
     _tool_cache[id(tools)] = (tools, converted)
     return converted
 
+
+# The most one request may spend WAITING between retries. Without it a run of
+# 429s could hold a request (and one of the portal's worker threads) for
+# ~75 s while the customer stared at a typing indicator (perf audit F5).
+# When it runs out the error is raised, and /api/chat answers with the
+# front-desk callback line instead.
+RETRY_BUDGET_S = 25
 
 _RETRY_DELAY_RE = re.compile(r"'retryDelay':\s*'(\d+)")
 
@@ -244,6 +253,7 @@ class GeminiLLM:
     # ---- the actual API call, with retries ----------------------------------
 
     def _call_with_retry(self, contents, config, attempts=4):
+        slept = 0.0
         for attempt in range(attempts):
             try:
                 return self.client.models.generate_content(
@@ -255,15 +265,18 @@ class GeminiLLM:
                 if e.code == 429 and "PerDay" in str(e):
                     raise QuotaExhausted(str(e)) from e
                 # Per-minute rate limit (429) or a transient server error (5xx):
-                # wait a moment and try again instead of crashing the conversation.
-                # This key's free tier allows only 5 requests/min, so three
-                # waits of 20s guarantee we reach a fresh rate-limit minute.
+                # wait a moment and try again instead of crashing the conversation
+                # — but never past RETRY_BUDGET_S of waiting in total.
                 retriable = e.code in (429, 500, 503)
                 if retriable and attempt < attempts - 1:
                     wait = _retry_wait(e, attempt)
-                    print(f"  [llm] API error {e.code}, retrying in {wait}s...")
-                    time.sleep(wait)
-                    continue
+                    if slept + wait <= RETRY_BUDGET_S:
+                        print(f"  [llm] API error {e.code}, retrying in {wait}s...")
+                        perf.event("retry.model")
+                        time.sleep(wait)
+                        slept += wait
+                        continue
+                    perf.event("timeout.model_retry_budget")
                 raise
 
     # ---- Gemini response -> neutral format ----------------------------------
