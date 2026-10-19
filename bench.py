@@ -17,6 +17,7 @@ The numbers that mattered when this was written (median, this laptop):
 """
 
 import datetime as dt
+import shutil
 import statistics
 import sys
 import tempfile
@@ -30,6 +31,15 @@ import billing  # noqa: E402
 import perf  # noqa: E402
 import scheduling  # noqa: E402
 import storage  # noqa: E402
+
+# A benchmark must never create or touch a business's real data: bookings,
+# leads and call records go to a throwaway folder (client YAMLs are only read).
+# Opening the real path used to create an empty bookings.db in the repo.
+_TMP = Path(tempfile.mkdtemp(prefix="voxagent_bench_"))
+storage.BOOKINGS_DB = _TMP / "bookings.db"
+storage.BOOKINGS_CSV = _TMP / "bookings.csv"
+storage.LEADS_CSV = _TMP / "leads.csv"
+storage.CALLS_DIR = _TMP / "calls"
 import telephony  # noqa: E402
 from agent import TOOL_SCHEMAS, ReceptionistAgent  # noqa: E402
 
@@ -98,15 +108,9 @@ def main():
     agent.history = [{"role": "user", "text": "any slots?", "at": agent.now()},
                      agent.tool_call_entry([call]), agent.run_tool(call),
                      {"role": "assistant", "text": "Yes.", "at": agent.now()}]
-    real_calls_dir = storage.CALLS_DIR
-    with tempfile.TemporaryDirectory() as tmp:
-        storage.CALLS_DIR = Path(tmp)
-        try:
-            bench("log a call + trace (every web-test turn)",
-                  lambda: storage.log_call_from_agent(agent, "bench", dt.datetime.now(),
-                                                      call_id="bench"))
-        finally:
-            storage.CALLS_DIR = real_calls_dir
+    bench("log a call + trace (every web-test turn)",
+          lambda: storage.log_call_from_agent(agent, "bench", dt.datetime.now(),
+                                              call_id="bench"))
     # The instrumentation itself sits on every one of those paths: one span
     # must stay far below anything a caller could notice (budget 10 µs).
     def span_x1000():
@@ -122,4 +126,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        shutil.rmtree(_TMP, ignore_errors=True)
