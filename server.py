@@ -426,8 +426,7 @@ def admin_overview():
         "channel": c["channel"],
         "seconds": c["seconds"],
         "turns": c["turns"],
-        "booked": "book_appointment" in c["transcript"],
-        "lead": "save_lead" in c["transcript"],
+        **call_outcome(c),
     } for c in all_calls[:12]]
     return {"totals": totals, "clients": clients, "recent_calls": recent,
             "password_resets": auth.pending_resets(),
@@ -719,12 +718,27 @@ def speak(req: TTSRequest):
 
 # ---------- dashboard data -------------------------------------------------------
 
+def call_outcome(call: dict) -> dict:
+    """Did this call book, or save a lead? Records written since the perf
+    audit store the tools' real results; older ones fall back to the old
+    transcript rule, which also counted FAILED attempts (audit M1)."""
+    stored = call.get("outcome")
+    if isinstance(stored, dict):
+        return {"booked": bool(stored.get("booked")), "lead": bool(stored.get("lead"))}
+    text = call.get("transcript", "")
+    return {"booked": "book_appointment" in text, "lead": "save_lead" in text}
+
+
+def _with_outcome(calls: list[dict]) -> list[dict]:
+    # Copies: call records come from storage's shared cache (read-only).
+    return [{**c, "outcome": call_outcome(c)} for c in calls]
+
+
 def _stats_from(calls, bookings, leads) -> dict:
     """Stats from data already in hand — no second pass over the disk."""
     n_calls = len(calls)
-    # Conversion = share of calls that produced a booking. Each call's transcript
-    # records its tool calls, so a booking made during the call is visible there.
-    booked_calls = sum(1 for c in calls if "book_appointment" in c.get("transcript", ""))
+    # Conversion = share of calls whose booking actually succeeded.
+    booked_calls = sum(1 for c in calls if call_outcome(c)["booked"])
     return {
         "calls": n_calls,
         "minutes": round(sum(c["seconds"] for c in calls) / 60, 1),
@@ -772,7 +786,7 @@ def dashboard(client_id: str, response: Response,
         # Stats count every call ever; the list ships only the recent ones so
         # the payload stays small for a busy client (transcripts are long).
         "stats": _stats_from(calls, bookings, leads),
-        "calls": calls[:DASHBOARD_CALL_LIMIT],
+        "calls": _with_outcome(calls[:DASHBOARD_CALL_LIMIT]),
         "bookings": list(reversed(bookings)),
         "leads": list(reversed(leads)),
         "billing": billing.status(client_id),
@@ -797,7 +811,7 @@ def calls(client_id: str,
           x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
           authorization: str | None = Header(default=None)):
     authorize_client(client_id, x_client_key, x_admin_key, authorization)
-    return storage.read_call_logs(client_id)
+    return _with_outcome(storage.read_call_logs(client_id))
 
 
 @app.get("/api/bookings")

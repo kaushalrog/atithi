@@ -728,8 +728,9 @@ function renderCalls(box, calls) {
     const sum = el("summary");
     sum.appendChild(el("span", "when", fmtWhen(c.started)));
     sum.appendChild(el("span", "badge", c.channel));
-    if (c.transcript.includes("book_appointment")) sum.appendChild(el("span", "badge booked", "booked"));
-    else if (c.transcript.includes("save_lead")) sum.appendChild(el("span", "badge lead", "lead"));
+    // outcome comes from the server: what the call's tools actually achieved.
+    if (c.outcome && c.outcome.booked) sum.appendChild(el("span", "badge booked", "booked"));
+    else if (c.outcome && c.outcome.lead) sum.appendChild(el("span", "badge lead", "lead"));
     sum.appendChild(el("span", "meta", fmtDur(c.seconds) + " · " + c.turns + " turns"));
     det.appendChild(sum);
     det.appendChild(renderTranscript(c.transcript));

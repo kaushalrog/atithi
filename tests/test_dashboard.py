@@ -74,3 +74,61 @@ def test_dashboard_matches_the_individual_endpoints(client):
                                            headers=headers).json()
     assert combined["calls"] == client.get("/api/calls?client_id=demo_clinic",
                                            headers=headers).json()[:server.DASHBOARD_CALL_LIMIT]
+
+
+# ---- conversion counts bookings that SUCCEEDED (audit M1, eng review D3/D10) --------
+
+from agent import ReceptionistAgent  # noqa: E402
+from conftest import FakeLLM, open_day, open_times  # noqa: E402
+
+
+def _call_with_tool(name, args, call_id):
+    """Log one call in which the agent ran a single tool."""
+    agent = ReceptionistAgent("demo_clinic", llm=FakeLLM([]))
+    agent.history = [{"role": "user", "text": "hi", "at": agent.now()},
+                     agent.tool_call_entry([{"name": name, "args": args}]),
+                     agent.run_tool({"name": name, "args": args})]
+    storage.log_call_from_agent(agent, "web-test", server.dt.datetime.now(), call_id=call_id)
+    return agent.history[-1]["result"]
+
+
+def test_a_failed_booking_is_not_a_booked_call(client):
+    day = open_day()
+    ok = _call_with_tool("book_appointment", {
+        "customer_name": "Ravi", "phone": "9876543210", "service": "Cleaning",
+        "date": day, "time": open_times(date=day)[0]}, "good")
+    bad = _call_with_tool("book_appointment", {
+        "customer_name": "Asha", "phone": "123", "service": "Cleaning",
+        "date": day, "time": open_times(date=day)[1]}, "bad")    # phone too short
+    assert ok["status"] == "confirmed" and bad["status"] == "failed"
+    body = client.get("/api/dashboard?client_id=demo_clinic", headers=admin_headers(client)).json()
+    assert body["stats"]["conversion"] == 50            # used to say 100
+    by_id = {c["call_id"]: c["outcome"] for c in body["calls"]}
+    assert by_id == {"good": {"booked": True, "lead": False},
+                     "bad": {"booked": False, "lead": False}}
+    recent = client.get("/api/admin/overview", headers=admin_headers(client)).json()["recent_calls"]
+    assert sorted(c["booked"] for c in recent) == [False, True]
+
+
+def test_a_saved_lead_is_flagged_as_a_lead(client):
+    _call_with_tool("save_lead", {"name": "Kiran", "phone": "9998887776",
+                                  "interest": "braces"}, "lead")
+    [call] = client.get("/api/calls?client_id=demo_clinic", headers=admin_headers(client)).json()
+    assert call["outcome"] == {"booked": False, "lead": True}
+
+
+def test_old_records_without_an_outcome_fall_back_to_the_transcript():
+    assert server.call_outcome({"transcript": "  [tool call] book_appointment(...)"}) \
+        == {"booked": True, "lead": False}
+    assert server.call_outcome({"transcript": "Customer: hi"}) == {"booked": False, "lead": False}
+    stored = {"transcript": "book_appointment", "outcome": {"booked": False, "lead": False}}
+    assert server.call_outcome(stored)["booked"] is False   # the stored truth wins
+
+
+def test_shipping_outcomes_never_mutates_the_shared_cache(client):
+    _call_with_tool("save_lead", {"name": "Kiran", "phone": "9998887776",
+                                  "interest": "braces"}, "lead")
+    cached = storage.read_call_logs("demo_clinic")[0]
+    cached.pop("outcome")                               # simulate an old record in cache
+    client.get("/api/calls?client_id=demo_clinic", headers=admin_headers(client))
+    assert "outcome" not in storage.read_call_logs("demo_clinic")[0]

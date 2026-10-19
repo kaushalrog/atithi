@@ -707,6 +707,10 @@ def log_call_from_agent(agent, channel: str, started: dt.datetime,
         "seconds": int((now - started).total_seconds()),
         "turns": turns,
         "transcript": agent.transcript_text(),
+        # What the call actually achieved, from the tools' own results. The
+        # dashboard used to guess from the transcript, so a FAILED booking
+        # attempt counted as a booked call (audit M1).
+        "outcome": call_outcome(agent.history),
     }
     if caller:
         # Who called is metadata, not something the customer said (audit M2).
@@ -736,6 +740,17 @@ TRACE_VERSION = 1
 _TOOL_TYPES = {"check_availability": "availability", "book_appointment": "book",
                "save_lead": "lead"}
 _OK_STATUS = {"book": "confirmed", "lead": "saved"}
+
+
+def call_outcome(history: list[dict]) -> dict:
+    """{"booked", "lead"}: did a booking / lead tool SUCCEED in this call?"""
+    done = set()
+    for m in history:
+        if m["role"] == "tool":
+            kind = _TOOL_TYPES.get(m["name"])
+            if kind in _OK_STATUS and _action_ok(kind, m["result"]):
+                done.add(kind)
+    return {"booked": "book" in done, "lead": "lead" in done}
 
 
 def _phone10(phone) -> str:
