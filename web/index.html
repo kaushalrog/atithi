@@ -185,6 +185,9 @@
   .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .rowline { display: grid; grid-template-columns: 2fr 1fr 36px; gap: 8px; margin-bottom: 8px; }
   .rowline2 { display: grid; grid-template-columns: 1fr 1.4fr 36px; gap: 8px; margin-bottom: 8px; }
+  .closedline { display: grid; grid-template-columns: 150px 110px 110px 1fr 36px; gap: 8px; margin-bottom: 8px; }
+  .closedline input[type=date] { font: inherit; font-size: .93rem; border: 1px solid var(--border-strong);
+                                 border-radius: var(--radius-sm); padding: 8px 10px; color: var(--ink); }
   .del { border: 1px solid var(--border-strong); background: var(--surface); border-radius: var(--radius-sm);
          cursor: pointer; color: var(--muted); display: flex; align-items: center; justify-content: center; }
   .del svg { width: 15px; height: 15px; }
@@ -261,6 +264,7 @@
   }
   @media (max-width: 940px) {
     .grid2, .pair { grid-template-columns: 1fr; }
+    .closedline { grid-template-columns: 1fr 1fr 36px; }
     .stats { grid-template-columns: repeat(2, 1fr); }
     .stat { border-left: none; border-top: 1px solid var(--border); }
     .stat:nth-child(-n+2) { border-top: none; }
@@ -483,6 +487,13 @@
           <option value="45">45 minutes</option>
           <option value="60">60 minutes</option>
         </select>
+      </fieldset>
+
+      <fieldset>
+        <legend>Holidays &amp; closed dates</legend>
+        <div class="empty" style="padding:0 0 10px">Your receptionist won't offer these, and tells customers you're closed. Leave the hours empty to close the whole day.</div>
+        <div id="closedRows"></div>
+        <button type="button" class="addline" id="addClosed"><svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add a closed date</button>
       </fieldset>
 
       <div class="formmsg" id="formMsg"></div>
@@ -913,6 +924,22 @@ function addRow(holder, cls, fields, values = []) {
 }
 const addServiceRow = (v) => addRow("serviceRows", "rowline", ["Service name", "Price (e.g. ₹500)"], v);
 const addFaqRow = (v) => addRow("faqRows", "rowline2", ["Question customers ask", "The answer"], v);
+function addClosedRow(v = {}) {
+  const row = el("div", "closedline");
+  const mk = (type, val, ph, aria) => { const i = document.createElement("input"); i.type = type;
+    i.value = val || ""; if (ph) i.placeholder = ph; i.setAttribute("aria-label", aria); row.appendChild(i); return i; };
+  mk("date", v.date, "", "Date"); mk("time", v.from, "", "Closed from (optional)");
+  mk("time", v.to, "", "Closed until (optional)"); mk("text", v.reason, "Reason (e.g. Diwali)", "Reason");
+  const del = el("button", "del"); del.type = "button"; del.title = "Remove"; del.setAttribute("aria-label", "Remove");
+  del.innerHTML = ICONS.x; del.onclick = () => row.remove(); row.appendChild(del);
+  $("closedRows").appendChild(row);
+}
+function collectClosed() {
+  return [...$("closedRows").children].map(r => {
+    const [d, f, t, why] = [...r.querySelectorAll("input")].map(i => i.value.trim());
+    return Object.fromEntries(Object.entries({ date: d, from: f, to: t, reason: why }).filter(([, x]) => x));
+  }).filter(x => x.date);
+}
 function collectRows(holder) {
   return [...$(holder).children].map(r => [...r.querySelectorAll("input")].map(i => i.value.trim()));
 }
@@ -940,6 +967,7 @@ function fillForm(s) {
   for (const i of $("langBoxes").querySelectorAll("input")) i.checked = langs.includes(i.value);
   $("greetLang").value = langs[0];
   $("smsConfirm").checked = s.sms_confirmations !== false;
+  $("closedRows").innerHTML = ""; (s.closed_dates || []).forEach(addClosedRow);
   $("bizName").value = s.business_name; $("bizPhone").value = s.phone;
   $("bizAddress").value = s.address; $("bizTimings").value = s.timings;
   $("serviceRows").innerHTML = ""; s.services.forEach(x => addServiceRow([x.name, x.price]));
@@ -997,6 +1025,7 @@ async function createBusiness() {
     slot_gap_min: parseInt($("slotGap").value, 10),
     languages: collectLanguages(),
     sms_confirmations: $("smsConfirm").checked,
+    closed_dates: collectClosed(),
   };
   if (!payload.business_name || !services.length) {
     msg.className = "formmsg err";
@@ -1344,6 +1373,7 @@ $("clientSelect").onchange = () => {
 };
 $("addBizBtn").onclick = () => { setFormMode("create"); showView("onboard"); };
 $("settingsNav").onclick = openSettings;
+$("addClosed").onclick = () => addClosedRow();
 $("cancelOnboard").onclick = () => showView("dashboard");
 $("createBtn").onclick = createBusiness;
 $("testBtn").onclick = () => { if (CLIENT) openTest(); };

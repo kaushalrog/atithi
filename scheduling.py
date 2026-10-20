@@ -166,6 +166,50 @@ def schedule_from_form(days, ranges, gap_min, horizon_days=DEFAULT_HORIZON_DAYS)
     }
 
 
+# ---- closed dates (holidays, leave, an afternoon off) ------------------------------
+#
+#   schedule:
+#     closed:
+#       - {date: "2026-11-01", reason: "Diwali"}             # the whole day
+#       - {date: "2026-11-05", from: "16:00", to: "20:00"}   # just those hours
+
+def clean_closed(entries) -> list[dict]:
+    """Normalise closed-date entries; drop unreadable ones. Raises ValueError
+    for an entry that is half-right (e.g. a bad time range), so a form can
+    tell the owner instead of silently ignoring it."""
+    out = []
+    for e in entries or []:
+        date = str((e or {}).get("date", "")).strip()
+        try:
+            dt.date.fromisoformat(date)
+        except ValueError:
+            raise ValueError(f"'{date}' is not a date (YYYY-MM-DD)") from None
+        entry = {"date": date}
+        start, end = (e.get("from") or "").strip(), (e.get("to") or "").strip()
+        if start or end:
+            a, b = parse_time(start), parse_time(end)
+            if a is None or b is None or a >= b:
+                raise ValueError(f"closed hours on {date} need a start before the end")
+            entry["from"], entry["to"] = a.strftime("%H:%M"), b.strftime("%H:%M")
+        if (e.get("reason") or "").strip():
+            entry["reason"] = e["reason"].strip()[:80]
+        out.append(entry)
+    return sorted(out, key=lambda x: (x["date"], x.get("from", "")))
+
+
+def closures_on(config: dict, date: str) -> list[dict]:
+    return [e for e in (config.get("schedule") or {}).get("closed") or [] if e.get("date") == date]
+
+
+def _apply_closures(config: dict, slots: dict[str, list[str]]):
+    for date in list(slots):
+        for e in closures_on(config, date):
+            if "from" in e:
+                slots[date] = [t for t in slots[date] if not (e["from"] <= t < e["to"])]
+            else:
+                slots[date] = []
+
+
 def available_slots(config: dict, booked: set[tuple[str, str]],
                     now: dt.datetime | None = None) -> dict[str, list[str]]:
     """The agent's view of what's free.
@@ -180,6 +224,7 @@ def available_slots(config: dict, booked: set[tuple[str, str]],
     else:
         slots = {str(d): list(t or []) for d, t in (config.get("slots") or {}).items()}
     slots = drop_past(slots, now)
+    _apply_closures(config, slots)
     if booked:
         for date, times in slots.items():
             if any((date, t) in booked for t in times):

@@ -252,6 +252,17 @@ class BusinessRequest(BaseModel):
     slot_gap_min: int = 30
     languages: list[str] = ["en"]       # first = the greeting language
     sms_confirmations: bool = True      # still needs ENABLE_SMS=true to actually send
+    closed_dates: list[dict[str, str]] = []   # [{date, from?, to?, reason?}]
+
+
+def _clean_closed(entries: list[dict]) -> list[dict]:
+    """Validated closed dates, past ones dropped (they can't matter any more)."""
+    try:
+        cleaned = scheduling.clean_closed(entries)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=f"Closed dates: {e}")
+    today = dt.date.today().isoformat()
+    return [c for c in cleaned if c["date"] >= today]
 
 
 def _clean_languages(codes: list[str]) -> list[str]:
@@ -653,6 +664,7 @@ def create_business(req: BusinessRequest,
             req.slot_days, req.slot_ranges, req.slot_gap_min
         ),
     }
+    config["schedule"]["closed"] = _clean_closed(req.closed_dates)
     # Through storage so the config caches invalidate with the write.
     storage.write_client_config(client_id, config)
     if not as_admin:
@@ -684,6 +696,7 @@ def _settings_view(cfg: dict) -> dict:
         "slot_gap_min": int(sched.get("gap_min") or 30),
         "languages": list(cfg.get("languages") or ["en"]),
         "sms_confirmations": cfg.get("sms_confirmations", True) is not False,
+        "closed_dates": list(sched.get("closed") or []),
     }
 
 
@@ -720,6 +733,7 @@ def save_settings(client_id: str, req: BusinessRequest,
                                                          scheduling.DEFAULT_HORIZON_DAYS))
     if not schedule["days"] or not schedule["ranges"]:
         raise HTTPException(status_code=422, detail="Choose at least one open day and one time range")
+    schedule["closed"] = _clean_closed(req.closed_dates)
     cfg = copy.deepcopy(current)          # the cached parse is shared: never mutate it
     cfg.update({
         "business_name": req.business_name.strip(),

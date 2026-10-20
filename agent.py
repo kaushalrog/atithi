@@ -436,6 +436,12 @@ class ReceptionistAgent:
                     "desk call the customer back."
                 ),
             }
+        closed = scheduling.closures_on(self.config, date)
+        if closed and not slots:
+            reason = next((c["reason"] for c in closed if c.get("reason")), "")
+            return {"date": date, "available_slots": [],
+                    "note": "The business is closed on this day" + (f" ({reason})" if reason else "") +
+                            ". Tell the customer and offer the nearest open day."}
         return {"date": date, "available_slots": slots}
 
     def _book_appointment(self, customer_name, phone, service, date, time) -> dict:
