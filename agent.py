@@ -27,6 +27,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import notify
+import proof
 import perf
 import scheduling
 import storage
@@ -260,6 +261,9 @@ class ReceptionistAgent:
         self.system_prompt = self._render_system_prompt()
         self.llm = llm or default_llm()
         self.history: list[dict] = []
+        # Replies the record check stopped before the customer saw them
+        # (proof.py); the call record shows them to the owner.
+        self.caught: list[dict] = []
         # A random id that ties this conversation's perf measurements
         # together. Deliberately NOT the phone number or the Twilio SID.
         self.perf_id = secrets.token_hex(6)
@@ -325,13 +329,16 @@ class ReceptionistAgent:
         self.history.append({"role": "user", "text": user_message, "at": self.now()})
         messages = [{"role": "system", "text": self.system_prompt}]
         t0, rounds, outcome = time.perf_counter(), 0, "error"
+        correction: list[dict] = []     # the record-check nudge, sent once, never stored
+        nudged = False
         try:
             for _ in range(5):
                 rounds += 1
                 # Each model round trip is timed: a turn that needs three
                 # trips is three waits the customer sits through.
                 with perf.span("model.request", call=self.perf_id, round=rounds):
-                    response = self.llm.send(messages + self.history, TOOL_SCHEMAS)
+                    response = self.llm.send(messages + self.history + correction, TOOL_SCHEMAS)
+                correction = []
 
                 if response["tool_calls"]:
                     self.history.append(self.tool_call_entry(response["tool_calls"], response["text"]))
@@ -340,6 +347,23 @@ class ReceptionistAgent:
                     continue  # feed tool results back, get the model's next move
 
                 text = response["text"] or "Sorry, could you repeat that?"
+                # Proof, not promises: a reply that says "you're booked" must
+                # have a booking behind it (proof.py). The model gets ONE
+                # chance to fix it; after that the customer hears an honest
+                # fallback rather than a promise nobody will keep.
+                problems = proof.unbacked(text, self.history)
+                if problems:
+                    if not nudged:
+                        nudged = True
+                        self.caught.append({"kind": problems[0]["kind"], "said": text[:300],
+                                            "problem": problems[0]["problem"], "fixed": True})
+                        perf.event("proof.caught")
+                        correction = [{"role": "assistant", "text": text},
+                                      {"role": "user", "text": proof.nudge(problems)}]
+                        continue
+                    self.caught[-1]["fixed"] = False
+                    self.caught[-1]["said_after"] = text[:300]
+                    text = proof.SAFE_REPLY
                 self.history.append({"role": "assistant", "text": text, "at": self.now()})
                 outcome = "reply"
                 return text
@@ -356,6 +380,7 @@ class ReceptionistAgent:
     def reset(self):
         """Forget the conversation (the /reset command)."""
         self.history = []
+        self.caught = []
 
     # ---- tools -----------------------------------------------------------------
 

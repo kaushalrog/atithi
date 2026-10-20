@@ -57,6 +57,7 @@ import yaml
 from dotenv import load_dotenv
 
 import perf
+import proof
 import scheduling
 
 load_dotenv()
@@ -958,6 +959,9 @@ def log_call_from_agent(agent, channel: str, started: dt.datetime,
         # dashboard used to guess from the transcript, so a FAILED booking
         # attempt counted as a booked call (audit M1).
         "outcome": call_outcome(agent.history),
+        # Proof, not promises: every "you're booked" the agent said, checked
+        # against what the tools actually did (proof.py).
+        "proof": proof.report(agent.history, getattr(agent, "caught", None)),
     }
     if caller:
         # Who called is metadata, not something the customer said (audit M2).

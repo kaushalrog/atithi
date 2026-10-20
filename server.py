@@ -945,6 +945,20 @@ def _stats_from(calls, bookings, leads) -> dict:
         "bookings": sum(b["status"] == "confirmed" for b in bookings),
         "leads": len(leads),
         "conversion": round(100 * booked_calls / n_calls) if n_calls else 0,
+        "proof": _proof_totals(calls),
+    }
+
+
+def _proof_totals(calls) -> dict:
+    """Proof, not promises, across calls: claims made, claims a record
+    backs, false claims stopped before the customer heard them, and calls
+    the owner should look at. Calls saved before proof.py have no report."""
+    reports = [c["proof"] for c in calls if isinstance(c.get("proof"), dict)]
+    return {
+        "claims": sum(p.get("claims", 0) for p in reports),
+        "backed": sum(p.get("backed", 0) for p in reports),
+        "caught": sum(len(p.get("caught") or []) for p in reports),
+        "flagged_calls": sum(p.get("verdict") == "flagged" for p in reports),
     }
 
 

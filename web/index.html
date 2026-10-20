@@ -153,6 +153,18 @@
            background: var(--sunken); color: var(--ink2); }
   .badge.booked { background: var(--ok-soft); color: var(--ok); }
   .badge.lead { background: var(--amber-soft); color: var(--amber); }
+  .badge.verified { background: var(--acc-soft); color: var(--acc); }
+  .badge.flag { background: var(--danger-soft); color: var(--danger); }
+  .proof { display: flex; gap: 14px; align-items: center; }
+  .proof .ico { width: 38px; height: 38px; border-radius: 50%; background: var(--acc-soft); flex-shrink: 0;
+                display: flex; align-items: center; justify-content: center; }
+  .proof .ico .ic { stroke: var(--acc); }
+  .proof.warn .ico { background: var(--danger-soft); } .proof.warn .ico .ic { stroke: var(--danger); }
+  .proof .t1 { font-weight: 600; } .proof .t2 { font-size: .86rem; color: var(--muted); }
+  .proofnote { margin: 4px 0 10px; padding: 10px 12px; border-radius: var(--radius-sm); font-size: .86rem;
+               background: var(--danger-soft); color: var(--danger); line-height: 1.45; }
+  .proofnote.ok { background: var(--acc-soft); color: var(--acc); }
+  .proofnote div + div { margin-top: 6px; }
   .call .when { font-weight: 600; }
   .call .meta { color: var(--muted); font-size: .84rem; margin-left: auto; white-space: nowrap;
                 font-variant-numeric: tabular-nums; }
@@ -391,6 +403,10 @@
         <div class="stat"><div class="num" id="statBookings">–</div><div class="lbl">Bookings made</div></div>
         <div class="stat"><div class="num" id="statLeads">–</div><div class="lbl">Leads captured</div></div>
         <div class="stat"><div class="num" id="statConv">–</div><div class="lbl">Calls → bookings</div></div>
+      </div>
+      <div class="card proof" id="proofCard" hidden>
+        <div class="ico"><svg class="ic" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg></div>
+        <div><div class="t1" id="proofTitle"></div><div class="t2" id="proofSub"></div></div>
       </div>
       <div class="card">
         <h3>Activity — last 7 days</h3>
@@ -812,6 +828,7 @@ function renderAll() {
   setStat("statBookings", s.bookings);
   setStat("statLeads", s.leads);
   setStat("statConv", s.conversion, "%");
+  renderProof(s.proof);
   renderChart(DATA.calls);
   renderCalls($("recentCalls"), DATA.calls.slice(0, 4));
   renderCalls($("callsBox"), DATA.calls);
@@ -873,11 +890,40 @@ function renderCalls(box, calls) {
     // outcome comes from the server: what the call's tools actually achieved.
     if (c.outcome && c.outcome.booked) sum.appendChild(el("span", "badge booked", "booked"));
     else if (c.outcome && c.outcome.lead) sum.appendChild(el("span", "badge lead", "lead"));
+    if (c.proof && c.proof.verdict === "verified") sum.appendChild(el("span", "badge verified", "verified"));
+    if (c.proof && c.proof.verdict === "flagged") sum.appendChild(el("span", "badge flag", "check this call"));
     sum.appendChild(el("span", "meta", fmtDur(c.seconds) + " · " + c.turns + " turns"));
     det.appendChild(sum);
+    const note = proofNote(c.proof);
+    if (note) det.appendChild(note);
     det.appendChild(renderTranscript(c.transcript));
     box.appendChild(det);
   }
+}
+
+// Proof, not promises: what the record check found (proof.py on the server).
+function renderProof(p) {
+  const card = $("proofCard");
+  if (!p || (!p.claims && !p.caught)) { card.hidden = true; return; }
+  card.hidden = false;
+  card.classList.toggle("warn", p.flagged_calls > 0);
+  $("proofTitle").textContent = `${p.backed} of ${p.claims} promise${p.claims === 1 ? "" : "s"} backed by a real record`;
+  const bits = [];
+  if (p.caught) bits.push(`${p.caught} wrong promise${p.caught === 1 ? " was" : "s were"} stopped before the customer heard ${p.caught === 1 ? "it" : "them"}.`);
+  if (p.flagged_calls) bits.push(`${p.flagged_calls} call${p.flagged_calls === 1 ? " needs" : "s need"} a look (marked “check this call”).`);
+  if (!bits.length) bits.push("Every “you’re booked” is checked against your bookings before it is said.");
+  $("proofSub").textContent = bits.join(" ");
+}
+const PROBLEM = { no_action: "nothing was saved", wrong_time: "the time didn’t match the booking" };
+function proofNote(p) {
+  if (!p || (!(p.unbacked || []).length && !(p.caught || []).length)) return null;
+  const box = el("div", "proofnote" + ((p.unbacked || []).length ? "" : " ok"));
+  for (const u of p.unbacked || [])
+    box.appendChild(el("div", "", `Said “${u.said}”, but ${PROBLEM[u.problem] || u.problem}. Please call the customer to confirm.`));
+  for (const c of p.caught || [])
+    box.appendChild(el("div", "", `Stopped before the customer heard it: “${c.said}” (${PROBLEM[c.problem] || c.problem}). ` +
+      (c.fixed ? "The receptionist corrected itself." : "The customer was asked to repeat the details instead.")));
+  return box;
 }
 
 function renderTranscript(text) {

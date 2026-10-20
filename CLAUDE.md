@@ -106,6 +106,13 @@ AI receptionist for any Indian business that takes bookings (clinics, salons, re
   only PUBLIC surface: /widget.js + /chat iframe + /api/public/*; off per
   business by default, rate-limited per IP, capped per business per day,
   and its sessions can't use /api/voice or /api/tts.
+- Proof, not promises: proof.py (pure, English phrase rules) checks each
+  reply's claims (booked / cancelled / rescheduled / callback, plus spoken
+  time) against tool results. agent.chat gives the model ONE nudge for an
+  unbacked claim, then sends proof.SAFE_REPLY; the nudge is never stored in
+  history. Every call record has a "proof" report (phone/live: report only).
+  This is the runtime guard (design doc Approach C), separate from the
+  planned offline voxcheck.
 - Safety: VOXAGENT_ENV=test (tests, evals) disables the Sheets copy and makes
   writes to real data files raise. Live phone calls are off unless
   ENABLE_LIVE_CALLS=true; see docs/SAFE_TESTING.md before enabling.
