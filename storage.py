@@ -267,6 +267,14 @@ CREATE TABLE IF NOT EXISTS lead_followups (
     status TEXT NOT NULL DEFAULT 'new', note TEXT NOT NULL DEFAULT '',
     callback_on TEXT NOT NULL DEFAULT '', updated TEXT NOT NULL,
     PRIMARY KEY (client_id, lead_ts, phone));
+-- Customers Atithi owes a call: a missed call, busy lines, or a caller who
+-- asked for a person when nobody could take the transfer. callbacks.py dials
+-- them (only when switched on, only in opening hours).
+CREATE TABLE IF NOT EXISTS callbacks (
+    id INTEGER PRIMARY KEY, client_id TEXT NOT NULL, phone TEXT NOT NULL,
+    phone10 TEXT NOT NULL, reason TEXT NOT NULL, created TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending', updated TEXT NOT NULL, note TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS callbacks_by_client ON callbacks(client_id, created);
 """
 
 # One connection per thread (SQLite connections must not be shared across
@@ -702,6 +710,81 @@ def note_question(client_id: str, question: str) -> int:
     return n
 
 
+# ---- callbacks ----------------------------------------------------------------------
+
+CALLBACK_REPEAT_H = 6       # one callback per number per 6 hours, however often they ring
+CALLBACKS_PER_DAY = 30      # per business: a flood of missed calls can't run up a bill
+CALLBACK_STATUSES = ("pending", "calling", "done", "failed", "dry-run", "dismissed")
+
+
+def queue_callback(client_id: str, phone: str, reason: str,
+                   now: dt.datetime | None = None) -> str:
+    """Owe this number a call. Returns "queued", "pending" (already owed),
+    "recent" (called back in the last CALLBACK_REPEAT_H hours), "capped" (the
+    business hit today's limit) or "invalid" (not a phone number)."""
+    p10 = _phone10(phone)
+    if len(p10) < 10:
+        return "invalid"
+    now = now or dt.datetime.now()
+    stamp = now.isoformat(timespec="seconds")
+    since = (now - dt.timedelta(hours=CALLBACK_REPEAT_H)).isoformat(timespec="seconds")
+    conn = _bookings_db()
+    with _transaction(conn):
+        if conn.execute("SELECT 1 FROM callbacks WHERE client_id=? AND phone10=? AND status='pending'",
+                        (client_id, p10)).fetchone():
+            return "pending"
+        if conn.execute("SELECT 1 FROM callbacks WHERE client_id=? AND phone10=? AND created>=?",
+                        (client_id, p10, since)).fetchone():
+            return "recent"
+        today = conn.execute("SELECT COUNT(*) FROM callbacks WHERE client_id=? AND created>=?",
+                             (client_id, now.date().isoformat())).fetchone()[0]
+        if today >= CALLBACKS_PER_DAY:
+            return "capped"
+        conn.execute("INSERT INTO callbacks (client_id, phone, phone10, reason, created, updated) "
+                     "VALUES (?,?,?,?,?,?)",
+                     (client_id, str(phone).strip()[:20], p10, str(reason)[:200], stamp, stamp))
+    _invalidate(BOOKINGS_DB)
+    return "queued"
+
+
+def pending_callbacks(limit: int = 20) -> list[dict]:
+    rows = _bookings_db().execute(
+        "SELECT * FROM callbacks WHERE status='pending' ORDER BY created LIMIT ?", (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def claim_callback(callback_id: int) -> bool:
+    """pending -> calling, atomically: two workers can never dial the same row."""
+    conn = _bookings_db()
+    with _transaction(conn):
+        n = conn.execute("UPDATE callbacks SET status='calling', updated=? WHERE id=? AND status='pending'",
+                         (dt.datetime.now().isoformat(timespec="seconds"), callback_id)).rowcount
+    _invalidate(BOOKINGS_DB)
+    return n == 1
+
+
+def mark_callback(callback_id: int, status: str, note: str = "", client_id: str | None = None) -> bool:
+    if status not in CALLBACK_STATUSES:
+        raise ValueError(f"unknown callback status {status!r}")
+    conn = _bookings_db()
+    sql = "UPDATE callbacks SET status=?, note=?, updated=? WHERE id=?"
+    args = [status, note[:200], dt.datetime.now().isoformat(timespec="seconds"), callback_id]
+    if client_id is not None:
+        sql += " AND client_id=?"
+        args.append(client_id)
+    with _transaction(conn):
+        n = conn.execute(sql, args).rowcount
+    _invalidate(BOOKINGS_DB)
+    return n == 1
+
+
+def read_callbacks(client_id: str, limit: int = 50) -> list[dict]:
+    rows = _bookings_db().execute(
+        "SELECT id, phone, reason, created, status, updated, note FROM callbacks "
+        "WHERE client_id=? ORDER BY id DESC LIMIT ?", (client_id, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def open_questions(client_id: str) -> list[dict]:
     """Open questions, most asked first."""
     rows = _bookings_db().execute(
@@ -991,7 +1074,7 @@ TRACE_VERSION = 1
 _TOOL_TYPES = {"check_availability": "availability", "book_appointment": "book",
                "save_lead": "lead", "find_booking": "lookup", "cancel_booking": "cancel",
                "note_unanswered_question": "question",
-               "reschedule_booking": "reschedule"}
+               "reschedule_booking": "reschedule", "transfer_to_owner": "handoff"}
 _OK_STATUS = {"book": "confirmed", "lead": "saved", "cancel": "cancelled",
               "reschedule": "rescheduled"}
 
@@ -1004,6 +1087,8 @@ def call_outcome(history: list[dict]) -> dict:
             kind = _TOOL_TYPES.get(m["name"])
             if kind in ("book", "lead") and _action_ok(kind, m["result"]):
                 done.add(kind)
+            elif kind == "handoff" and m["result"].get("status") == "callback_saved":
+                done.add("lead")                 # the callback is saved as a lead
     return {"booked": "book" in done, "lead": "lead" in done}
 
 
@@ -1022,6 +1107,8 @@ def tool_raised(result: dict) -> bool:
 def _action_ok(kind: str, result: dict) -> bool:
     if tool_raised(result):
         return False
+    if kind == "handoff":
+        return result.get("status") in ("transferring", "callback_saved")
     if kind in _OK_STATUS:
         return result.get("status") == _OK_STATUS[kind]
     return True  # availability answers have no status: an answer is success

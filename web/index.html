@@ -92,7 +92,7 @@
   .topbar h1 { margin: 0; font-size: 1.15rem; font-weight: 600; }
   .datechip { font-size: .85rem; color: var(--muted); }
   .topbar .spacer { flex: 1; }
-  select, input[type=text], input[type=email], input[type=password], input[type=time], textarea {
+  select, input[type=text], input[type=email], input[type=password], input[type=time], input[type=tel], textarea {
     background: var(--surface); color: var(--ink); border: 1px solid var(--border-strong);
     border-radius: var(--radius-sm); padding: 9px 12px; font: inherit; font-size: .93rem; outline: none;
     transition: border-color .12s, box-shadow .12s;
@@ -204,7 +204,7 @@
              background: var(--surface); padding: 18px 20px; margin: 0 0 16px; }
   legend { font-weight: 600; padding: 0 8px; font-size: .95rem; }
   label.f { display: block; font-size: .85rem; color: var(--ink2); margin: 12px 0 6px; font-weight: 500; }
-  input[type=text] { width: 100%; }
+  input[type=text], input[type=tel] { width: 100%; }
   .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .rowline { display: grid; grid-template-columns: 2fr 1fr 36px; gap: 8px; margin-bottom: 8px; }
   .rowline2 { display: grid; grid-template-columns: 1fr 1.4fr 36px; gap: 8px; margin-bottom: 8px; }
@@ -426,6 +426,9 @@
 
     <!-- ============ CALLS ============ -->
     <section class="view hidden" id="view-calls">
+      <div class="card hidden" id="cbCard" style="margin-bottom:16px"><h3>Callbacks owed</h3>
+        <div class="empty" style="padding:0 0 8px">Missed calls and busy-line callers. Your receptionist rings them back while you're open, or mark one handled if you called yourself.</div>
+        <div id="cbBox"></div></div>
       <div class="card"><h3>All calls</h3><div id="callsBox"></div></div>
     </section>
 
@@ -535,6 +538,19 @@
           <option value="45">45 minutes</option>
           <option value="60">60 minutes</option>
         </select>
+      </fieldset>
+
+      <fieldset id="phoneLineSet">
+        <legend>Phone line</legend>
+        <div class="empty" style="padding:0 0 10px">These work once your phone line is live.</div>
+        <label class="f" style="margin-top:0">When a caller asks for a person, connect them to</label>
+        <input type="tel" id="handoffPhone" placeholder="e.g. +91 98765 43210 (leave empty to take a callback instead)">
+        <label class="toggle" style="font-size:.93rem;color:var(--ink2);white-space:normal;margin-top:12px">
+          <input type="checkbox" id="callbackBusy" checked>
+          When all lines are busy, promise a callback and ring the caller back</label>
+        <label class="toggle" style="font-size:.93rem;color:var(--ink2);white-space:normal;margin-top:8px">
+          <input type="checkbox" id="missedCall">
+          Missed-call mode: decline calls with a busy tone (free for the caller) and ring them back</label>
       </fieldset>
 
       <fieldset id="webChatSet">
@@ -751,6 +767,7 @@ async function loadAll() {
   DATA.calls = d.calls;
   DATA.bookings = d.bookings;
   DATA.leads = d.leads;
+  DATA.callbacks = d.callbacks || [];
   const qc = $("qCount");
   qc.textContent = d.open_questions || "";
   qc.classList.toggle("hidden", !d.open_questions);
@@ -832,6 +849,7 @@ function renderAll() {
   renderChart(DATA.calls);
   renderCalls($("recentCalls"), DATA.calls.slice(0, 4));
   renderCalls($("callsBox"), DATA.calls);
+  renderCallbacks(DATA.callbacks);
   renderBookings($("recentBookings"), DATA.bookings.slice(0, 5), true);
   renderBookings($("bookingsBox"), DATA.bookings, false);
   renderLeads($("leadsBox"), DATA.leads);
@@ -898,6 +916,36 @@ function renderCalls(box, calls) {
     if (note) det.appendChild(note);
     det.appendChild(renderTranscript(c.transcript));
     box.appendChild(det);
+  }
+}
+
+const CB_STATUS = { pending: "waiting", calling: "calling now", done: "called back", failed: "call failed",
+                    "dry-run": "not called (off)", dismissed: "closed" };
+function renderCallbacks(rows) {
+  const box = $("cbBox"); box.innerHTML = "";
+  $("cbCard").classList.toggle("hidden", !rows.length);
+  for (const c of rows) {
+    const item = el("div", "qitem");
+    const top = el("div"); top.style.cssText = "display:flex;gap:10px;align-items:center;flex-wrap:wrap";
+    top.appendChild(el("span", "", c.phone)).style.fontWeight = "600";
+    top.appendChild(el("span", "badge" + (c.status === "pending" ? " lead" : c.status === "done" ? " booked" : ""),
+                       CB_STATUS[c.status] || c.status));
+    const meta = top.appendChild(el("span", "", c.reason + " · " + fmtWhen(c.created)));
+    meta.style.cssText = "font-size:.84rem;color:var(--muted)";
+    if (c.status === "pending") {
+      const b = el("button", "btn ghost small", "Mark handled");
+      b.onclick = async () => {
+        try { await api("/api/callbacks/handled", { client_id: CLIENT, callback_id: c.id }); DASH_ETAG = null; await loadAll(); }
+        catch (e) { toast(e.message); }
+      };
+      top.appendChild(b);
+    }
+    item.appendChild(top);
+    if (c.note && (c.status === "failed" || c.status === "dismissed")) {
+      const n = item.appendChild(el("div", "", c.note));
+      n.style.cssText = "font-size:.84rem;color:var(--muted)";
+    }
+    box.appendChild(item);
   }
 }
 
@@ -1133,6 +1181,7 @@ function setFormMode(mode) {
     : "Tell us about your business — your agent answers ONLY from what you enter here, and starts taking calls and bookings immediately.";
   $("createBtn").textContent = edit ? "Save changes" : "Create my AI receptionist →";
   $("webChatSet").classList.toggle("hidden", !edit);      // switched on after the business exists
+  $("phoneLineSet").classList.toggle("hidden", !edit);
   $("formMsg").textContent = "";
 }
 // Greeting language first, then the other ticked languages.
@@ -1148,6 +1197,9 @@ function fillForm(s) {
   $("smsConfirm").checked = s.sms_confirmations !== false;
   $("closedRows").innerHTML = ""; (s.closed_dates || []).forEach(addClosedRow);
   $("webChat").checked = !!s.website_chat;
+  $("handoffPhone").value = s.handoff_phone || "";
+  $("callbackBusy").checked = s.callback_when_busy !== false;
+  $("missedCall").checked = !!s.missed_call_mode;
   showSnippet(s.website_chat && s.widget_key);
   $("bizName").value = s.business_name; $("bizPhone").value = s.phone;
   $("bizAddress").value = s.address; $("bizTimings").value = s.timings;
@@ -1213,6 +1265,9 @@ async function createBusiness() {
     slot_gap_min: parseInt($("slotGap").value, 10),
     languages: collectLanguages(),
     sms_confirmations: $("smsConfirm").checked,
+    handoff_phone: $("handoffPhone").value.trim(),
+    callback_when_busy: $("callbackBusy").checked,
+    missed_call_mode: $("missedCall").checked,
     business_type: $("bizType").value.trim(),
     booking_word: $("bookingWord").value,
     closed_dates: collectClosed(),

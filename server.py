@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 
 import auth
 import billing
+import callbacks
 import llm as llm_module
 import notify
 import perf
@@ -108,6 +109,12 @@ def _warm_up():
     if paused:
         print(f"  [bookings] NEW BOOKINGS ARE PAUSED: {paused}")
     print(_capacity_line())
+    # The callback dialer runs in the background and checks its switch
+    # (ENABLE_CALLBACKS) on every round, so it does nothing until turned on.
+    callbacks.start_worker(_callbacks_stop)
+
+
+_callbacks_stop = threading.Event()
 
 
 def _capacity_line() -> str:
@@ -258,6 +265,9 @@ class BusinessRequest(BaseModel):
     website_chat: bool = False                 # off until the owner switches it on
     business_type: str = Field(default="", max_length=60)   # "dental clinic", "restaurant"...
     booking_word: str = "appointment"          # what customers book: table, session, class...
+    handoff_phone: str = Field(default="", max_length=20)   # where "talk to a person" calls go
+    missed_call_mode: bool = False             # reject calls (busy tone) and ring back
+    callback_when_busy: bool = True            # lines busy: offer a callback
 
 
 def _clean_closed(entries: list[dict]) -> list[dict]:
@@ -268,6 +278,16 @@ def _clean_closed(entries: list[dict]) -> list[dict]:
         raise HTTPException(status_code=422, detail=f"Closed dates: {e}")
     today = dt.date.today().isoformat()
     return [c for c in cleaned if c["date"] >= today]
+
+
+def _clean_handoff_phone(phone: str) -> str:
+    """"" (no transfers) or a full international number Twilio can dial."""
+    if not (phone or "").strip():
+        return ""
+    e164 = notify.to_e164(phone)
+    if e164 is None:
+        raise HTTPException(status_code=422, detail="Transfer number: enter a full mobile number, e.g. +91 98765 43210")
+    return e164
 
 
 def _clean_booking_word(word: str) -> str:
@@ -723,6 +743,9 @@ def _settings_view(cfg: dict) -> dict:
         "website_chat": bool(cfg.get("website_chat")),
         "business_type": cfg.get("business_type", ""),
         "booking_word": cfg.get("booking_word") or "appointment",
+        "handoff_phone": cfg.get("handoff_phone", ""),
+        "missed_call_mode": bool(cfg.get("missed_call_mode")),
+        "callback_when_busy": cfg.get("callback_when_busy", True) is not False,
         "widget_key": cfg.get("widget_key", "") if cfg.get("website_chat") else "",
     }
 
@@ -777,6 +800,9 @@ def save_settings(client_id: str, req: BusinessRequest,
         "website_chat": bool(req.website_chat),
         "business_type": req.business_type.strip(),
         "booking_word": _clean_booking_word(req.booking_word),
+        "handoff_phone": _clean_handoff_phone(req.handoff_phone),
+        "missed_call_mode": bool(req.missed_call_mode),
+        "callback_when_busy": bool(req.callback_when_busy),
     })
     if cfg["website_chat"] and not cfg.get("widget_key"):
         # A PUBLIC key, separate from the owner's login code: it only opens chats.
@@ -1006,7 +1032,27 @@ def dashboard(client_id: str, response: Response,
         "billing": billing.status(client_id),
         "phone": _phone_status(client_id),
         "open_questions": len(storage.open_questions(client_id)),
+        "callbacks": storage.read_callbacks(client_id, 30),
     }
+
+
+class CallbackDoneRequest(BaseModel):
+    client_id: str
+    callback_id: int
+
+
+@app.post("/api/callbacks/handled")
+def callback_handled(req: CallbackDoneRequest,
+                     x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+                     x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+                     authorization: str | None = Header(default=None)):
+    """The owner rang the customer themselves: Atithi must not call too."""
+    authorize_client(req.client_id, x_client_key, x_admin_key, authorization)
+    pending = {c["id"] for c in storage.read_callbacks(req.client_id, 200) if c["status"] == "pending"}
+    if req.callback_id not in pending or not storage.mark_callback(
+            req.callback_id, "dismissed", "handled by the team", client_id=req.client_id):
+        raise HTTPException(status_code=404, detail="No pending callback with that id")
+    return {"ok": True}
 
 
 class CancelRequest(BaseModel):

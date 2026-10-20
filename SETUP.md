@@ -264,6 +264,35 @@ before switching it on for a real business.
 
 ---
 
+## Talk to a person, and missed-call callbacks
+
+Both need the live phone line (Part 3) and are **off** until you switch them on.
+
+**Live handoff** (`ENABLE_HANDOFF=true`): when a caller asks for a person, is
+upset, or has an urgent problem, the receptionist says "connecting you now"
+and the call rings the number in **Settings → Phone line**. If nobody picks up
+in 25 seconds the caller hears that the team will call back, and the caller is
+already in **Leads**. Without the switch (or on website chat) the receptionist
+takes their number as an URGENT callback lead instead.
+
+**Callbacks** (`ENABLE_CALLBACKS=true`): two ways a caller can be owed a call:
+
+* **Missed-call mode** (Settings → Phone line): your number declines calls with a
+  busy tone, which costs the caller nothing, and Atithi rings them back. This is
+  how many Indian customers already ask for a call.
+* **Lines busy**: instead of "call again later", the caller hears "we'll call you
+  back in a few minutes".
+
+The server rings them back by itself (checked every minute), but only while
+the business is open, once per number per 6 hours, at most 30 a day per
+business, and never more than a day late. They show on the **Calls** page
+under "Callbacks owed", where the owner can mark one handled if they called
+themselves. `python callbacks.py run` does one round by hand.
+
+**Cost:** each callback is an outbound Twilio call plus a Gemini Live session.
+
+---
+
 ## Website chat
 
 Customers can chat with your receptionist on your own website. In the portal,

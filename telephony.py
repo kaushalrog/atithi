@@ -88,6 +88,9 @@ LIVE_CONNECT_TIMEOUT_S = 10   # opening the Gemini Live session; the caller hear
 # the call, so they never hear it.) Twilio documents this behaviour; it is
 # UNVERIFIED on a real call until docs/SAFE_TESTING.md §5 is done.
 APOLOGY = "Sorry, we're having trouble right now. Please call back in a few minutes."
+HANDOFF_SPEAK_S = 4   # let "connecting you now" play before the line switches
+HANDOFF_RING_S = 25   # how long the owner's phone rings before we give up
+NO_ANSWER = "Sorry, nobody could take your call right now. The team will call you back soon."
 
 _call_io_pool = None
 _call_io_lock = threading.Lock()
@@ -151,6 +154,19 @@ def is_configured() -> bool:
 def live_calls_enabled() -> bool:
     """The master switch. Off unless .env says ENABLE_LIVE_CALLS=true."""
     return os.getenv("ENABLE_LIVE_CALLS", "").strip().lower() in ("1", "true", "yes")
+
+
+def handoff_enabled() -> bool:
+    """Live transfer to the owner's phone: OFF unless ENABLE_HANDOFF=true
+    (on top of live calls). It rings a real person's phone."""
+    return live_calls_enabled() and os.getenv("ENABLE_HANDOFF", "").strip().lower() == "true"
+
+
+def callbacks_enabled() -> bool:
+    """Ringing customers back (missed calls, busy lines): OFF unless
+    ENABLE_CALLBACKS=true, on top of live calls and a configured Twilio."""
+    return (live_calls_enabled() and is_configured()
+            and os.getenv("ENABLE_CALLBACKS", "").strip().lower() == "true")
 
 
 def max_concurrent_calls() -> int:
@@ -217,26 +233,32 @@ def _calls_in_flight() -> int:
         return _active_calls + len(_pending_tickets)
 
 
-def _ticket_signature(call_sid: str, client_id: str, caller: str, exp: str) -> str:
+def _ticket_signature(call_sid: str, client_id: str, caller: str, exp: str,
+                      purpose: str = "") -> str:
     # json.dumps of a list, not "a|b|c": a "|" inside a field can't make two
-    # different tickets sign the same bytes.
-    msg = json.dumps([call_sid, client_id, caller, exp]).encode()
+    # different tickets sign the same bytes. The purpose (e.g. "callback") is
+    # signed too, so nobody can turn an ordinary call into something else.
+    fields = [call_sid, client_id, caller, exp] + ([purpose] if purpose else [])
+    msg = json.dumps(fields).encode()
     return hmac.new(_STREAM_SECRET, msg, hashlib.sha256).hexdigest()
 
 
 def mint_stream_ticket(call_sid: str, client_id: str, caller: str,
-                       now: float | None = None) -> dict:
+                       now: float | None = None, purpose: str = "") -> dict:
     exp = str(int((now or time.time()) + STREAM_TICKET_TTL_S))
-    return {"call_sid": call_sid, "client_id": client_id, "caller": caller,
-            "exp": exp, "ticket": _ticket_signature(call_sid, client_id, caller, exp)}
+    ticket = {"call_sid": call_sid, "client_id": client_id, "caller": caller, "exp": exp,
+              "ticket": _ticket_signature(call_sid, client_id, caller, exp, purpose)}
+    if purpose:
+        ticket["purpose"] = purpose
+    return ticket
 
 
 def check_stream_ticket(params: dict, start_call_sid: str,
                         now: float | None = None) -> str | None:
     """None if the ticket is good (and consumes it); otherwise why not."""
     now = now or time.time()
-    fields = [str(params.get(k, "")) for k in ("call_sid", "client_id", "caller", "exp")]
-    call_sid, client_id, _caller, exp = fields
+    fields = [str(params.get(k, "")) for k in ("call_sid", "client_id", "caller", "exp", "purpose")]
+    call_sid, client_id, _caller, exp, _purpose = fields
     ticket = str(params.get("ticket", ""))
     if not (ticket and call_sid and client_id and exp):
         return "missing ticket"
@@ -316,8 +338,10 @@ class TwilioBridge:
     """
 
     def __init__(self, agent: ReceptionistAgent, live, send_json, caller: str = "",
-                 call_sid: str = ""):
+                 call_sid: str = "", purpose: str = ""):
         self.agent = agent
+        self.purpose = purpose
+        self._handoff_task = None
         self.live = live
         self.send_json = send_json
         self.caller = caller
@@ -362,7 +386,12 @@ class TwilioBridge:
             self.stream_sid = msg["start"]["streamSid"]
             # The receptionist speaks first on a phone call.
             self._greet_t = time.perf_counter()
-            await self.live.send_text("(the call has just connected — greet the caller briefly)")
+            if self.purpose == "callback":
+                await self.live.send_text(
+                    "(you are calling this customer BACK: they gave the business a missed call. "
+                    "Say you are calling from the business about their missed call, and ask how you can help)")
+            else:
+                await self.live.send_text("(the call has just connected — greet the caller briefly)")
         elif event == "media":
             mulaw = base64.b64decode(msg["media"]["payload"])
             await self.live.send_audio(self.converter.twilio_to_gemini(mulaw))
@@ -398,6 +427,8 @@ class TwilioBridge:
                 self._tool_job = call_io_pool().submit(self.turn.tool_calls, event["calls"])
                 results = await asyncio.wrap_future(self._tool_job)
                 await self.live.send_tool_results(results)
+                if self.agent.handoff and self._handoff_task is None:
+                    self._handoff_task = asyncio.create_task(self._transfer())
             elif kind == "user_text":
                 self._heard_t = time.perf_counter()
                 self.turn.user_text(event["text"])
@@ -406,6 +437,26 @@ class TwilioBridge:
             elif kind == "turn_complete":
                 self._reply_ended("complete")
                 self.turn.flush()
+
+    async def _transfer(self):
+        """Hand the live call to the owner's phone. The agent has just said
+        "connecting you now"; give that a moment to play, then ask Twilio to
+        replace this stream with a <Dial>. Twilio ends the stream, so the
+        call is saved the normal way; the transfer is in it as an action."""
+        await asyncio.sleep(HANDOFF_SPEAK_S)
+        to = str(self.agent.config.get("handoff_phone", ""))
+        try:
+            # A lead first: if nobody picks up, the owner still sees who it was.
+            await _off_loop(storage.save_lead, self.agent.client_id,
+                            self.agent.handoff.get("name", ""), self.caller,
+                            "Transferred to the team", "Call transferred: " + self.agent.handoff["reason"])
+            await _off_loop(transfer_call, self.call_sid, to)
+            perf.event("call.transferred")
+        except Exception as e:
+            perf.event("error.transfer")
+            print(f"  [phone] transfer failed ({type(e).__name__}); the agent keeps the call")
+            await self.live.send_text("(the transfer did not go through: apologise, and offer that "
+                                      "the team will call them back on this number)")
 
     def finish(self):
         """Call ended: flush any half-turn and log it like every other channel.
@@ -478,9 +529,20 @@ def _say(text: str) -> Response:
     ), media_type="application/xml")
 
 
-def _route_and_check(to_number: str, explicit: str | None) -> tuple[str, bool]:
+def _route_and_check(to_number: str, explicit: str | None) -> tuple[str, bool, dict]:
     client = resolve_client(to_number, explicit)
-    return client, billing.client_active(client)
+    cfg = storage.read_client_config(client) or {}
+    line = {"missed_call_mode": bool(cfg.get("missed_call_mode")),
+            "callback_when_busy": cfg.get("callback_when_busy", True) is not False}
+    return client, billing.client_active(client), line
+
+
+def _reject_busy() -> Response:
+    """Decline the call with a busy tone. In India a "missed call" is a
+    request to be called back, and a rejected call costs the caller nothing."""
+    return Response(content='<?xml version="1.0" encoding="UTF-8"?>'
+                            '<Response><Reject reason="busy"/></Response>',
+                    media_type="application/xml")
 
 
 def _business_problem(client_id: str) -> str | None:
@@ -502,7 +564,7 @@ async def twilio_voice(request: Request, client_id: str | None = None):
         raise HTTPException(status_code=403, detail="Invalid Twilio signature")
     # Routing and the plan check read client files: off the loop, because
     # live calls share it (cached reads are fast, but a cold one is not).
-    client, active = await _off_loop(_route_and_check, form.get("To", ""), client_id)
+    client, active, line = await _off_loop(_route_and_check, form.get("To", ""), client_id)
     # A call the business placed (from /admin) is answered by the customer:
     # their number is "To", and the lines were already checked when dialling,
     # so they must never hear "all our lines are busy" on picking up.
@@ -511,9 +573,22 @@ async def twilio_voice(request: Request, client_id: str | None = None):
     if not active:                                 # also False for an unknown business
         # Unpaid/expired business: apologize to the caller instead of answering.
         return _say("Sorry, this number is temporarily unavailable. Please try again later.")
+    # Missed-call mode and busy-line callbacks only when ringing customers
+    # back is switched on: never reject a caller we won't call back.
+    can_call_back = not outbound and bool(caller) and callbacks_enabled()
+    if can_call_back and line["missed_call_mode"]:
+        # Reject only if a callback is really owed; a caller we called back
+        # recently, or one past today's cap, is answered by the agent instead.
+        if await _off_loop(storage.queue_callback, client, caller, "missed call") in ("queued", "pending"):
+            perf.event("call.missed_call")
+            return _reject_busy()
     if not outbound and _calls_in_flight() >= max_concurrent_calls():
+        if can_call_back and line["callback_when_busy"]:
+            if await _off_loop(storage.queue_callback, client, caller, "lines busy") in ("queued", "pending"):
+                return _say("Sorry, all our lines are busy right now. We'll call you back in a few minutes.")
         return _say("Sorry, all our lines are busy right now. Please call again in a few minutes.")
-    ticket = mint_stream_ticket(form.get("CallSid", ""), client, caller)
+    purpose = "callback" if outbound and request.query_params.get("purpose") == "callback" else ""
+    ticket = mint_stream_ticket(form.get("CallSid", ""), client, caller, purpose=purpose)
     _reserve_slot(ticket["call_sid"], time.time() + PENDING_SLOT_S)
     # Every attribute value is XML-escaped: From and client_id arrive from
     # outside, and an f-string used to let them inject TwiML (audit L2).
@@ -618,6 +693,7 @@ async def twilio_stream(ws: WebSocket):
 
         # Every gate passed — only now do we spend resources on the call.
         agent = await _off_loop(ReceptionistAgent, client_id)
+        agent.can_transfer = handoff_enabled() and bool(agent.config.get("handoff_phone"))
         if caller:
             agent.system_prompt += (
                 f"\n\nThis is a PHONE CALL. The caller's number from caller ID is {caller} "
@@ -640,7 +716,8 @@ async def twilio_stream(ws: WebSocket):
                   "ending the stream so the caller hears the apology")
             return
         bridge = TwilioBridge(agent, live, ws.send_json, caller=caller,
-                              call_sid=str(params.get("call_sid", "")))
+                              call_sid=str(params.get("call_sid", "")),
+                              purpose=str(params.get("purpose", "")))
         await bridge.handle_twilio(start_msg)
 
         async def read_twilio():
@@ -707,8 +784,9 @@ async def twilio_stream(ws: WebSocket):
 
 # ---- outbound calls (started from the admin console) ---------------------------------
 
-def start_outbound_call(client_id: str, to_number: str) -> str:
+def start_outbound_call(client_id: str, to_number: str, purpose: str = "") -> str:
     """Ring a customer; when they pick up, the agent takes the call.
+    purpose="callback" makes the agent open with "you gave us a missed call".
     Returns the Twilio call SID."""
     cfg = twilio_config()
     if not live_calls_enabled():
@@ -738,11 +816,28 @@ def start_outbound_call(client_id: str, to_number: str) -> str:
     call = Client(cfg["sid"], cfg["token"]).calls.create(
         to=to_number,
         from_=from_number,
-        url=f"{cfg['public_url']}/twilio/voice?client_id={quote(client_id)}",
+        url=f"{cfg['public_url']}/twilio/voice?client_id={quote(client_id)}"
+            + ("&purpose=callback" if purpose == "callback" else ""),
         method="POST",
     )
     _reserve_slot(call.sid, time.time() + OUTBOUND_RING_S)
     return call.sid
+
+
+def transfer_call(call_sid: str, to_number: str) -> None:
+    """Replace a live call's stream with a <Dial> to the business's own phone.
+    Twilio ends the media stream when the call's TwiML is replaced."""
+    if not handoff_enabled():
+        raise RuntimeError("Transfers are off (ENABLE_HANDOFF).")
+    if not (call_sid and to_number):
+        raise RuntimeError("No call to transfer, or no number to transfer it to.")
+    cfg = twilio_config()
+    twiml = ('<?xml version="1.0" encoding="UTF-8"?><Response>'
+             f'<Dial timeout="{HANDOFF_RING_S}">{escape(to_number)}</Dial>'
+             f'<Say>{escape(NO_ANSWER)}</Say></Response>')
+    from twilio.rest import Client
+
+    Client(cfg["sid"], cfg["token"]).calls(call_sid).update(twiml=twiml)
 
 
 def set_voice_webhook(public_url: str) -> str:

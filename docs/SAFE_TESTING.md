@@ -153,6 +153,19 @@ booking, then read `notifications.jsonl`, which shows the number and the exact
 text. For the first real text, use a test business whose phone numbers are
 your own, and a Twilio trial account (it can only text verified numbers).
 
+## 6c. Handoff and callbacks (they ring real phones)
+
+Keep `ENABLE_HANDOFF` and `ENABLE_CALLBACKS` at `false` until live calls pass
+section 5. Then, one at a time, with a test business whose numbers are your own:
+
+1. **Handoff:** set Settings → Phone line to a second phone you hold. Call, ask
+   for a person, and check: the agent says it is connecting you, your second
+   phone rings, the lead appears, and an unanswered transfer ends with the
+   "team will call you back" message. A Twilio trial can only dial verified numbers.
+2. **Callbacks:** turn on missed-call mode, ring the number from your own phone,
+   and check that it is declined, that "Callbacks owed" lists you, and that the
+   callback arrives only inside opening hours and opens with the missed call.
+
 ## 7. Known gaps (tracked, not fixed yet)
 
 From `docs/AUDIT.md` and `TODOS.md`. All matter before a paying client goes live:

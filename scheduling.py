@@ -210,6 +210,25 @@ def _apply_closures(config: dict, slots: dict[str, list[str]]):
                 slots[date] = []
 
 
+def is_open(config: dict, now: dt.datetime) -> bool:
+    """Is the business open at `now` (its local time)? Opening days and
+    ranges from the schedule, minus closed dates and closed hours. Used
+    before ringing a customer back: never call people at 11 PM."""
+    schedule = config.get("schedule") or {}
+    if WEEKDAYS[now.weekday()] not in (schedule.get("days") or []):
+        return False
+    hhmm = now.strftime("%H:%M")
+    for e in closures_on(config, now.date().isoformat()):
+        if "from" not in e or e["from"] <= hhmm < e["to"]:
+            return False
+    for rng in schedule.get("ranges") or []:
+        if rng and len(rng) >= 2:
+            start, end = parse_time(rng[0]), parse_time(rng[1])
+            if start and end and start <= now.time() < end:
+                return True
+    return False
+
+
 def available_slots(config: dict, booked: set[tuple[str, str]],
                     now: dt.datetime | None = None) -> dict[str, list[str]]:
     """The agent's view of what's free.

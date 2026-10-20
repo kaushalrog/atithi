@@ -166,6 +166,24 @@ TOOL_SCHEMAS = [
             "required": ["question"],
         },
     },
+    {
+        "name": "transfer_to_owner",
+        "description": (
+            "Hand the customer to a person at the business: when they ask for a human, "
+            "are upset, or have an urgent problem or complaint you cannot solve. On a "
+            "phone call this may connect them live; otherwise it saves an urgent callback "
+            "for the team. Do not use it for questions you can answer or for bookings."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "description": "One short line: what they need."},
+                "name": {"type": "string", "description": "The customer's name, if known."},
+                "phone": {"type": "string", "description": "Their 10-digit number, if known."},
+            },
+            "required": ["reason"],
+        },
+    },
 ]
 _TOOL_NAMES = frozenset(t["name"] for t in TOOL_SCHEMAS)
 
@@ -264,6 +282,12 @@ class ReceptionistAgent:
         # Replies the record check stopped before the customer saw them
         # (proof.py); the call record shows them to the owner.
         self.caught: list[dict] = []
+        # Live handoff: the phone channel sets can_transfer when transfers are
+        # switched on and the business has a handoff_phone; the tool then
+        # sets `handoff` and the channel does the actual transfer. The agent
+        # never touches telephony itself (principle 3).
+        self.can_transfer = False
+        self.handoff: dict | None = None
         # A random id that ties this conversation's perf measurements
         # together. Deliberately NOT the phone number or the Twilio SID.
         self.perf_id = secrets.token_hex(6)
@@ -434,6 +458,9 @@ class ReceptionistAgent:
             n = storage.note_question(self.client_id, args.get("question", ""))
             return {"status": "noted", "times_asked": n} if n else \
                 {"status": "failed", "error": "No question given."}
+        if name == "transfer_to_owner":
+            return self._transfer_to_owner(args.get("reason", ""), args.get("name", ""),
+                                           args.get("phone", ""))
         if name == "save_lead":
             return self._save_lead(
                 args.get("name", ""),
@@ -600,6 +627,27 @@ class ReceptionistAgent:
         print(f"\n  ↻ BOOKING MOVED — {new['name']} | {date} {time} -> {new_date} {new_time}\n")
         return {"status": "rescheduled", "from": {"date": date, "time": time},
                 "to": {"date": new_date, "time": new_time}, "service": new["service"]}
+
+    def _transfer_to_owner(self, reason, name, phone) -> dict:
+        reason = " ".join(str(reason or "").split())[:200] or "wants to talk to the team"
+        if self.can_transfer and self.config.get("handoff_phone"):
+            if self.handoff is None:
+                self.handoff = {"reason": reason, "name": name, "phone": phone}
+            return {"status": "transferring",
+                    "note": "Tell the caller in one short sentence that you are connecting "
+                            "them to the team now, then stop talking."}
+        # No live transfer here (website chat, the test widget, or transfers
+        # are off): the next best thing is a callback the owner can't miss.
+        if not _phone_ok(phone):
+            return {"status": "failed",
+                    "error": "Nobody can take a live call right now. Ask for the customer's "
+                             "10-digit number so the team can call them back, then call "
+                             "transfer_to_owner again with it."}
+        storage.save_lead(self.client_id, name, phone, "Wants to talk to the team",
+                          "URGENT callback: " + reason)
+        print(f"\n  ☎ CALLBACK REQUESTED — {name or '(no name)'} | {phone} | {reason}\n")
+        return {"status": "callback_saved",
+                "note": "Tell the customer the team will call them back as soon as possible."}
 
     def _save_lead(self, name, phone, interest, note) -> dict:
         if not _phone_ok(phone):

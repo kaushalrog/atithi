@@ -113,6 +113,12 @@ AI receptionist for any Indian business that takes bookings (clinics, salons, re
   history. Every call record has a "proof" report (phone/live: report only).
   This is the runtime guard (design doc Approach C), separate from the
   planned offline voxcheck.
+- Handoff and callbacks: tool transfer_to_owner sets agent.handoff when the
+  channel allowed it (agent.can_transfer); telephony then replaces the stream
+  with a <Dial> to handoff_phone. Elsewhere it saves an URGENT callback lead.
+  Missed-call mode / busy lines queue rows in the callbacks table; callbacks.py
+  dials them (opening hours only, claimed atomically, capped). ENABLE_HANDOFF
+  and ENABLE_CALLBACKS are off by default, on top of ENABLE_LIVE_CALLS.
 - Safety: VOXAGENT_ENV=test (tests, evals) disables the Sheets copy and makes
   writes to real data files raise. Live phone calls are off unless
   ENABLE_LIVE_CALLS=true; see docs/SAFE_TESTING.md before enabling.
