@@ -6,6 +6,12 @@
 
 **An AI receptionist for any business that takes bookings**: clinics, salons, restaurants, gyms, coaching centres, repair shops and more, built for India. It talks to customers by text, voice or phone, checks real availability, books appointments into a database that refuses double-bookings, saves leads, and logs every conversation for the business owner.
 
+## Watch the demo
+
+[![Atithi demo: a customer books, an unknown question goes to the owner's inbox, WhatsApp, and the promise check](demo/atithi-demo-poster.jpg)](demo/atithi-demo.mp4)
+
+**[▶ Watch the 3½-minute narrated demo](demo/atithi-demo.mp4)** (recorded on throwaway data with the live model): a customer asks prices and books a slot; a question the business never answered goes to the owner's Questions inbox instead of being made up; every "you're booked" is verified against the real records; the owner switches the greeting to Telugu; a booking is cancelled in one click; a WhatsApp message is answered from the live calendar; and the phone-line settings for talking to a person and missed-call callbacks.
+
 **Proof, not promises.** Before a chat reply goes out, `proof.py` checks every "you're booked", "I've cancelled it" or "moved to 4 PM" against what the tools actually did. A claim with no booking behind it (or the wrong time) gets the model one chance to fix it; otherwise the customer hears an honest "let me take those details again". Every call record carries a proof report, and the dashboard shows "N of N promises backed by a real record". Phone calls are spoken as they are generated, so for them the report flags the call for the owner instead. The rules are English-only and deterministic: no second model, no extra cost on honest replies.
 
 A second piece is now being built on top of it: **voxcheck**, a free offline checker that compares what the agent *said* ("you're booked for 4 PM") with what the system *actually did*. Every call already writes the evidence it needs (see [Call records and traces](#call-records-and-traces)). The checker itself is planned but not built yet. See [Roadmap](#roadmap).

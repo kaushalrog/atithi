@@ -995,6 +995,7 @@ function transcriptAction(line) {
   const call = line.match(/^\[tool call\] (\w+)\(/);
   if (call) {
     const t = actionText(call[1], { date: pick("date"), time: pick("time"), service: pick("service"),
+                                    new_date: pick("new_date"), new_time: pick("new_time"),
                                     name: pick("customer_name") || pick("name"), phone: pick("phone") });
     return actionChip("txchip", t.icon, t.text, line);
   }
@@ -1328,7 +1329,12 @@ function actionText(name, a) {
     return { icon: "calendar", text: "Booking request: " + (a.service || "appointment") + ", " +
                                      fmtDay(a.date) + " at " + (a.time || "?") };
   if (name === "save_lead") return { icon: "user", text: "Saved a lead: " + (a.name || a.phone || "caller") };
-  return { icon: "tool", text: name };
+  if (name === "find_booking") return { icon: "calendar", text: "Looked up bookings for " + (a.phone || "the caller") };
+  if (name === "cancel_booking") return { icon: "x", text: "Cancel request: " + fmtDay(a.date) + " at " + (a.time || "?") };
+  if (name === "reschedule_booking") return { icon: "calendar", text: "Move request: " + fmtDay(a.date) + " " + (a.time || "?") + " → " + fmtDay(a.new_date) + " " + (a.new_time || "?") };
+  if (name === "note_unanswered_question") return { icon: "tool", text: "Noted the question for the owner" };
+  if (name === "transfer_to_owner") return { icon: "user", text: "Asked for a person" };
+  return { icon: "tool", text: name.replace(/_/g, " ") };
 }
 function actionChip(cls, icon, text, raw) {
   const chip = el("div", cls);
