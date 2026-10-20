@@ -100,6 +100,12 @@ AI receptionist for Indian small service businesses (clinics, salons, coaching i
   reminders via `python notify.py reminders`) on a bounded background queue;
   telephony.send_sms is the only sender. OFF unless ENABLE_SMS=true: until then
   every text is a dry-run line in notifications.jsonl (gitignored, PII).
+- Owner tools (portal): Settings (services, prices, hours, closed dates,
+  languages, texts, website chat), Questions (unanswered-question inbox ->
+  FAQ), lead follow-ups + CSV export, cancel/reschedule. Website chat is the
+  only PUBLIC surface: /widget.js + /chat iframe + /api/public/*; off per
+  business by default, rate-limited per IP, capped per business per day,
+  and its sessions can't use /api/voice or /api/tts.
 - Safety: VOXAGENT_ENV=test (tests, evals) disables the Sheets copy and makes
   writes to real data files raise. Live phone calls are off unless
   ENABLE_LIVE_CALLS=true; see docs/SAFE_TESTING.md before enabling.

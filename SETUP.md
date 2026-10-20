@@ -261,3 +261,26 @@ It texts tomorrow's appointments, each only once, so running it twice is safe.
 **India:** texts to Indian numbers are only delivered after DLT registration
 (your sender ID and message templates) with a telecom operator. Register
 before switching it on for a real business.
+
+---
+
+## Website chat
+
+Customers can chat with your receptionist on your own website. In the portal,
+open **Settings → Website chat**, tick the box and save. A one-line snippet
+appears; paste it into your website just before `</body>`:
+
+```
+<script src="https://YOUR-ATITHI-SERVER/widget.js" data-atithi="wk_..." async></script>
+```
+
+It adds a chat button in the corner. The chat runs in a frame served by your
+Atithi server, so it can't read your website and your owner login code is
+never on the page. Chats appear in **Calls** with the channel `website`.
+
+It's public, so it's capped: 10 new chats per visitor per 10 minutes, 30 open
+chats per business, 300 messages per business per day (set
+`widget_daily_limit` in the business YAML to change it) and 500 characters per
+message. Past the daily cap, visitors are asked to phone instead and no model
+call is made. Your Atithi server must be reachable over HTTPS at a public
+address for the snippet to work on a live website.

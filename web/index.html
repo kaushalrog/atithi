@@ -513,6 +513,18 @@
         </select>
       </fieldset>
 
+      <fieldset id="webChatSet">
+        <legend>Website chat</legend>
+        <label class="toggle" style="font-size:.93rem;color:var(--ink2);white-space:normal">
+          <input type="checkbox" id="webChat">
+          Let customers chat with your receptionist on your own website</label>
+        <div id="webChatSnippet" class="hidden" style="margin-top:12px">
+          <label class="f" style="margin-top:0">Paste this into your website, just before &lt;/body&gt;</label>
+          <textarea id="snippetText" rows="2" readonly style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.82rem"></textarea>
+          <button type="button" class="btn ghost small" id="copySnippet" style="margin-top:8px">Copy</button>
+        </div>
+      </fieldset>
+
       <fieldset>
         <legend>Holidays &amp; closed dates</legend>
         <div class="empty" style="padding:0 0 10px">Your receptionist won't offer these, and tells customers you're closed. Leave the hours empty to close the whole day.</div>
@@ -1058,6 +1070,7 @@ function setFormMode(mode) {
     ? "Your receptionist answers only from these details. Changes apply from the next conversation."
     : "Tell us about your business — your agent answers ONLY from what you enter here, and starts taking calls and bookings immediately.";
   $("createBtn").textContent = edit ? "Save changes" : "Create my AI receptionist →";
+  $("webChatSet").classList.toggle("hidden", !edit);      // switched on after the business exists
   $("formMsg").textContent = "";
 }
 // Greeting language first, then the other ticked languages.
@@ -1072,6 +1085,8 @@ function fillForm(s) {
   $("greetLang").value = langs[0];
   $("smsConfirm").checked = s.sms_confirmations !== false;
   $("closedRows").innerHTML = ""; (s.closed_dates || []).forEach(addClosedRow);
+  $("webChat").checked = !!s.website_chat;
+  showSnippet(s.website_chat && s.widget_key);
   $("bizName").value = s.business_name; $("bizPhone").value = s.phone;
   $("bizAddress").value = s.address; $("bizTimings").value = s.timings;
   $("serviceRows").innerHTML = ""; s.services.forEach(x => addServiceRow([x.name, x.price]));
@@ -1097,6 +1112,11 @@ async function openSettings() {
     showView("settings");
   } catch (e) { toast(e.message, 5000); }
 }
+function showSnippet(key) {
+  $("webChatSnippet").classList.toggle("hidden", !key);
+  if (key) $("snippetText").value =
+    `<script src="${location.origin}/widget.js" data-atithi="${key}" async></` + `script>`;
+}
 async function saveSettings(payload) {
   const res = await fetch("/api/business/" + encodeURIComponent(CLIENT) + "/settings", {
     method: "PUT", headers: { ...authHeaders(), "Content-Type": "application/json" },
@@ -1104,6 +1124,7 @@ async function saveSettings(payload) {
   });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
   const saved = await res.json();
+  showSnippet(saved.website_chat && saved.widget_key);
   if (AUTH.role !== "admin") {
     AUTH.business_name = saved.business_name;
     localStorage.setItem("voxagent_auth", JSON.stringify(AUTH));
@@ -1130,6 +1151,7 @@ async function createBusiness() {
     languages: collectLanguages(),
     sms_confirmations: $("smsConfirm").checked,
     closed_dates: collectClosed(),
+    website_chat: $("webChat").checked,
   };
   if (!payload.business_name || !services.length) {
     msg.className = "formmsg err";
@@ -1478,6 +1500,10 @@ $("clientSelect").onchange = () => {
 $("addBizBtn").onclick = () => { setFormMode("create"); showView("onboard"); };
 $("settingsNav").onclick = openSettings;
 $("addClosed").onclick = () => addClosedRow();
+$("copySnippet").onclick = async () => {
+  try { await navigator.clipboard.writeText($("snippetText").value); toast("Copied. Paste it into your website."); }
+  catch (e) { $("snippetText").select(); }
+};
 document.querySelectorAll("[data-export]").forEach(b => b.onclick = () => exportCsv(b.dataset.export));
 $("cancelOnboard").onclick = () => showView("dashboard");
 $("createBtn").onclick = createBusiness;

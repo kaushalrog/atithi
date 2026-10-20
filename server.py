@@ -26,7 +26,7 @@ import uuid
 import webbrowser
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
@@ -253,6 +253,7 @@ class BusinessRequest(BaseModel):
     languages: list[str] = ["en"]       # first = the greeting language
     sms_confirmations: bool = True      # still needs ENABLE_SMS=true to actually send
     closed_dates: list[dict[str, str]] = []   # [{date, from?, to?, reason?}]
+    website_chat: bool = False                 # off until the owner switches it on
 
 
 def _clean_closed(entries: list[dict]) -> list[dict]:
@@ -339,6 +340,15 @@ def get_session(session_id: str) -> dict:
     return session
 
 
+def _owner_session(session_id: str) -> dict:
+    """A session from the owner's own test widget. Voice and speech cost
+    money or capacity, so a public website-chat session can't use them."""
+    session = get_session(session_id)
+    if session.get("channel", "web-test") != "web-test":
+        raise HTTPException(status_code=403, detail="Not available for website chat")
+    return session
+
+
 def purge_idle_sessions():
     """Drop sessions idle for 2 h. A scan of at most MAX_SESSIONS dicts —
     microseconds — so it runs on every request, not only at session start.
@@ -390,7 +400,7 @@ def run_turn(session: dict, message: str) -> dict:
             for call in msg["tool_calls"]:
                 tools.append({"name": call["name"], "args": call["args"]})
     session["last_activity"] = dt.datetime.now()
-    storage.log_call_from_agent(agent, "web-test", session["started"],
+    storage.log_call_from_agent(agent, session.get("channel", "web-test"), session["started"],
                                 call_id=session["call_id"])
     return {"reply": reply, "tools": tools}
 
@@ -697,6 +707,8 @@ def _settings_view(cfg: dict) -> dict:
         "languages": list(cfg.get("languages") or ["en"]),
         "sms_confirmations": cfg.get("sms_confirmations", True) is not False,
         "closed_dates": list(sched.get("closed") or []),
+        "website_chat": bool(cfg.get("website_chat")),
+        "widget_key": cfg.get("widget_key", "") if cfg.get("website_chat") else "",
     }
 
 
@@ -747,7 +759,11 @@ def save_settings(client_id: str, req: BusinessRequest,
         "schedule": schedule,
         "languages": _clean_languages(req.languages),
         "sms_confirmations": bool(req.sms_confirmations),
+        "website_chat": bool(req.website_chat),
     })
+    if cfg["website_chat"] and not cfg.get("widget_key"):
+        # A PUBLIC key, separate from the owner's login code: it only opens chats.
+        cfg["widget_key"] = "wk_" + secrets.token_urlsafe(12)
     cfg.pop("slots", None)                 # a saved rule replaces any legacy dated slots
     storage.write_client_config(client_id, cfg)
     return _settings_view(cfg)
@@ -767,15 +783,22 @@ def create_session(req: SessionRequest,
         agent = ReceptionistAgent(req.client_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"No client '{req.client_id}'")
+    session_id = _open_session(req.client_id, agent, "web-test", MAX_SESSIONS_PER_BUSINESS)
+    return {"session_id": session_id, "business_name": agent.config["business_name"]}
+
+
+def _open_session(client_id: str, agent, channel: str, cap: int) -> str:
+    """Register a conversation; each (business, channel) has its own pool, so
+    website visitors can never push out the owner's test calls."""
     session_id = uuid.uuid4().hex
     now = dt.datetime.now()
     with _sessions_lock:      # count and insert together, or two requests both fit
         if len(sessions) >= MAX_SESSIONS:
             raise HTTPException(status_code=429,
-                                detail="Too many test calls are open right now — try again shortly.")
+                                detail="Too many conversations are open right now — try again shortly.")
         mine = [(v["last_activity"], sid) for sid, v in sessions.items()
-                if v["client_id"] == req.client_id]
-        if len(mine) >= MAX_SESSIONS_PER_BUSINESS:
+                if v["client_id"] == client_id and v.get("channel", "web-test") == channel]
+        if len(mine) >= cap:
             # Make room by dropping this business's OWN oldest idle session
             # (its call record is already on disk). Refusing instead locked
             # an owner out for 2 hours after 20 demo clicks. A session that
@@ -788,13 +811,14 @@ def create_session(req: SessionRequest,
             del sessions[min(idle)[1]]
         sessions[session_id] = {
             "agent": agent,
-            "client_id": req.client_id,
+            "client_id": client_id,
+            "channel": channel,
             "call_id": now.strftime("%Y%m%d_%H%M%S_") + session_id[:6],
             "started": now,
             "last_activity": now,
             "lock": threading.Lock(),
         }
-    return {"session_id": session_id, "business_name": agent.config["business_name"]}
+    return session_id
 
 
 class EndSessionRequest(BaseModel):
@@ -842,7 +866,7 @@ def _chat_turn(session: dict, message: str) -> dict:
 @app.post("/api/voice")
 def voice(session_id: str = Form(...), audio: UploadFile = File(...)):
     """Browser-recorded audio in -> transcript + agent reply out."""
-    session = get_session(session_id)
+    session = _owner_session(session_id)
     data = audio.file.read(MAX_VOICE_BYTES + 1)
     if len(data) > MAX_VOICE_BYTES:
         raise HTTPException(status_code=413, detail="Recording too long — keep a turn under a minute")
@@ -864,7 +888,7 @@ def speak(req: TTSRequest):
     Requires a live test-call session: without one this endpoint was a free,
     unlimited text-to-speech proxy for anyone who found the URL (audit M4).
     """
-    get_session(req.session_id)
+    _owner_session(req.session_id)
     clean = re.sub(r"[*_#`]", "", req.text)
     # Straight from the network into the response — no temp file round trip.
     try:
@@ -972,6 +996,111 @@ def owner_cancel_booking(req: CancelRequest,
         raise HTTPException(status_code=404, detail="That booking is not confirmed any more")
     notify.booking_event(req.client_id, "cancelled", done)
     return {"ok": True, "booking": done}
+
+
+# ---------- website chat (public: the business's own customers) ------------------
+#
+# The business pastes <script src=".../widget.js" data-atithi="wk_..."> into its
+# website. That adds a button which opens /chat in an iframe served from HERE,
+# so every request below is same-origin and the owner's login code never
+# appears on a public page. These endpoints need no login, so everything is
+# capped: sessions per visitor IP, conversations per business, messages per
+# business per day, message length.
+
+WIDGET_SESSIONS_PER_BUSINESS = 30
+WIDGET_MAX_CHARS = 500
+WIDGET_DAILY_TURNS = 300                    # per business; `widget_daily_limit` overrides
+WIDGET_NEW_SESSIONS_PER_IP = 10             # per WIDGET_IP_WINDOW
+WIDGET_IP_WINDOW = dt.timedelta(minutes=10)
+_widget_lock = threading.Lock()
+_widget_ips: dict[str, list[dt.datetime]] = {}
+_widget_turns: dict[tuple[str, str], int] = {}
+
+
+def _widget_business(key: str) -> dict:
+    """The business a public widget key belongs to, if its website chat is on."""
+    for entry in storage.all_clients():
+        cfg = entry["config"]
+        if key and cfg.get("widget_key") and same_secret(key, cfg["widget_key"]):
+            if not cfg.get("website_chat"):
+                break
+            return entry
+    raise HTTPException(status_code=404, detail="This chat isn't available")
+
+
+def _ip_allowed(ip: str) -> bool:
+    now = dt.datetime.now()
+    with _widget_lock:
+        if len(_widget_ips) > 10_000:                       # bounded memory
+            _widget_ips.clear()
+        recent = [t for t in _widget_ips.get(ip, []) if now - t < WIDGET_IP_WINDOW]
+        if len(recent) >= WIDGET_NEW_SESSIONS_PER_IP:
+            _widget_ips[ip] = recent
+            return False
+        _widget_ips[ip] = recent + [now]
+        return True
+
+
+def _count_turn(client_id: str, limit: int) -> bool:
+    """Count one website message; False once today's limit is reached."""
+    day = dt.date.today().isoformat()
+    with _widget_lock:
+        for key in [k for k in _widget_turns if k[1] != day]:
+            del _widget_turns[key]                          # yesterday's counts
+        n = _widget_turns.get((client_id, day), 0)
+        if n >= limit:
+            return False
+        _widget_turns[(client_id, day)] = n + 1
+        return True
+
+
+class PublicSessionRequest(BaseModel):
+    key: str = Field(max_length=64)
+
+
+class PublicChatRequest(BaseModel):
+    session_id: str = Field(max_length=64)
+    message: str = Field(max_length=WIDGET_MAX_CHARS)
+
+
+@app.get("/chat", response_class=HTMLResponse)
+def chat_page():
+    return _page("chat.html")
+
+
+@app.get("/widget.js")
+def widget_js():
+    return Response(content=_page("widget.js"), media_type="application/javascript",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+
+@app.post("/api/public/session")
+def public_session(req: PublicSessionRequest, request: Request):
+    entry = _widget_business(req.key)
+    client_id, cfg = entry["client_id"], entry["config"]
+    if not billing.client_active(client_id):
+        raise HTTPException(status_code=404, detail="This chat isn't available")
+    if not _ip_allowed(request.client.host if request.client else "?"):
+        raise HTTPException(status_code=429, detail="Too many chats started — please wait a few minutes.")
+    agent = ReceptionistAgent(client_id)
+    session_id = _open_session(client_id, agent, "website", WIDGET_SESSIONS_PER_BUSINESS)
+    return {"session_id": session_id, "business_name": cfg.get("business_name", "")}
+
+
+@app.post("/api/public/chat")
+def public_chat(req: PublicChatRequest):
+    session = get_session(req.session_id)
+    if session.get("channel") != "website":
+        raise HTTPException(status_code=404, detail="Unknown or expired session")
+    cfg = storage.read_client_config(session["client_id"]) or {}
+    limit = int(cfg.get("widget_daily_limit") or WIDGET_DAILY_TURNS)
+    with one_turn_at_a_time(session):
+        if not _count_turn(session["client_id"], limit):
+            phone = cfg.get("phone", "").strip()
+            return {"reply": "We're getting a lot of messages right now — please call us"
+                             + (f" on {phone}" if phone else "") + ". Thank you!", "busy": True}
+        out = _chat_turn(session, req.message)
+        return {"reply": out["reply"], **({"ended": True} if out.get("ended") else {})}
 
 
 # ---------- questions the receptionist couldn't answer -----------------------
