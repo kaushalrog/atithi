@@ -4,7 +4,7 @@
 
 *Every caller, welcomed.* Named after **Atithi Devo Bhava**, "the guest is God": how a good front desk treats every caller. (Formerly VoxAgent; the code, folder and settings still use the `voxagent` name.)
 
-**An AI receptionist for Indian small service businesses** (clinics, salons, coaching institutes). It talks to customers by text, voice or phone, checks real availability, books appointments into a database that refuses double-bookings, saves leads, and logs every conversation for the business owner.
+**An AI receptionist for any business that takes bookings**: clinics, salons, restaurants, gyms, coaching centres, repair shops and more, built for India. It talks to customers by text, voice or phone, checks real availability, books appointments into a database that refuses double-bookings, saves leads, and logs every conversation for the business owner.
 
 A second piece is now being built on top of it: **voxcheck**, a free offline checker that compares what the agent *said* ("you're booked for 4 PM") with what the system *actually did*. Every call already writes the evidence it needs (see [Call records and traces](#call-records-and-traces)). The checker itself is planned but not built yet. See [Roadmap](#roadmap).
 

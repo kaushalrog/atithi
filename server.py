@@ -1,6 +1,7 @@
 """server.py — the Atithi business portal.
 
-This is the page a BUSINESS OWNER uses (the clinic, salon, institute):
+This is the page a BUSINESS OWNER uses (any business that takes bookings:
+a clinic, salon, restaurant, gym, coaching centre, repair shop...):
   1. Onboard: fill a form with their business details -> we write
      clients/<client_id>.yaml (the multi-tenant principle as a web form).
   2. The AI receptionist handles conversations for them.
@@ -166,8 +167,9 @@ DEFAULT_FALLBACK = (
     "If you are unsure about anything, or the customer asks something not "
     "covered in the business information, say that the front desk will call "
     "them back with the exact details. NEVER guess or invent prices, offers, "
-    "or medical advice."
+    "or professional advice."
 )
+BOOKING_WORDS = ("appointment", "reservation", "table", "session", "class", "service visit", "slot")
 
 
 # ---------- request models ----------------------------------------------------
@@ -254,6 +256,8 @@ class BusinessRequest(BaseModel):
     sms_confirmations: bool = True      # still needs ENABLE_SMS=true to actually send
     closed_dates: list[dict[str, str]] = []   # [{date, from?, to?, reason?}]
     website_chat: bool = False                 # off until the owner switches it on
+    business_type: str = Field(default="", max_length=60)   # "dental clinic", "restaurant"...
+    booking_word: str = "appointment"          # what customers book: table, session, class...
 
 
 def _clean_closed(entries: list[dict]) -> list[dict]:
@@ -264,6 +268,13 @@ def _clean_closed(entries: list[dict]) -> list[dict]:
         raise HTTPException(status_code=422, detail=f"Closed dates: {e}")
     today = dt.date.today().isoformat()
     return [c for c in cleaned if c["date"] >= today]
+
+
+def _clean_booking_word(word: str) -> str:
+    word = (word or "appointment").strip().lower()
+    if word not in BOOKING_WORDS:
+        raise HTTPException(status_code=422, detail=f"Bookings must be one of: {', '.join(BOOKING_WORDS)}")
+    return word
 
 
 def _clean_languages(codes: list[str]) -> list[str]:
@@ -665,6 +676,8 @@ def create_business(req: BusinessRequest,
         "fallback": req.fallback.strip() or DEFAULT_FALLBACK,
         "languages": _clean_languages(req.languages),
         "sms_confirmations": bool(req.sms_confirmations),
+        "business_type": req.business_type.strip(),
+        "booking_word": _clean_booking_word(req.booking_word),
         # Every new business starts on a free trial; after that the owner
         # pays and the admin activates (see billing.py).
         "billing": billing.new_trial(),
@@ -708,6 +721,8 @@ def _settings_view(cfg: dict) -> dict:
         "sms_confirmations": cfg.get("sms_confirmations", True) is not False,
         "closed_dates": list(sched.get("closed") or []),
         "website_chat": bool(cfg.get("website_chat")),
+        "business_type": cfg.get("business_type", ""),
+        "booking_word": cfg.get("booking_word") or "appointment",
         "widget_key": cfg.get("widget_key", "") if cfg.get("website_chat") else "",
     }
 
@@ -760,6 +775,8 @@ def save_settings(client_id: str, req: BusinessRequest,
         "languages": _clean_languages(req.languages),
         "sms_confirmations": bool(req.sms_confirmations),
         "website_chat": bool(req.website_chat),
+        "business_type": req.business_type.strip(),
+        "booking_word": _clean_booking_word(req.booking_word),
     })
     if cfg["website_chat"] and not cfg.get("widget_key"):
         # A PUBLIC key, separate from the owner's login code: it only opens chats.

@@ -441,6 +441,14 @@
         <legend>Business</legend>
         <div class="pair">
           <div><label class="f">Business name *</label><input type="text" id="bizName" placeholder="e.g. Lakshmi Beauty Salon"></div>
+          <div><label class="f">Type of business</label><input type="text" id="bizType" list="bizTypes" placeholder="e.g. restaurant, gym, dental clinic"></div>
+          <div><label class="f">Customers book a…</label>
+            <select id="bookingWord" style="max-width:none;width:100%">
+              <option value="appointment">appointment</option><option value="reservation">reservation</option>
+              <option value="table">table</option><option value="session">session</option>
+              <option value="class">class</option><option value="service visit">service visit</option>
+              <option value="slot">slot</option>
+            </select></div>
           <div><label class="f">Phone</label><input type="text" id="bizPhone" placeholder="+91 …"></div>
         </div>
         <label class="f">Address</label>
@@ -495,7 +503,7 @@
 
       <fieldset>
         <legend>Appointment slots</legend>
-        <label class="f">Days open for appointments</label>
+        <label class="f">Days open for bookings</label>
         <div class="days" id="dayBoxes"></div>
         <label class="f">Appointment hours</label>
         <div class="times">
@@ -538,6 +546,14 @@
     </section>
   </main>
 </div>
+
+<datalist id="bizTypes">
+  <option value="dental clinic"><option value="medical clinic"><option value="beauty salon">
+  <option value="spa"><option value="restaurant"><option value="cafe"><option value="gym">
+  <option value="yoga studio"><option value="coaching institute"><option value="car service centre">
+  <option value="repair shop"><option value="veterinary clinic"><option value="photography studio">
+  <option value="consultancy">
+</datalist>
 
 <!-- ============ TEST-CALL WIDGET ============ -->
 <div class="overlay hidden" id="testOverlay">
@@ -1089,6 +1105,7 @@ function fillForm(s) {
   showSnippet(s.website_chat && s.widget_key);
   $("bizName").value = s.business_name; $("bizPhone").value = s.phone;
   $("bizAddress").value = s.address; $("bizTimings").value = s.timings;
+  $("bizType").value = s.business_type || ""; $("bookingWord").value = s.booking_word || "appointment";
   $("serviceRows").innerHTML = ""; s.services.forEach(x => addServiceRow([x.name, x.price]));
   if (!s.services.length) addServiceRow();
   $("faqRows").innerHTML = ""; s.faq.forEach(x => addFaqRow([x.q, x.a]));
@@ -1150,6 +1167,8 @@ async function createBusiness() {
     slot_gap_min: parseInt($("slotGap").value, 10),
     languages: collectLanguages(),
     sms_confirmations: $("smsConfirm").checked,
+    business_type: $("bizType").value.trim(),
+    booking_word: $("bookingWord").value,
     closed_dates: collectClosed(),
     website_chat: $("webChat").checked,
   };

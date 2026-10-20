@@ -298,6 +298,8 @@ class ReceptionistAgent:
             policies=policies,
             fallback_instruction=cfg.get("fallback", ""),
             language_instruction=language_instruction(cfg),
+            business_type=(cfg.get("business_type") or "a local business").strip(),
+            booking_word=(cfg.get("booking_word") or "appointment").strip(),
             today=today.strftime("%A, %Y-%m-%d"),
         )
         with _prompt_lock:

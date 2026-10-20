@@ -4,7 +4,7 @@ Product name since 2026-10-20: **Atithi** ("Atithi Devo Bhava", the guest is God
 tagline "Every caller, welcomed."). The rename is UI and docs only: code identifiers,
 env vars (`VOXAGENT_*`), file names and the `voxagent_auth` browser key keep the old name.
 
-AI receptionist for Indian small service businesses (clinics, salons, coaching institutes).
+AI receptionist for any Indian business that takes bookings (clinics, salons, restaurants, gyms, coaching centres, repair shops...). `business_type` and `booking_word` in the client YAML adapt the prompt and copy.
 
 **Long-term vision:** a voice agent that answers/makes phone calls in multiple languages
 (English, Telugu, Hindi), books appointments automatically, and logs every conversation.
