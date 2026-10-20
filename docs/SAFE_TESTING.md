@@ -166,6 +166,14 @@ section 5. Then, one at a time, with a test business whose numbers are your own:
    and check that it is declined, that "Callbacks owed" lists you, and that the
    callback arrives only inside opening hours and opens with the missed call.
 
+## 6d. WhatsApp
+
+`ENABLE_WHATSAPP` stays `false` until you have tried it in Twilio's sandbox,
+which only reaches phones that joined it (yours). Check: a booking made over
+WhatsApp appears in Bookings and the conversation under Calls, a photo gets the
+"please type it" reply, and a message to a number not mapped to a business
+gets the short "not taking messages" reply.
+
 ## 7. Known gaps (tracked, not fixed yet)
 
 From `docs/AUDIT.md` and `TODOS.md`. All matter before a paying client goes live:

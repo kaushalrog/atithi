@@ -277,6 +277,10 @@ async function showConsole() {
     ["Phone system (Twilio)", data.status.twilio, phoneHint, keys && !live ? "off" : ""],
     ["Google Sheets", data.status.sheets, "optional — gets a copy of each booking", "off"],
     ["New bookings", !data.status.bookings_paused, "PAUSED — " + data.status.bookings_paused],
+    ["Customer texts", data.status.sms, "off — ENABLE_SMS (SETUP.md)", "off"],
+    ["Talk to a person", data.status.handoff, "off — ENABLE_HANDOFF (SETUP.md)", "off"],
+    ["Missed-call callbacks", data.status.callbacks, "off — ENABLE_CALLBACKS (SETUP.md)", "off"],
+    ["WhatsApp", data.status.whatsapp, "off — ENABLE_WHATSAPP (SETUP.md)", "off"],
   ];
   for (const [name, ok, hint, offState] of items) {
     const d = el("div", "item");

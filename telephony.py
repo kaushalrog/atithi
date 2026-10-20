@@ -856,3 +856,151 @@ def set_voice_webhook(public_url: str) -> str:
         raise RuntimeError(f"{cfg['number']} was not found in this Twilio account.")
     numbers[0].update(voice_url=f"{public_url}/twilio/voice", voice_method="POST")
     return numbers[0].phone_number
+
+
+# ---- WhatsApp: the same receptionist, in the customer's WhatsApp --------------------
+#
+# Twilio POSTs each incoming WhatsApp message to /twilio/whatsapp; we answer
+# with TwiML <Message>. Customers already message businesses on WhatsApp all
+# day, so this is often the channel they reach first.
+#
+# OFF unless ENABLE_WHATSAPP=true. A business is reached through the number
+# in its YAML's `whatsapp_number` (the platform sets it, like twilio_number;
+# Twilio's sandbox number works for testing). We only ever REPLY: Atithi never
+# starts a WhatsApp conversation, so there are no unsolicited messages.
+
+WHATSAPP_IDLE = dt.timedelta(minutes=30)   # a longer silence starts a new conversation
+WHATSAPP_REPLY_WAIT_S = 12                  # Twilio gives a webhook ~15 s; after this we reply via the API
+WHATSAPP_MAX_CHARS = 1000
+WHATSAPP_PER_SENDER = 20                    # messages per sender per 10 minutes
+WHATSAPP_WINDOW = dt.timedelta(minutes=10)
+WHATSAPP_MAX_SESSIONS = 500
+_wa_sessions: dict[tuple[str, str], dict] = {}
+_wa_recent: dict[str, list[dt.datetime]] = {}
+_wa_lock = threading.Lock()
+
+
+def whatsapp_enabled() -> bool:
+    cfg = twilio_config()
+    return (os.getenv("ENABLE_WHATSAPP", "").strip().lower() == "true"
+            and bool(cfg["token"] and cfg["public_url"]))
+
+
+def _wa_number(value: str) -> str:
+    return value.removeprefix("whatsapp:").strip()
+
+
+def _message(text: str | None) -> Response:
+    body = f"<Message>{escape(text)}</Message>" if text else ""
+    return Response(content=f'<?xml version="1.0" encoding="UTF-8"?><Response>{body}</Response>',
+                    media_type="application/xml")
+
+
+def _wa_allowed(sender: str, now: dt.datetime) -> bool:
+    """A sender may send WHATSAPP_PER_SENDER messages per window; past that we
+    stay silent (each reply costs a model call)."""
+    with _wa_lock:
+        recent = [t for t in _wa_recent.get(sender, []) if now - t < WHATSAPP_WINDOW]
+        if len(recent) >= WHATSAPP_PER_SENDER:
+            _wa_recent[sender] = recent
+            return False
+        recent.append(now)
+        _wa_recent[sender] = recent
+        if len(_wa_recent) > 5000:          # forget quiet senders
+            for k in [k for k, v in _wa_recent.items() if not v or now - v[-1] >= WHATSAPP_WINDOW]:
+                del _wa_recent[k]
+        return True
+
+
+def _wa_session(client_id: str, sender: str, now: dt.datetime) -> dict | None:
+    """This sender's open conversation with this business, or a new one."""
+    key = (client_id, sender)
+    with _wa_lock:
+        s = _wa_sessions.get(key)
+        if s is not None and now - s["last"] < WHATSAPP_IDLE:
+            s["last"] = now
+            return s
+        if len(_wa_sessions) >= WHATSAPP_MAX_SESSIONS:
+            for k in [k for k, v in _wa_sessions.items() if now - v["last"] >= WHATSAPP_IDLE]:
+                del _wa_sessions[k]
+            if len(_wa_sessions) >= WHATSAPP_MAX_SESSIONS:
+                return None
+        s = {"agent": None, "started": now, "last": now, "lock": threading.Lock(),
+             "call_id": now.strftime("%Y%m%d_%H%M%S_whatsapp_") + secrets.token_hex(3)}
+        _wa_sessions[key] = s
+        return s
+
+
+def _wa_turn(session: dict, client_id: str, sender: str, text: str) -> str:
+    """One customer message -> the receptionist's reply. Runs on a worker
+    thread; one message at a time per conversation."""
+    with session["lock"]:
+        if session["agent"] is None:
+            agent = ReceptionistAgent(client_id)
+            agent.system_prompt += (
+                f"\n\nThis is a WHATSAPP chat. The customer's WhatsApp number is {sender}: when "
+                "booking or saving a lead you may offer to use it, but confirm it first. Keep "
+                "replies short, plain text, no markdown.")
+            session["agent"] = agent
+        agent = session["agent"]
+        reply = agent.chat(text)
+        try:
+            storage.log_call_from_agent(agent, "whatsapp", session["started"],
+                                        call_id=session["call_id"], caller=sender)
+        except Exception as e:
+            print(f"  [whatsapp] record not saved: {type(e).__name__}: {e}")
+        return reply
+
+
+def send_whatsapp(to: str, from_: str, body: str) -> str:
+    """A reply sent through the API (when the model took too long for the
+    webhook). Only ever a reply to a message the customer just sent."""
+    from twilio.rest import Client
+    cfg = twilio_config()
+    return Client(cfg["sid"], cfg["token"]).messages.create(
+        to=f"whatsapp:{to}", from_=f"whatsapp:{from_}", body=body).sid
+
+
+@router.post("/twilio/whatsapp")
+async def twilio_whatsapp(request: Request):
+    if not whatsapp_enabled():
+        raise HTTPException(status_code=503, detail="WhatsApp is disabled (ENABLE_WHATSAPP)")
+    form = dict((await request.form()).items())
+    if not _validate_signature(request, form):
+        raise HTTPException(status_code=403, detail="Invalid Twilio signature")
+    sender, line = _wa_number(form.get("From", "")), _wa_number(form.get("To", ""))
+    text = " ".join(str(form.get("Body", "")).split())[:WHATSAPP_MAX_CHARS]
+    if not sender:
+        return _message(None)
+    now = dt.datetime.now()
+    if not _wa_allowed(sender, now):
+        perf.event("whatsapp.rate_limited")
+        return _message(None)
+    client_id = await _off_loop(storage.client_for_number, line, "whatsapp_number")
+    if client_id is None or not await _off_loop(billing.client_active, client_id):
+        return _message("Sorry, this number isn't taking messages right now.")
+    if not text:
+        # A photo, voice note or sticker: we can only read text for now.
+        return _message("Sorry, I can only read text messages. Could you type your question?")
+    session = _wa_session(client_id, sender, now)
+    if session is None:
+        return _message("Sorry, we're very busy right now. Please message again in a few minutes.")
+    job = call_io_pool().submit(_wa_turn, session, client_id, sender, text)
+    try:
+        reply = await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(job)), WHATSAPP_REPLY_WAIT_S)
+        return _message(reply)
+    except TimeoutError:
+        # Too slow for the webhook: answer through the API once it's ready.
+        perf.event("whatsapp.late_reply")
+
+        def late(fut):
+            try:
+                send_whatsapp(sender, line, fut.result())
+            except Exception as e:
+                print(f"  [whatsapp] late reply not sent: {type(e).__name__}: {e}")
+        job.add_done_callback(late)
+        return _message(None)
+    except Exception as e:
+        perf.event("error.whatsapp")
+        print(f"  [whatsapp] reply failed: {type(e).__name__}: {e}")
+        return _message("Sorry, something went wrong on our side. Please try again in a moment.")

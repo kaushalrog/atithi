@@ -536,6 +536,11 @@ def admin_overview():
                 "bookings_paused": storage.bookings_paused_reason(),
                 # Green only when the Sheet can actually be used (credentials present).
                 "sheets": storage.sheets_usable(),
+                # Each of these rings or messages real people: off by default.
+                "handoff": telephony.handoff_enabled(),
+                "callbacks": telephony.callbacks_enabled(),
+                "whatsapp": telephony.whatsapp_enabled(),
+                "sms": telephony.sms_enabled(),
             }}
 
 

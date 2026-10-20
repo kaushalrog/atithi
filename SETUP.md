@@ -293,6 +293,30 @@ themselves. `python callbacks.py run` does one round by hand.
 
 ---
 
+## WhatsApp receptionist
+
+The same receptionist answers your customers on WhatsApp: prices, timings,
+bookings, cancellations, in their language. It only ever **replies**; it never
+starts a WhatsApp conversation.
+
+1. In the Twilio console, open **Messaging → Try it out → WhatsApp** (the
+   sandbox) and join it from your own phone. For a real business, register a
+   WhatsApp sender (needs Meta business verification).
+2. Set the sandbox's "When a message comes in" URL to
+   `https://YOUR-PUBLIC-URL/twilio/whatsapp` (method POST).
+3. In the business's YAML add `whatsapp_number: "+14155238886"` (the sandbox
+   number, or your registered sender).
+4. Set `ENABLE_WHATSAPP=true` (with `TWILIO_AUTH_TOKEN` and `PUBLIC_BASE_URL`).
+
+Each customer is one conversation until 30 minutes of silence; each shows on
+the **Calls** page as a `whatsapp` conversation. A sender gets at most 20
+replies per 10 minutes, and photos or voice notes get a polite "please type it".
+
+**Cost:** one model call per message, plus Twilio's WhatsApp fee per
+conversation.
+
+---
+
 ## Website chat
 
 Customers can chat with your receptionist on your own website. In the portal,

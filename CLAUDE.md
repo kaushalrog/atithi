@@ -119,6 +119,10 @@ AI receptionist for any Indian business that takes bookings (clinics, salons, re
   Missed-call mode / busy lines queue rows in the callbacks table; callbacks.py
   dials them (opening hours only, claimed atomically, capped). ENABLE_HANDOFF
   and ENABLE_CALLBACKS are off by default, on top of ENABLE_LIVE_CALLS.
+- WhatsApp: POST /twilio/whatsapp (telephony.py, signed, ENABLE_WHATSAPP).
+  One ReceptionistAgent per (business, sender) until 30 min idle; reply as
+  TwiML <Message>, or via the API if the model takes over 12 s. Replies only;
+  per-sender rate limit. Records saved with channel "whatsapp".
 - Safety: VOXAGENT_ENV=test (tests, evals) disables the Sheets copy and makes
   writes to real data files raise. Live phone calls are off unless
   ENABLE_LIVE_CALLS=true; see docs/SAFE_TESTING.md before enabling.

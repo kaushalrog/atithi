@@ -1322,13 +1322,14 @@ def _scan_clients(folder: Path) -> list[str]:
         return []
 
 
-def client_for_number(number: str) -> str | None:
-    """Which business owns this phone number (cached — used per inbound call)."""
+def client_for_number(number: str, field: str = "twilio_number") -> str | None:
+    """Which business owns this phone number (cached — used per inbound call).
+    field="whatsapp_number" for the WhatsApp line."""
     if not number:
         return None
     wanted = number.strip()
     for entry in all_clients():
-        if str(entry["config"].get("twilio_number", "")).strip() == wanted:
+        if str(entry["config"].get(field, "")).strip() == wanted:
             return entry["client_id"]
     return None
 
