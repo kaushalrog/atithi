@@ -250,6 +250,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS one_confirmed_booking_per_slot
     ON bookings(client_id, date, time) WHERE status = 'confirmed';
 CREATE INDEX IF NOT EXISTS bookings_by_client ON bookings(client_id, id);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- Questions the receptionist couldn't answer from the business info. One row
+-- per distinct question (normalised); 'asked' counts repeats.
+CREATE TABLE IF NOT EXISTS questions (
+    id INTEGER PRIMARY KEY, client_id TEXT NOT NULL, question TEXT NOT NULL,
+    norm TEXT NOT NULL, asked INTEGER NOT NULL DEFAULT 1,
+    first_asked TEXT NOT NULL, last_asked TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open', answer TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS one_open_question
+    ON questions(client_id, norm) WHERE status = 'open';
 """
 
 # One connection per thread (SQLite connections must not be shared across
@@ -658,6 +667,55 @@ def reschedule_booking(client_id: str, new_date: str, new_time: str, booking_id:
     return "rescheduled", dict(zip(BOOKING_HEADER, new))
 
 
+# ---- questions the receptionist couldn't answer -------------------------------
+
+def _norm_question(q: str) -> str:
+    """Same question however it's punctuated or spaced (any script)."""
+    return " ".join(re.sub(r"[^\w\s]", "", q.lower()).split())
+
+
+def note_question(client_id: str, question: str) -> int:
+    """Record (or count again) an unanswered question; returns how many times
+    it has been asked."""
+    q = " ".join(str(question or "").split())[:300]
+    if not q:
+        return 0
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    conn = _bookings_db()
+    with _transaction(conn):
+        conn.execute(
+            "INSERT INTO questions (client_id, question, norm, first_asked, last_asked) "
+            "VALUES (?,?,?,?,?) ON CONFLICT(client_id, norm) WHERE status='open' "
+            "DO UPDATE SET asked = asked + 1, last_asked = excluded.last_asked",
+            (client_id, q, _norm_question(q), now, now))
+        n = conn.execute("SELECT asked FROM questions WHERE client_id=? AND norm=? AND status='open'",
+                         (client_id, _norm_question(q))).fetchone()[0]
+    _invalidate(BOOKINGS_DB)
+    return n
+
+
+def open_questions(client_id: str) -> list[dict]:
+    """Open questions, most asked first."""
+    rows = _bookings_db().execute(
+        "SELECT id, question, asked, first_asked, last_asked FROM questions "
+        "WHERE client_id=? AND status='open' ORDER BY asked DESC, last_asked DESC", (client_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def close_question(client_id: str, question_id: int, answer: str | None) -> dict | None:
+    """Mark a question answered (with its answer) or dismissed (answer None)."""
+    conn = _bookings_db()
+    with _transaction(conn):
+        row = conn.execute("SELECT * FROM questions WHERE id=? AND client_id=? AND status='open'",
+                           (question_id, client_id)).fetchone()
+        if row is None:
+            return None
+        conn.execute("UPDATE questions SET status=?, answer=? WHERE id=?",
+                     ("answered" if answer else "dismissed", answer, question_id))
+    _invalidate(BOOKINGS_DB)
+    return dict(row)
+
+
 def booked_pairs(client_id: str) -> set[tuple[str, str]]:
     """{(date, time)} already confirmed from today on — what the agent must not
     offer. Past dates are never offered anyway, so they're not even read: this
@@ -882,6 +940,7 @@ TRACE_VERSION = 1
 # about. Kept in step with voxcheck's built-in mapping (docs/ARCHITECTURE.md §3).
 _TOOL_TYPES = {"check_availability": "availability", "book_appointment": "book",
                "save_lead": "lead", "find_booking": "lookup", "cancel_booking": "cancel",
+               "note_unanswered_question": "question",
                "reschedule_booking": "reschedule"}
 _OK_STATUS = {"book": "confirmed", "lead": "saved", "cancel": "cancelled",
               "reschedule": "rescheduled"}

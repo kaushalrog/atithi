@@ -66,6 +66,13 @@
   .nav button:hover { background: var(--sunken); color: var(--ink); }
   .nav button.active { background: var(--sunken); color: var(--ink); font-weight: 600; }
   .nav button.active svg { stroke: var(--acc); }
+  .navcount { margin-left: auto; background: var(--acc); color: #fff; font-size: .72rem; font-weight: 600;
+              border-radius: 10px; padding: 1px 7px; font-variant-numeric: tabular-nums; }
+  .qitem { border-top: 1px solid var(--border); padding: 14px 0; display: flex; flex-direction: column; gap: 8px; }
+  .qitem:first-child { border-top: none; padding-top: 4px; }
+  .qhead { display: flex; gap: 10px; align-items: flex-start; }
+  .qtext { font-weight: 600; flex: 1; }
+  .qactions { display: flex; gap: 8px; }
   .side .grow { flex: 1; }
   .side .bottom { padding: 12px; }
   .addbiz { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -272,7 +279,8 @@
     .side { width: 64px; }
     .brand { padding: 18px 0 14px; justify-content: center; }
     .brand .name, .brand .tag, .nav .sect, .nav button .txt, .sysline span { display: none; }
-    .nav button { justify-content: center; padding: 11px 0; }
+    .nav button { justify-content: center; padding: 11px 0; position: relative; }
+    .navcount { position: absolute; top: 2px; right: 6px; }
     .addbiz .txt { display: none; }
     .topbar { padding: 12px 16px; }
     main { padding: 18px 16px 60px; }
@@ -331,6 +339,9 @@
     <button data-view="leads">
       <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg>
       <span class="txt">Leads</span></button>
+    <button data-view="questions">
+      <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><path d="M12 17h.01"/></svg>
+      <span class="txt">Questions</span><span class="navcount hidden" id="qCount"></span></button>
     <button data-view="settings" id="settingsNav">
       <svg class="ic" viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
       <span class="txt">Settings</span></button>
@@ -406,6 +417,15 @@
     <!-- ============ LEADS ============ -->
     <section class="view hidden" id="view-leads">
       <div class="card"><h3>Leads to follow up</h3><div id="leadsBox"></div></div>
+    </section>
+
+    <!-- ============ QUESTIONS ============ -->
+    <section class="view hidden" id="view-questions">
+      <div class="card">
+        <h3>Questions your receptionist couldn't answer</h3>
+        <div class="empty" style="padding:0 0 12px">Answer once and it's added to your FAQs, so the next customer gets a real answer.</div>
+        <div id="questionsBox"></div>
+      </div>
     </section>
 
     <!-- ============ ONBOARDING ============ -->
@@ -605,7 +625,8 @@ function setStat(id, target, suffix = "") {
 
 /* ============ view router ============ */
 const TITLES = { dashboard: "Dashboard", calls: "Calls", bookings: "Bookings",
-                 leads: "Leads", onboard: "Add a business", settings: "Settings" };
+                 leads: "Leads", onboard: "Add a business", settings: "Settings",
+                 questions: "Questions" };
 function showView(name) {
   for (const sec of document.querySelectorAll(".view")) sec.classList.add("hidden");
   // Settings is the onboarding form, filled in and saving instead of creating.
@@ -613,6 +634,46 @@ function showView(name) {
   $("viewTitle").textContent = TITLES[name];
   for (const b of document.querySelectorAll(".nav button"))
     b.classList.toggle("active", b.dataset.view === name);
+  if (name === "questions") loadQuestions();
+}
+
+/* ============ unanswered questions ============ */
+async function loadQuestions() {
+  const box = $("questionsBox"); box.innerHTML = "";
+  if (!CLIENT) return;
+  let qs;
+  try { qs = await api("/api/questions?client_id=" + encodeURIComponent(CLIENT)); }
+  catch (e) { box.appendChild(el("div", "empty", e.message)); return; }
+  if (!qs.length) {
+    box.appendChild(el("div", "empty", "Nothing waiting. When a customer asks something your business details don't cover, it appears here."));
+    return;
+  }
+  for (const q of qs) {
+    const item = el("div", "qitem");
+    const head = el("div", "qhead");
+    head.appendChild(el("div", "qtext", q.question));
+    head.appendChild(el("span", "badge", q.asked === 1 ? "asked once" : "asked " + q.asked + " times"));
+    item.appendChild(head);
+    const ans = document.createElement("textarea"); ans.rows = 2; ans.placeholder = "Your answer";
+    item.appendChild(ans);
+    const row = el("div", "qactions");
+    const save = el("button", "btn small", "Add to FAQ");
+    const skip = el("button", "btn ghost small", "Dismiss");
+    save.onclick = async () => {
+      if (!ans.value.trim()) { ans.focus(); return; }
+      save.disabled = true;
+      try { await api("/api/questions/answer", { client_id: CLIENT, question_id: q.id, answer: ans.value.trim() });
+            toast("Added to your FAQs."); await loadQuestions(); DASH_ETAG = null; loadAll(); }
+      catch (e) { toast(e.message, 5000); save.disabled = false; }
+    };
+    skip.onclick = async () => {
+      try { await api("/api/questions/dismiss", { client_id: CLIENT, question_id: q.id });
+            await loadQuestions(); DASH_ETAG = null; loadAll(); }
+      catch (e) { toast(e.message, 5000); }
+    };
+    row.append(save, skip); item.appendChild(row);
+    box.appendChild(item);
+  }
 }
 document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => showView(b.dataset.view));
 
@@ -642,6 +703,9 @@ async function loadAll() {
   DATA.calls = d.calls;
   DATA.bookings = d.bookings;
   DATA.leads = d.leads;
+  const qc = $("qCount");
+  qc.textContent = d.open_questions || "";
+  qc.classList.toggle("hidden", !d.open_questions);
   renderPhone(d.phone);
   renderBilling(d.billing);
   renderAll();

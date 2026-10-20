@@ -950,6 +950,7 @@ def dashboard(client_id: str, response: Response,
         "leads": list(reversed(leads)),
         "billing": billing.status(client_id),
         "phone": _phone_status(client_id),
+        "open_questions": len(storage.open_questions(client_id)),
     }
 
 
@@ -971,6 +972,57 @@ def owner_cancel_booking(req: CancelRequest,
         raise HTTPException(status_code=404, detail="That booking is not confirmed any more")
     notify.booking_event(req.client_id, "cancelled", done)
     return {"ok": True, "booking": done}
+
+
+# ---------- questions the receptionist couldn't answer -----------------------
+
+class QuestionAction(BaseModel):
+    client_id: str
+    question_id: int
+    answer: str = Field(default="", max_length=1000)
+
+
+@app.get("/api/questions")
+def list_questions(client_id: str,
+                   x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+                   x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+                   authorization: str | None = Header(default=None)):
+    authorize_client(client_id, x_client_key, x_admin_key, authorization)
+    return storage.open_questions(client_id)
+
+
+@app.post("/api/questions/answer")
+def answer_question(req: QuestionAction,
+                    x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+                    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+                    authorization: str | None = Header(default=None)):
+    """The owner answers once; it becomes an FAQ the receptionist uses from
+    the next conversation on."""
+    authorize_client(req.client_id, x_client_key, x_admin_key, authorization)
+    answer = req.answer.strip()
+    if not answer:
+        raise HTTPException(status_code=422, detail="Type the answer first")
+    current = storage.read_client_config(req.client_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail=f"No client '{req.client_id}'")
+    row = storage.close_question(req.client_id, req.question_id, answer)
+    if row is None:
+        raise HTTPException(status_code=404, detail="That question is no longer open")
+    cfg = copy.deepcopy(current)           # the cached parse is shared: never mutate it
+    cfg["faq"] = list(cfg.get("faq") or []) + [{"q": row["question"], "a": answer}]
+    storage.write_client_config(req.client_id, cfg)
+    return {"ok": True, "faq": {"q": row["question"], "a": answer}}
+
+
+@app.post("/api/questions/dismiss")
+def dismiss_question(req: QuestionAction,
+                     x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+                     x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+                     authorization: str | None = Header(default=None)):
+    authorize_client(req.client_id, x_client_key, x_admin_key, authorization)
+    if storage.close_question(req.client_id, req.question_id, None) is None:
+        raise HTTPException(status_code=404, detail="That question is no longer open")
+    return {"ok": True}
 
 
 @app.get("/api/stats")

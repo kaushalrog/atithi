@@ -149,6 +149,22 @@ TOOL_SCHEMAS = [
             "required": ["phone", "date", "time", "new_date", "new_time"],
         },
     },
+    {
+        "name": "note_unanswered_question",
+        "description": (
+            "Record a customer question you could NOT answer from the business "
+            "information, so the owner can add the answer. Call it once per question, "
+            "then give the customer the usual fallback reply. Do not mention that you "
+            "recorded it. Never use it for small talk or for booking requests."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "The customer's question, in their words."},
+            },
+            "required": ["question"],
+        },
+    },
 ]
 _TOOL_NAMES = frozenset(t["name"] for t in TOOL_SCHEMAS)
 
@@ -387,6 +403,10 @@ class ReceptionistAgent:
             return self._reschedule_booking(args.get("phone", ""), args.get("date", ""),
                                             args.get("time", ""), args.get("new_date", ""),
                                             args.get("new_time", ""))
+        if name == "note_unanswered_question":
+            n = storage.note_question(self.client_id, args.get("question", ""))
+            return {"status": "noted", "times_asked": n} if n else \
+                {"status": "failed", "error": "No question given."}
         if name == "save_lead":
             return self._save_lead(
                 args.get("name", ""),

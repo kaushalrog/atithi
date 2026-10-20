@@ -29,7 +29,7 @@ def test_dashboard_returns_everything_in_one_call(client):
     res = client.get("/api/dashboard?client_id=demo_clinic", headers=admin_headers(client))
     assert res.status_code == 200
     body = res.json()
-    assert set(body) == {"stats", "calls", "bookings", "leads", "billing", "phone"}
+    assert set(body) == {"stats", "calls", "bookings", "leads", "billing", "phone", "open_questions"}
     assert set(body["stats"]) == {"calls", "minutes", "bookings", "leads", "conversion"}
     assert res.headers.get("ETag")
 
