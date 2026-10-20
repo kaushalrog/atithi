@@ -33,6 +33,8 @@ _CLAIMS = {
         rf"\b(?:you'?re|you are|you have been|you've been)\s+(?:all\s+)?(?:booked|confirmed|scheduled|set for)\b",
         r"\b(?:i'?ve|i have|we'?ve|we have)\s+(?:now\s+)?(?:booked|confirmed|scheduled|reserved)\b",
         rf"\b{_THING}\s+(?:is|has been)\s+(?:now\s+)?(?:confirmed|booked|reserved|scheduled|done)\b",
+        # "Your teeth cleaning is booked for tomorrow": whatever the service is called.
+        r"\b(?:is|are|has been|have been)\s+(?:now\s+)?(?:all\s+)?(?:booked|confirmed|reserved|scheduled)\s+(?:for|on|at)\b",
         r"\b(?:booked|confirmed|reserved) (?:you|it|that) (?:in|for)\b",
     ],
     "cancelled": [
@@ -55,7 +57,8 @@ _CLAIMS = {k: [re.compile(p, re.I) for p in v] for k, v in _CLAIMS.items()}
 # A sentence that hedges, asks or talks about the future is not a claim.
 _NOT_A_CLAIM = re.compile(
     r"\b(?:not|never|unable|cannot|can'?t|couldn'?t|won'?t|wasn'?t|isn'?t|haven'?t|hasn'?t|"
-    r"didn'?t|if|once|would|shall|going to|about to|let me|want me|should i|fully booked)\b|n't\b",
+    r"didn'?t|if|once|would|shall|going to|about to|let me|want me|should i|fully booked|"
+    r"booked (?:up|solid|out))\b|n't\b",
     re.I)
 _FUTURE_OK = {"callback"}       # "will call you" IS the claim; don't drop it for "will"
 
