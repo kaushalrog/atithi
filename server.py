@@ -939,7 +939,7 @@ def dashboard(client_id: str, response: Response,
     with perf.span("dashboard.read"):
         calls = storage.read_call_logs(client_id)
         bookings = storage.read_bookings(client_id)
-        leads = storage.read_leads(client_id)
+        leads = storage.leads_with_followups(client_id)
     response.headers["ETag"] = version
     return {
         # Stats count every call ever; the list ships only the recent ones so
@@ -1023,6 +1023,72 @@ def dismiss_question(req: QuestionAction,
     if storage.close_question(req.client_id, req.question_id, None) is None:
         raise HTTPException(status_code=404, detail="That question is no longer open")
     return {"ok": True}
+
+
+# ---------- lead follow-ups and exports ------------------------------------------
+
+class LeadUpdate(BaseModel):
+    client_id: str
+    timestamp: str
+    phone: str
+    status: str
+    note: str = Field(default="", max_length=500)
+    callback_on: str = ""
+
+
+@app.post("/api/leads/update")
+def update_lead(req: LeadUpdate,
+                x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+                x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+                authorization: str | None = Header(default=None)):
+    authorize_client(req.client_id, x_client_key, x_admin_key, authorization)
+    try:
+        found = storage.update_lead_followup(req.client_id, req.timestamp, req.phone, req.status,
+                                             req.note.strip(), req.callback_on.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if not found:
+        raise HTTPException(status_code=404, detail="No such lead")
+    return {"ok": True}
+
+
+def _csv_safe(value):
+    """A cell starting with = @ (or + - followed by more than a phone number)
+    would run as a formula in Excel: prefix it so it stays text. Phone
+    numbers like +91 98430 12345 are left alone."""
+    v = str(value)
+    if v[:1] in "=@" or (v[:1] in "+-" and not re.fullmatch(r"[+-][\d\s()-]*", v)):
+        return "'" + v
+    return value
+
+
+_EXPORT_COLUMNS = {
+    "bookings": ["date", "time", "name", "phone", "service", "status", "timestamp"],
+    "leads": ["timestamp", "name", "phone", "interest", "note", "status", "callback_on",
+              "followup_note", "has_booked"],
+}
+
+
+@app.get("/api/export/{kind}.csv")
+def export_csv(kind: str, client_id: str,
+               x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
+               x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+               authorization: str | None = Header(default=None)):
+    """Download bookings or leads as a CSV the owner opens in Excel or Sheets."""
+    authorize_client(client_id, x_client_key, x_admin_key, authorization)
+    if kind not in _EXPORT_COLUMNS:
+        raise HTTPException(status_code=404, detail="Unknown export")
+    import csv
+    import io
+    rows = storage.read_bookings(client_id) if kind == "bookings" else storage.leads_with_followups(client_id)
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=_EXPORT_COLUMNS[kind], extrasaction="ignore")
+    w.writeheader()
+    for r in rows:
+        w.writerow({k: _csv_safe(v) for k, v in r.items()})
+    # BOM so Excel reads ₹ and Indian-language names correctly.
+    return Response(content="\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{client_id}-{kind}.csv"'})
 
 
 @app.get("/api/stats")

@@ -179,6 +179,10 @@
   tr.inactive td { color: var(--muted); }
   td.actions { text-align: right; padding-right: 0; }
   .btn.small { padding: 4px 10px; font-size: .82rem; font-weight: 500; }
+  select.compact, input.compact { padding: 5px 8px; font-size: .86rem; max-width: 160px; }
+  input.compact[type=text] { min-width: 140px; }
+  input.compact.due { border-color: var(--amber); background: var(--amber-soft); }
+  #view-leads .card { overflow-x: auto; }
 
   /* ================= onboarding ================= */
   .onboard { max-width: 760px; margin: 0 auto; }
@@ -411,12 +415,12 @@
 
     <!-- ============ BOOKINGS ============ -->
     <section class="view hidden" id="view-bookings">
-      <div class="card"><h3>All bookings</h3><div id="bookingsBox"></div></div>
+      <div class="card"><h3>All bookings <button class="more" data-export="bookings">Export CSV</button></h3><div id="bookingsBox"></div></div>
     </section>
 
     <!-- ============ LEADS ============ -->
     <section class="view hidden" id="view-leads">
-      <div class="card"><h3>Leads to follow up</h3><div id="leadsBox"></div></div>
+      <div class="card"><h3>Leads to follow up <button class="more" data-export="leads">Export CSV</button></h3><div id="leadsBox"></div></div>
     </section>
 
     <!-- ============ QUESTIONS ============ -->
@@ -936,15 +940,51 @@ function renderLeads(box, rows) {
       "your agent saves their name, number and what they wanted here, so you can follow up and win them back."));
     return;
   }
+  const today = new Date().toISOString().slice(0, 10);
+  const due = r => r.callback_on && r.callback_on <= today && !["booked", "not_interested"].includes(r.status);
+  rows = [...rows].sort((a, b) => due(b) - due(a));          // call-backs due today first
   const t = el("table");
-  const tr = el("tr"); ["When", "Name", "Phone", "Interested in", "Note"].forEach(h => tr.appendChild(el("th", "", h))); t.appendChild(tr);
+  const tr = el("tr");
+  ["When", "Name", "Phone", "Interested in", "Status", "Call back", "Your note"].forEach(h => tr.appendChild(el("th", "", h)));
+  t.appendChild(tr);
   for (const r of rows) {
-    const row = el("tr");
-    [fmtWhen(r.timestamp), r.name || "—", r.phone, r.interest, r.note || "—"]
-      .forEach(v => row.appendChild(el("td", "", v)));
+    const row = el("tr", ["booked", "not_interested"].includes(r.status) ? "inactive" : "");
+    const who = el("td", "", r.name || "—");
+    if (r.has_booked) { who.appendChild(document.createTextNode(" ")); who.appendChild(el("span", "badge booked", "booked")); }
+    [fmtWhen(r.timestamp)].forEach(v => row.appendChild(el("td", "", v)));
+    row.appendChild(who);
+    [r.phone, r.interest + (r.note ? " — " + r.note : "")].forEach(v => row.appendChild(el("td", "", v)));
+    const st = document.createElement("select"); st.className = "compact";
+    [["new", "New"], ["called", "Called"], ["booked", "Booked"], ["not_interested", "Not interested"]]
+      .forEach(([v, label]) => st.appendChild(new Option(label, v)));
+    st.value = r.status;
+    const cb = document.createElement("input"); cb.type = "date"; cb.className = "compact"; cb.value = r.callback_on || "";
+    if (due(r)) cb.classList.add("due");
+    const note = document.createElement("input"); note.type = "text"; note.className = "compact";
+    note.placeholder = "Add a note"; note.value = r.followup_note || ""; note.maxLength = 500;
+    const save = async () => {
+      try {
+        await api("/api/leads/update", { client_id: CLIENT, timestamp: r.timestamp, phone: r.phone,
+                                         status: st.value, callback_on: cb.value, note: note.value.trim() });
+        r.status = st.value; r.callback_on = cb.value; r.followup_note = note.value.trim();
+        row.classList.toggle("inactive", ["booked", "not_interested"].includes(st.value));
+        cb.classList.toggle("due", due(r));
+      } catch (e) { toast(e.message, 5000); }
+    };
+    st.onchange = save; cb.onchange = save; note.onchange = save;
+    for (const input of [st, cb, note]) { const td = el("td"); td.appendChild(input); row.appendChild(td); }
     t.appendChild(row);
   }
   box.appendChild(t);
+}
+async function exportCsv(kind) {
+  try {
+    const res = await fetch(`/api/export/${kind}.csv?client_id=` + encodeURIComponent(CLIENT), { headers: authHeaders() });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(await res.blob()); a.download = `${CLIENT}-${kind}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+  } catch (e) { toast(e.message, 5000); }
 }
 
 /* ============ clients ============ */
@@ -1438,6 +1478,7 @@ $("clientSelect").onchange = () => {
 $("addBizBtn").onclick = () => { setFormMode("create"); showView("onboard"); };
 $("settingsNav").onclick = openSettings;
 $("addClosed").onclick = () => addClosedRow();
+document.querySelectorAll("[data-export]").forEach(b => b.onclick = () => exportCsv(b.dataset.export));
 $("cancelOnboard").onclick = () => showView("dashboard");
 $("createBtn").onclick = createBusiness;
 $("testBtn").onclick = () => { if (CLIENT) openTest(); };

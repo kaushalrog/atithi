@@ -259,6 +259,13 @@ CREATE TABLE IF NOT EXISTS questions (
     status TEXT NOT NULL DEFAULT 'open', answer TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS one_open_question
     ON questions(client_id, norm) WHERE status = 'open';
+-- The owner's follow-up on a lead. leads.csv stays append-only; a lead is
+-- identified by (client_id, its timestamp, its phone).
+CREATE TABLE IF NOT EXISTS lead_followups (
+    client_id TEXT NOT NULL, lead_ts TEXT NOT NULL, phone TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'new', note TEXT NOT NULL DEFAULT '',
+    callback_on TEXT NOT NULL DEFAULT '', updated TEXT NOT NULL,
+    PRIMARY KEY (client_id, lead_ts, phone));
 """
 
 # One connection per thread (SQLite connections must not be shared across
@@ -873,6 +880,45 @@ def save_lead(client_id: str, name: str, phone: str, interest: str, note: str = 
 def read_leads(client_id: str) -> list[dict]:
     """READ-ONLY list of this client's leads."""
     return _by_client(LEADS_CSV).get(client_id) or []
+
+
+LEAD_STATUSES = ("new", "called", "booked", "not_interested")
+
+
+def leads_with_followups(client_id: str) -> list[dict]:
+    """Each lead (copied, the CSV cache is shared) plus the owner's follow-up
+    state, and whether that number has since booked."""
+    follow = {(r["lead_ts"], r["phone"]): dict(r) for r in _bookings_db().execute(
+        "SELECT lead_ts, phone, status, note, callback_on FROM lead_followups WHERE client_id=?",
+        (client_id,)).fetchall()}
+    booked = {_phone10(b["phone"]) for b in read_bookings(client_id) if b["status"] == "confirmed"}
+    out = []
+    for lead in read_leads(client_id):
+        f = follow.get((lead["timestamp"], lead["phone"]), {})
+        out.append({**lead, "status": f.get("status", "new"), "followup_note": f.get("note", ""),
+                    "callback_on": f.get("callback_on", ""),
+                    "has_booked": _phone10(lead["phone"]) in booked})
+    return out
+
+
+def update_lead_followup(client_id: str, lead_ts: str, phone: str, status: str,
+                         note: str = "", callback_on: str = "") -> bool:
+    """Save the owner's follow-up on one lead; False if no such lead."""
+    if status not in LEAD_STATUSES:
+        raise ValueError(f"status must be one of {', '.join(LEAD_STATUSES)}")
+    if callback_on:
+        dt.date.fromisoformat(callback_on)          # ValueError if not a date
+    if not any(l["timestamp"] == lead_ts and l["phone"] == phone for l in read_leads(client_id)):
+        return False
+    conn = _bookings_db()
+    conn.execute(
+        "INSERT INTO lead_followups (client_id, lead_ts, phone, status, note, callback_on, updated) "
+        "VALUES (?,?,?,?,?,?,?) ON CONFLICT(client_id, lead_ts, phone) DO UPDATE SET "
+        "status=excluded.status, note=excluded.note, callback_on=excluded.callback_on, updated=excluded.updated",
+        (client_id, lead_ts, phone, status, note[:500], callback_on,
+         dt.datetime.now().isoformat(timespec="seconds")))
+    _invalidate(BOOKINGS_DB)
+    return True
 
 
 # ---- call logs -----------------------------------------------------------------
