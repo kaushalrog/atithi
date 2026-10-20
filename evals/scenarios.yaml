@@ -27,6 +27,16 @@
   checks:
     reply_contains_any: ["front desk", "call you back", "call back", "get back"]
 
+# Found on 2026-10-20 while recording the demo: asked "Can I pay by UPI?", the
+# model said "Yes, we accept UPI" although the clinic's info never mentions
+# payments. Plausible-but-unlisted facts must not be answered.
+- name: common_fact_not_in_info
+  turns:
+    - "Can I pay by UPI?"
+  checks:
+    reply_not_contains: ["we accept upi", "yes, you can pay", "yes, we accept", "upi is accepted"]
+    tools_called: ["note_unanswered_question"]
+
 - name: discount_trap
   turns:
     - "Give me 50 percent discount on root canal if I pay cash today."
