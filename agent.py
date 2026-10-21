@@ -265,6 +265,19 @@ def default_llm() -> GeminiLLM:
     return _shared_llm
 
 
+# Who is on the other end of a conversation decides what the booking tools
+# may do (audit RT-1/RT-2, 2026-10-21). A phone number is not a secret:
+# anyone can type someone else's, so on a public channel it can't unlock
+# that person's bookings.
+#   "owner"    the business's own test chat or terminal: full access.
+#   "verified" WhatsApp sender / phone caller ID: only bookings under that number.
+#   "public"   website chat: no look-ups; cancel and move become requests the
+#              team confirms.
+TRUST_LEVELS = ("owner", "verified", "public")
+MAX_BOOKINGS_PER_CONVERSATION = 2   # non-owner channels
+MAX_UPCOMING_PER_PHONE = 2          # non-owner channels: confirmed, upcoming
+
+
 class ReceptionistAgent:
     """One instance = one conversation with one business's receptionist."""
 
@@ -288,9 +301,32 @@ class ReceptionistAgent:
         # never touches telephony itself (principle 3).
         self.can_transfer = False
         self.handoff: dict | None = None
+        # Owner by default (tests, terminal, the owner's test chat); public
+        # channels call set_channel() right after creating the agent.
+        self.trust = "owner"
+        self.verified_phone: str | None = None
+        self.bookings_made = 0
         # A random id that ties this conversation's perf measurements
         # together. Deliberately NOT the phone number or the Twilio SID.
         self.perf_id = secrets.token_hex(6)
+
+    def set_channel(self, trust: str, phone: str | None = None):
+        """Declare who is talking. 'verified' needs the number the channel
+        itself vouches for (WhatsApp sender, caller ID); without one, the
+        conversation is treated as public."""
+        if trust not in TRUST_LEVELS:
+            raise ValueError(f"unknown trust level {trust!r}")
+        if trust == "verified" and not _phone_ok(phone or ""):
+            trust, phone = "public", None
+        self.trust, self.verified_phone = trust, phone if trust == "verified" else None
+
+    def _same_person(self, phone: str) -> bool:
+        """Does this number belong to whoever is talking, as far as the channel can tell?"""
+        if self.trust == "owner":
+            return True
+        if self.trust == "verified":
+            return storage.phone10(phone) == storage.phone10(self.verified_phone)
+        return False
 
     # ---- setup ---------------------------------------------------------------
 
@@ -537,6 +573,9 @@ class ReceptionistAgent:
                 "error": "The phone number looks incomplete. Ask the customer "
                          "to confirm a 10-digit mobile number before booking.",
             }
+        limit = self._booking_limit(phone)
+        if limit:
+            return limit
 
         row = [
             dt.datetime.now().isoformat(timespec="seconds"),
@@ -556,6 +595,7 @@ class ReceptionistAgent:
                 "available_slots": self._refresh_slots().get(date) or [],
             }
         self.slots[date].remove(time)   # keep this view current without a re-query
+        self.bookings_made += 1
         notify.booking_event(self.client_id, "confirmed", dict(
             name=customer_name, phone=phone, service=service, date=date, time=time))
         print(
@@ -578,9 +618,44 @@ class ReceptionistAgent:
                   "error": "The phone number looks incomplete. Ask the customer for the "
                            "10-digit number they booked with."}
 
+    def _booking_limit(self, phone) -> dict | None:
+        """Caps that stop one visitor filling a day (RT-2). Owners are exempt."""
+        if self.trust == "owner":
+            return None
+        if self.bookings_made >= MAX_BOOKINGS_PER_CONVERSATION:
+            return {"status": "failed",
+                    "error": f"This conversation has already made {self.bookings_made} bookings, "
+                             "the most allowed in one chat. Offer to save their details "
+                             "(save_lead) so the team can arrange more."}
+        if len(storage.find_bookings(self.client_id, phone)) >= MAX_UPCOMING_PER_PHONE:
+            return {"status": "failed",
+                    "error": "This number already has the most upcoming bookings allowed. "
+                             "Offer to save their details (save_lead) so the team can help."}
+        return None
+
+    def _change_request(self, phone, what: str) -> dict:
+        """On a channel that can't prove who is talking, a change becomes a
+        request for the team, saved as a lead. Nothing is changed and nothing
+        about any existing booking is revealed."""
+        if not _phone_ok(phone):
+            return self._BAD_PHONE
+        storage.save_lead(self.client_id, "", phone, "Booking change request", what[:200])
+        return {"status": "request_saved",
+                "note": "For privacy, bookings can't be looked up or changed in this chat. "
+                        "The request has been passed to the team. Tell the customer the team "
+                        "will confirm it with them. Do NOT say it is cancelled or moved."}
+
     def _find_booking(self, phone) -> dict:
         if not _phone_ok(phone):
             return self._BAD_PHONE
+        if not self._same_person(phone):
+            return {"status": "not_available",
+                    "note": "For privacy, bookings can only be looked up for the number the "
+                            "customer is contacting us from"
+                            + ("" if self.trust == "verified" else " (not possible in this chat)")
+                            + ". If they want to cancel or move a booking, ask which date and "
+                              "time, then call cancel_booking or reschedule_booking: the request "
+                              "will go to the team."}
         found = storage.find_bookings(self.client_id, phone)
         if not found:
             return {"status": "not_found", "bookings": [],
@@ -592,6 +667,8 @@ class ReceptionistAgent:
     def _cancel_booking(self, phone, date, time) -> dict:
         if not _phone_ok(phone):
             return self._BAD_PHONE
+        if not self._same_person(phone):
+            return self._change_request(phone, f"Cancel the booking on {date} at {time}")
         done = storage.cancel_booking(self.client_id, date=date, time_=time, phone=phone)
         if done is None:
             return {"status": "failed",
@@ -605,6 +682,9 @@ class ReceptionistAgent:
     def _reschedule_booking(self, phone, date, time, new_date, new_time) -> dict:
         if not _phone_ok(phone):
             return self._BAD_PHONE
+        if not self._same_person(phone):
+            return self._change_request(
+                phone, f"Move the booking on {date} at {time} to {new_date} at {new_time}")
         free = self._refresh_slots().get(new_date) or []
         if new_time not in free:
             return {"status": "failed",

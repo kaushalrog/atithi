@@ -1092,6 +1092,11 @@ def call_outcome(history: list[dict]) -> dict:
     return {"booked": "book" in done, "lead": "lead" in done}
 
 
+def phone10(phone) -> str:
+    """Public name for _phone10: the last 10 digits of a number."""
+    return _phone10(phone)
+
+
 def _phone10(phone) -> str:
     """Last 10 digits: the same number written +91 98..., 098... or 98... ."""
     return re.sub(r"\D", "", str(phone or ""))[-10:]

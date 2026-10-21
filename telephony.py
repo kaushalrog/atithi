@@ -693,6 +693,8 @@ async def twilio_stream(ws: WebSocket):
 
         # Every gate passed — only now do we spend resources on the call.
         agent = await _off_loop(ReceptionistAgent, client_id)
+        # Caller ID vouches (weakly) for the number; no caller ID means public.
+        agent.set_channel("verified", caller)
         agent.can_transfer = handoff_enabled() and bool(agent.config.get("handoff_phone"))
         if caller:
             agent.system_prompt += (
@@ -937,6 +939,7 @@ def _wa_turn(session: dict, client_id: str, sender: str, text: str) -> str:
     with session["lock"]:
         if session["agent"] is None:
             agent = ReceptionistAgent(client_id)
+            agent.set_channel("verified", sender)   # WhatsApp vouches for the sender's number
             agent.system_prompt += (
                 f"\n\nThis is a WHATSAPP chat. The customer's WhatsApp number is {sender}: when "
                 "booking or saving a lead you may offer to use it, but confirm it first. Keep "

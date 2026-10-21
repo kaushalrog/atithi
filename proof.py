@@ -137,7 +137,7 @@ def evidence(tool_entries: list[dict]) -> dict[str, set[str]]:
             to, frm = (r.get("to") or {}).get("time"), (r.get("from") or {}).get("time")
             add("rescheduled", to, frm)
             add("booked", to)                   # "you're now booked for 4 PM"
-        elif (name == "save_lead" and status == "saved") or \
+        elif (name == "save_lead" and status == "saved") or status == "request_saved" or \
                 (name == "transfer_to_owner" and status in ("callback_saved", "transferring")):
             add("callback")
     if "booked" in ev or "rescheduled" in ev:
