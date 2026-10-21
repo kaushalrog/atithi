@@ -10,9 +10,9 @@ from fastapi.testclient import TestClient
 import server
 import storage
 from agent import ReceptionistAgent
-from conftest import FakeLLM
+from conftest import FakeLLM, DEMO_CODE, SALON_CODE
 
-DEMO_KEY = "VX-84KQ2N"
+DEMO_KEY = DEMO_CODE
 
 
 @pytest.fixture
@@ -67,7 +67,7 @@ def test_dismiss_and_other_businesses_cannot_touch_it(client):
     agent = ReceptionistAgent("demo_clinic", llm=FakeLLM([]))
     ask(agent, "What's the wifi password?")
     [q] = storage.open_questions("demo_clinic")
-    other = {"X-Client-Key": "VX-7TPX3R"}
+    other = {"X-Client-Key": SALON_CODE}
     assert client.get("/api/questions?client_id=demo_clinic", headers=other).status_code == 401
     assert client.post("/api/questions/dismiss", json={"client_id": "demo_clinic", "question_id": q["id"]},
                        headers=other).status_code == 401

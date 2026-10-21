@@ -140,7 +140,13 @@ AI receptionist for any Indian business that takes bookings (clinics, salons, re
   X-Client-Key header) lock owners to their own data; ADMIN_PASSWORD
   (X-Admin-Key) opens everything. Portal has a login gate; /admin
   (web/admin.html) is the platform console with system-status checks and
-  the business-code list.
+  the business-code list. Codes are 12 characters (storage.new_access_code;
+  rotate with `python storage.py rotate-code <id>`); tests read the sample
+  codes from the YAML (conftest DEMO_CODE/SALON_CODE). ratelimit.py +
+  server.throttle_credential_guessing count 401s per address on /api/*
+  (10 per 15 min, then 429). Agents carry a trust level (agent.set_channel):
+  owner / verified (WhatsApp sender, caller ID) / public (website chat: no
+  booking look-ups, changes become requests, 2-booking caps).
 - Tests: tests/ — pytest, no network/key needed (FakeLLM proves the llm seam).
   Run `python -m pytest tests -q` after changes to core files.
 

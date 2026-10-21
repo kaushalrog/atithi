@@ -28,7 +28,7 @@ import webbrowser
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
 import auth
@@ -37,6 +37,7 @@ import callbacks
 import llm as llm_module
 import notify
 import perf
+import ratelimit
 import scheduling
 import storage
 import telephony
@@ -84,6 +85,46 @@ class BodySizeLimit:
 
 app.add_middleware(BodySizeLimit)
 app.include_router(telephony.router)  # /twilio/voice + /twilio/stream (phone calls)
+
+# ---------- credential throttle (audit RT-3) ------------------------------------
+#
+# Every /api/ route that checks a credential (business code, password, admin
+# key, reset code, sign-in token) answers 401 when it's wrong. Counting those
+# 401s per address in ONE place covers every endpoint, including the
+# X-Client-Key header on data routes, without touching each route.
+# /api/public/* (website chat) has no credentials and its own limits.
+
+CREDENTIAL_FAILURES = ratelimit.FailureLimiter()
+
+
+def _client_ip(request: Request) -> str:
+    """The caller's address. Behind a tunnel or proxy every request comes from
+    the proxy, so the first X-Forwarded-For hop is used only when
+    VOXAGENT_TRUST_PROXY=true says the proxy is ours."""
+    if os.getenv("VOXAGENT_TRUST_PROXY", "").strip().lower() == "true":
+        forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        if forwarded:
+            return forwarded
+    return request.client.host if request.client else "?"
+
+
+@app.middleware("http")
+async def throttle_credential_guessing(request: Request, call_next):
+    path = request.url.path
+    if not path.startswith("/api/") or path.startswith("/api/public/"):
+        return await call_next(request)
+    ip = _client_ip(request)
+    wait = CREDENTIAL_FAILURES.retry_after(ip)
+    if wait:
+        perf.event("auth.throttled")
+        minutes = max(1, round(wait / 60))
+        return JSONResponse(status_code=429, headers={"Retry-After": str(wait)},
+                            content={"detail": f"Too many failed sign-in attempts. "
+                                               f"Try again in about {minutes} minute{'s' if minutes != 1 else ''}."})
+    response = await call_next(request)
+    if response.status_code == 401:
+        CREDENTIAL_FAILURES.fail(ip)
+    return response
 tts = EdgeTTS()
 
 
@@ -109,6 +150,10 @@ def _warm_up():
     if paused:
         print(f"  [bookings] NEW BOOKINGS ARE PAUSED: {paused}")
     print(_capacity_line())
+    short = storage.short_code_businesses()
+    if short:
+        print(f"  [security] {len(short)} business(es) still use an old short code "
+              f"({', '.join(short)}). Rotate before going public: python storage.py rotate-code <id>")
     # The callback dialer runs in the background and checks its switch
     # (ENABLE_CALLBACKS) on every round, so it does nothing until turned on.
     callbacks.start_worker(_callbacks_stop)
@@ -690,7 +735,7 @@ def create_business(req: BusinessRequest,
     config = {
         "client_id": client_id,
         # The owner's login code — shown once to the admin at creation.
-        "access_key": "VX-" + secrets.token_hex(3).upper(),
+        "access_key": storage.new_access_code(),
         "business_name": req.business_name.strip(),
         "address": req.address.strip(),
         "phone": req.phone.strip(),

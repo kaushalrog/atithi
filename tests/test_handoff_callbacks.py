@@ -13,7 +13,7 @@ import scheduling
 import storage
 import telephony
 from agent import ReceptionistAgent
-from conftest import FakeLLM
+from conftest import FakeLLM, DEMO_CODE, SALON_CODE
 from test_telephony import FakeLive, SpyLive, phone, post_voice, stream, ticket_from_twiml  # noqa: F401
 
 PHONE = "+919876543210"
@@ -302,7 +302,7 @@ def test_owner_sets_the_transfer_number_and_marks_callbacks_handled(tmp_storage,
     monkeypatch.setattr(auth, "DB_FILE", tmp_storage / "voxagent.db")
     monkeypatch.setattr(auth, "LEGACY_USERS", tmp_storage / "no_users.json")
     monkeypatch.setattr(auth, "LEGACY_TOKENS", tmp_storage / "no_tokens.json")
-    client, key = TestClient(server.app), {"X-Client-Key": "VX-84KQ2N"}
+    client, key = TestClient(server.app), {"X-Client-Key": DEMO_CODE}
     s = client.get("/api/business/demo_clinic/settings", headers=key).json()
     assert (s["handoff_phone"], s["missed_call_mode"], s["callback_when_busy"]) == ("", False, True)
     body = {k: v for k, v in s.items() if k in server.BusinessRequest.model_fields}
@@ -316,7 +316,7 @@ def test_owner_sets_the_transfer_number_and_marks_callbacks_handled(tmp_storage,
     [cb] = client.get("/api/dashboard?client_id=demo_clinic", headers=key).json()["callbacks"]
     req = {"client_id": "demo_clinic", "callback_id": cb["id"]}
     assert client.post("/api/callbacks/handled", json=req,
-                       headers={"X-Client-Key": "VX-7TPX3R"}).status_code == 401   # another business
+                       headers={"X-Client-Key": SALON_CODE}).status_code == 401   # another business
     assert client.post("/api/callbacks/handled", json=req, headers=key).status_code == 200
     assert storage.pending_callbacks() == []
     assert client.post("/api/callbacks/handled", json=req, headers=key).status_code == 404

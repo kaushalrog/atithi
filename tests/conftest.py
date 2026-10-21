@@ -74,6 +74,18 @@ class FakeLLM:
         return {"text": "(out of script)", "tool_calls": []}
 
 
+def _business_code(client_id: str) -> str:
+    """A sample business's code, read from its YAML so a rotated code never
+    has to be copied into the tests."""
+    import yaml
+    path = Path(__file__).resolve().parent.parent / "clients" / f"{client_id}.yaml"
+    return yaml.safe_load(path.read_text(encoding="utf-8"))["access_key"]
+
+
+DEMO_CODE = _business_code("demo_clinic")
+SALON_CODE = _business_code("lakshmi_beauty_salon")
+
+
 @pytest.fixture
 def fake_llm():
     return FakeLLM
@@ -86,7 +98,9 @@ def no_leftover_web_sessions():
     server = sys.modules.get("server")
     if server is not None:
         server.sessions.clear()
+        server.CREDENTIAL_FAILURES.clear()   # wrong-code 401s must not leak between tests
     yield
     server = sys.modules.get("server")
     if server is not None:
         server.sessions.clear()
+        server.CREDENTIAL_FAILURES.clear()

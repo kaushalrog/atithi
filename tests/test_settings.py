@@ -8,9 +8,10 @@ from fastapi.testclient import TestClient
 
 import server
 import storage
+from conftest import DEMO_CODE, SALON_CODE
 
-DEMO_KEY = "VX-84KQ2N"      # demo_clinic's code (from its YAML)
-SALON_KEY = "VX-7TPX3R"     # lakshmi_beauty_salon's code
+DEMO_KEY = DEMO_CODE      # demo_clinic's code (from its YAML)
+SALON_KEY = SALON_CODE     # lakshmi_beauty_salon's code
 
 
 @pytest.fixture
