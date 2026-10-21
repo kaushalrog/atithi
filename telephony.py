@@ -587,7 +587,12 @@ async def twilio_voice(request: Request, client_id: str | None = None):
             if await _off_loop(storage.queue_callback, client, caller, "lines busy") in ("queued", "pending"):
                 return _say("Sorry, all our lines are busy right now. We'll call you back in a few minutes.")
         return _say("Sorry, all our lines are busy right now. Please call again in a few minutes.")
-    purpose = "callback" if outbound and request.query_params.get("purpose") == "callback" else ""
+    # Signed into the ticket, so the stream knows whether WE placed this call:
+    # only then has the number been proven (whoever answers controls it).
+    if outbound:
+        purpose = "callback" if request.query_params.get("purpose") == "callback" else "outbound"
+    else:
+        purpose = ""
     ticket = mint_stream_ticket(form.get("CallSid", ""), client, caller, purpose=purpose)
     _reserve_slot(ticket["call_sid"], time.time() + PENDING_SLOT_S)
     # Every attribute value is XML-escaped: From and client_id arrive from
@@ -693,8 +698,15 @@ async def twilio_stream(ws: WebSocket):
 
         # Every gate passed — only now do we spend resources on the call.
         agent = await _off_loop(ReceptionistAgent, client_id)
-        # Caller ID vouches (weakly) for the number; no caller ID means public.
-        agent.set_channel("verified", caller)
+        # Caller ID can be faked, so an inbound caller is treated as public:
+        # no booking look-ups, changes become requests for the team. Only a
+        # call WE placed (outbound, missed-call callback) proves the number,
+        # because whoever answers controls that line.
+        purpose = str(params.get("purpose", ""))
+        if purpose in ("outbound", "callback"):
+            agent.set_channel("verified", caller)
+        else:
+            agent.set_channel("public")
         agent.can_transfer = handoff_enabled() and bool(agent.config.get("handoff_phone"))
         if caller:
             agent.system_prompt += (

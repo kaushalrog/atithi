@@ -140,3 +140,49 @@ def test_a_change_request_backs_a_callback_promise():
     history = [{"role": "tool", "name": "cancel_booking", "result": {"status": "request_saved"}}]
     assert proof.unbacked("The team will call you to confirm the cancellation.", history) == []
     assert agent_mod.MAX_BOOKINGS_PER_CONVERSATION == 2
+
+
+# ---- phone calls: caller ID is not proof (review follow-up, 2026-10-21) ------------
+
+from test_telephony import SpyLive, post_voice, stream, ticket_from_twiml  # noqa: E402,F401
+import telephony  # noqa: E402
+
+
+@pytest.fixture
+def made_agents(phone, monkeypatch, fake_llm):
+    made = []
+
+    def make(client_id):
+        a = ReceptionistAgent(client_id, llm=fake_llm([]))
+        made.append(a)
+        return a
+    monkeypatch.setattr(telephony, "ReceptionistAgent", make)
+    return made
+
+
+def test_an_inbound_caller_is_public_because_caller_id_can_be_faked(phone, made_agents):
+    res = post_voice(phone["client"], {"To": "+15550001111", "From": "+919876543210", "CallSid": "CA1"})
+    params = ticket_from_twiml(res.text)
+    assert "purpose" not in params
+    assert stream(phone["client"], params) == 1000
+    [a] = made_agents
+    assert (a.trust, a.verified_phone) == ("public", None)
+
+
+@pytest.mark.parametrize("query,purpose", [("?client_id=demo_clinic", "outbound"),
+                                           ("?client_id=demo_clinic&purpose=callback", "callback")])
+def test_a_call_atithi_placed_proves_the_number(phone, made_agents, query, purpose):
+    data = {"To": "+919876543210", "From": "+15550001111", "CallSid": "CA9", "Direction": "outbound-api"}
+    params = ticket_from_twiml(post_voice(phone["client"], data, query=query).text)
+    assert params["purpose"] == purpose
+    assert stream(phone["client"], params, call_sid="CA9") == 1000
+    [a] = made_agents
+    assert (a.trust, a.verified_phone) == ("verified", "+919876543210")
+
+
+def test_an_inbound_ticket_cannot_be_upgraded_to_outbound(phone, made_agents):
+    params = ticket_from_twiml(post_voice(phone["client"], {"To": "+1", "From": "+919876543210",
+                                                            "CallSid": "CA2"}).text)
+    forged = {**params, "purpose": "outbound"}
+    assert stream(phone["client"], forged, call_sid="CA2") == 1008     # signature no longer matches
+    assert made_agents == []

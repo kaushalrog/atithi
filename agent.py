@@ -270,7 +270,9 @@ def default_llm() -> GeminiLLM:
 # anyone can type someone else's, so on a public channel it can't unlock
 # that person's bookings.
 #   "owner"    the business's own test chat or terminal: full access.
-#   "verified" WhatsApp sender / phone caller ID: only bookings under that number.
+#   "verified" a number the channel has proven: the WhatsApp sender, or a call
+#              Atithi placed itself. Only bookings under that number.
+#              (Inbound caller ID can be faked, so inbound calls are public.)
 #   "public"   website chat: no look-ups; cancel and move become requests the
 #              team confirms.
 TRUST_LEVELS = ("owner", "verified", "public")
@@ -312,7 +314,7 @@ class ReceptionistAgent:
 
     def set_channel(self, trust: str, phone: str | None = None):
         """Declare who is talking. 'verified' needs the number the channel
-        itself vouches for (WhatsApp sender, caller ID); without one, the
+        itself has proven (WhatsApp sender, a number Atithi dialled); without one, the
         conversation is treated as public."""
         if trust not in TRUST_LEVELS:
             raise ValueError(f"unknown trust level {trust!r}")

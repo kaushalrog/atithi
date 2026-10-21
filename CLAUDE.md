@@ -145,7 +145,8 @@ AI receptionist for any Indian business that takes bookings (clinics, salons, re
   codes from the YAML (conftest DEMO_CODE/SALON_CODE). ratelimit.py +
   server.throttle_credential_guessing count 401s per address on /api/*
   (10 per 15 min, then 429). Agents carry a trust level (agent.set_channel):
-  owner / verified (WhatsApp sender, caller ID) / public (website chat: no
+  owner / verified (WhatsApp sender, or a call Atithi placed) / public (website
+  chat and inbound calls, because caller ID can be faked: no
   booking look-ups, changes become requests, 2-booking caps).
 - Tests: tests/ — pytest, no network/key needed (FakeLLM proves the llm seam).
   Run `python -m pytest tests -q` after changes to core files.
