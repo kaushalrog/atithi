@@ -2,3 +2,5 @@ node_modules/
 dist/
 dist-ssr/
 qa/raw/
+test-results/
+playwright-report/

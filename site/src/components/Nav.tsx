@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { PLAY_EVENT } from "./SampleBooking";
 
 const LINKS = [
   { href: "#product", label: "Product" },
@@ -58,12 +57,8 @@ export function Nav() {
               <li key={l.href}><a href={l.href} onClick={() => setOpen(false)}>{l.label}</a></li>
             ))}
           </ul>
-          <a
-            href="#sample"
-            className="btn btn-ink btn-small"
-            onClick={() => { setOpen(false); window.dispatchEvent(new Event(PLAY_EVENT)); }}
-          >
-            Try the sample
+          <a href="#pilot" className="btn btn-ink btn-small" onClick={() => setOpen(false)}>
+            Request a pilot
           </a>
         </nav>
       </div>

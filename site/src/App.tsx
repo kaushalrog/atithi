@@ -1,6 +1,7 @@
 import { LazyMotion, MotionConfig, domAnimation } from "motion/react";
 import { Hero } from "./components/Hero";
 import { Nav } from "./components/Nav";
+import { Pilot, Privacy } from "./components/Pilot";
 import { SampleBooking } from "./components/SampleBooking";
 import { Capabilities, Closing, Footer, HowItWorks, Product, Trust, UseCases } from "./components/Sections";
 
@@ -20,7 +21,9 @@ export default function App() {
           <UseCases />
           <HowItWorks />
           <Trust />
+          <Pilot />
           <Closing />
+          <Privacy />
         </main>
         <Footer />
       </MotionConfig>

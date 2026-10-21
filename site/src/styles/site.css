@@ -239,6 +239,26 @@ html:not(.js) .js-only { display: none !important; }
 .status-note { display: block; margin-top: 6px; color: var(--muted); font-size: 0.85rem; }
 .shot-telugu { margin-top: var(--s7); max-width: 420px; }
 
+/* ---------- pilot + privacy ---------- */
+.cta-note { margin-top: var(--s3); }
+.cta-note a, .pilot-mail a, .footer a, .privacy a { color: var(--teal-deep); text-underline-offset: 3px; }
+.pilot { padding: var(--section) 0; background: var(--paper-deep); border-block: 1px solid var(--line); }
+.pilot-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: clamp(32px, 6vw, 96px); align-items: start; }
+.pilot .lede { margin-top: var(--s4); }
+.pilot-mail { margin-top: var(--s4); }
+.pilot-steps { border-top: 1px solid var(--line); }
+.pilot-steps li { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: var(--s4); padding: var(--s5) 0; border-bottom: 1px solid var(--line); }
+.pilot-steps h3 { font-size: 1.05rem; font-weight: 600; }
+.pilot-steps p { margin-top: 6px; color: var(--ink-2); }
+.privacy { padding: clamp(56px, 7vw, 96px) 0; border-top: 1px solid var(--line); }
+.privacy-grid { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: clamp(24px, 5vw, 72px); }
+.privacy-title { margin-top: var(--s3); }
+.privacy-body h3 { font-size: 1rem; font-weight: 600; margin-top: var(--s5); }
+.privacy-body h3:first-child { margin-top: 0; }
+.privacy-body p { margin-top: var(--s2); color: var(--ink-2); max-width: 44rem; }
+.retention th { font-weight: 400; }
+.retention td { color: var(--ink); }
+
 /* ---------- closing + footer ---------- */
 .closing { padding: var(--section) 0 clamp(64px, 8vw, 120px); border-top: 1px solid var(--line); }
 .closing-inner { display: flex; flex-direction: column; align-items: flex-start; }
@@ -253,7 +273,7 @@ html:not(.js) .js-only { display: none !important; }
 @media (max-width: 1100px) {
   .hero-grid .display { grid-column: 1 / -1; }
   .hero-copy { grid-column: 1 / 10; padding-bottom: 0; }
-  .sample-grid, .caps-grid, .trust-grid { grid-template-columns: minmax(0, 1fr); }
+  .sample-grid, .caps-grid, .trust-grid, .pilot-grid, .privacy-grid { grid-template-columns: minmax(0, 1fr); }
   .shot-chat { justify-self: start; }
   .stage-body { grid-template-columns: minmax(0, 1fr) 240px; }
   .case { grid-template-columns: repeat(2, minmax(0, 1fr)); }

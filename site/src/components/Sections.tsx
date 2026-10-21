@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { PILOT_EMAIL, PILOT_MAILTO } from "../data/pilot";
 import { PLAY_EVENT } from "./SampleBooking";
 import { CheckMark, Signal } from "./Signal";
 import { Mark } from "./Nav";
@@ -240,8 +241,8 @@ export function Closing() {
         <h2 id="closing-title" className="display closing-title">Every caller, welcomed.</h2>
         <p className="lede">Named after <em>Atithi Devo Bhava</em>: the guest is God. That's how a good front desk treats every caller.</p>
         <div className="cta-row">
-          <a href="#sample" className="btn btn-ink" onClick={() => window.dispatchEvent(new Event(PLAY_EVENT))}>Play the sample booking</a>
-          <a href="#walkthrough" className="btn btn-ghost">Watch the walkthrough</a>
+          <a href={PILOT_MAILTO} className="btn btn-ink">Request an early-access pilot</a>
+          <a href="#sample" className="btn btn-ghost" onClick={() => window.dispatchEvent(new Event(PLAY_EVENT))}>Play the sample booking</a>
         </div>
       </div>
     </section>
@@ -254,7 +255,8 @@ export function Footer() {
       <div className="wrap footer-inner">
         <a href="#top" className="brand"><Mark size={22} /> <span>Atithi</span></a>
         <p>An AI receptionist in development. Sample data only on this page.</p>
-        <p>This site sets no cookies and loads nothing from third parties.</p>
+        <p>This site sets no cookies and loads nothing from third parties. <a href="#privacy">Privacy notice</a></p>
+        <p><a href={`mailto:${PILOT_EMAIL}`}>{PILOT_EMAIL}</a></p>
       </div>
     </footer>
   );

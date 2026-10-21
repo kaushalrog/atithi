@@ -41,6 +41,23 @@ Nothing has been deployed yet.
 ## QA
 
 ```bash
+npm run test:e2e          # Playwright Test: builds, serves, runs e2e/ on desktop + mobile Chrome
+```
+
+`e2e/site.spec.ts` checks these:
+- the pilot CTA is a real `mailto:` link;
+- every in-page link resolves;
+- the pilot steps and privacy notice are present;
+- the sample never shows "You're booked" beside an unsaved record, in all three scenarios;
+- the video isn't fetched before play;
+- there's no sideways scrolling at 1440, 1280, 768, 390 or 320;
+- keyboard focus, the mobile menu, reduced motion, and the page without JavaScript.
+
+It uses the installed Chrome (`channel: "chrome"`), so no browser download is needed.
+
+The Python scripts are the earlier ad-hoc captures, kept for screenshots:
+
+```bash
 python qa/shots.py http://localhost:4173 qa/raw/<name>      # 1440/1280/768/390/320, reduced motion, no JS
 python qa/interact.py http://localhost:4173 qa/raw/<name>   # keyboard, menu, sample failure path, video, no JS
 ```

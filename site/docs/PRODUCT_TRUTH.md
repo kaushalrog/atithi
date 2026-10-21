@@ -62,5 +62,16 @@ Revised 2026-10-21 after the four-agent audit (red team RT-1–RT-4, demand stra
 - "What it's built not to do" lists rules it's tested against, explicitly "not guarantees".
 - Use cases are labelled "Illustrative situations built on our sample clinic and salon, not customer stories".
 - Sample dates are relative ("tomorrow", "Saturday"), so they never go stale.
+
+## The pilot call to action and privacy notice (2026-10-21)
+
+- **The main CTA** is a `mailto:` link to **atithi.support@gmail.com**, the address the owner supplied. It has a prefilled subject and a short template. The site has no form and no server.
+- **What happens next** (the pilot section) restates the owner's agreed process:
+  1. email;
+  2. a reply to arrange a short call that asks for a real missed-call example;
+  3. a free two-week pilot, using the test chat (and website chat if wanted), with no phone calls;
+  4. no payment, and deletion on request.
+- **The privacy notice** retention periods must match `docs/DATA_HANDLING.md` in the main repo, which the server enforces.
+- **Depends on the backend branch:** the notice says Atithi tells customers it is an AI and that conversations are saved as text. **Don't publish the site until that disclosure is merged and tested** (`feat/pilot-readiness`).
 - The interactive sample on the page is labelled "**Sample conversation. Scripted, no AI is running.**"
 - No numbers about outcomes. The only numbers on the page are times and prices inside sample conversations, taken from the repo's demo clinic (`clients/demo_clinic.yaml`).

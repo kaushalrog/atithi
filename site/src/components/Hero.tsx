@@ -1,4 +1,5 @@
 import { BookingRecord } from "./BookingRecord";
+import { PILOT_MAILTO } from "../data/pilot";
 import { PLAY_EVENT } from "./SampleBooking";
 import { CheckMark, Signal } from "./Signal";
 
@@ -18,11 +19,12 @@ export function Hero() {
               said and what it saved.
             </p>
             <div className="cta-row">
-              <a href="#sample" className="btn btn-ink" onClick={() => window.dispatchEvent(new Event(PLAY_EVENT))}>
+              <a href={PILOT_MAILTO} className="btn btn-ink">Request an early-access pilot</a>
+              <a href="#sample" className="btn btn-ghost" onClick={() => window.dispatchEvent(new Event(PLAY_EVENT))}>
                 Play a sample booking
               </a>
-              <a href="#product" className="btn btn-ghost">See the owner's view</a>
             </div>
+            <p className="small cta-note">Opens your email app. <a href="#pilot">What happens next</a></p>
           </div>
         </div>
 

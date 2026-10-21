@@ -45,7 +45,7 @@ async def main():
 
         # Enter on the hero CTA plays the sample
         await page.goto(BASE + "/", wait_until="networkidle")
-        await page.focus("a.btn-ink[href='#sample']")
+        await page.focus(".hero a.btn[href='#sample']")
         await page.keyboard.press("Enter")
         await page.wait_for_timeout(2500)
         step = await page.text_content(".stage-step")

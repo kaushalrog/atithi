@@ -11,12 +11,15 @@ const readTime = (s: Step) => (s.kind === "agent" ? PAUSE.agent + s.text.length 
 
 export const PLAY_EVENT = "atithi:play-sample";
 
-type State = { scenario: number; shown: number; resolved: boolean; playing: boolean };
+// `run` changes on every start, so the conversation list is rebuilt rather
+// than animated out: an old "You're booked" must never linger beside a
+// record that has already been reset.
+type State = { scenario: number; shown: number; resolved: boolean; playing: boolean; run: number };
 
 export function SampleBooking() {
   // First render (and the prerendered HTML) shows the whole first scenario,
   // so the page tells the story even before JavaScript runs.
-  const [st, setSt] = useState<State>({ scenario: 0, shown: SCENARIOS[0].steps.length, resolved: true, playing: false });
+  const [st, setSt] = useState<State>({ scenario: 0, shown: SCENARIOS[0].steps.length, resolved: true, playing: false, run: 0 });
   const reduce = useReducedMotion();
   const sc = SCENARIOS[st.scenario];
   const done = st.shown >= sc.steps.length && st.resolved;
@@ -25,7 +28,7 @@ export function SampleBooking() {
 
   const start = useCallback((scenario: number) => {
     const first = SCENARIOS[scenario].steps[0];
-    setSt({ scenario, shown: 1, resolved: first.kind !== "tool", playing: true });
+    setSt((s) => ({ scenario, shown: 1, resolved: first.kind !== "tool", playing: true, run: s.run + 1 }));
   }, []);
 
   // Advance one beat: resolve a pending tool, or reveal the next step.
@@ -109,7 +112,7 @@ export function SampleBooking() {
             <span className="stage-step" aria-hidden="true">{Math.min(st.shown, sc.steps.length)} / {sc.steps.length}</span>
           </div>
           <div className="stage-body">
-            <ol ref={talk} className="talk" aria-live="polite" aria-relevant="additions" tabIndex={0} aria-label="Conversation">
+            <ol key={st.run} ref={talk} className="talk" aria-live="polite" aria-relevant="additions" tabIndex={0} aria-label="Conversation">
               <AnimatePresence initial={false}>
                 {visible.map((s, i) => {
                   const pending = i === visible.length - 1 && !st.resolved;
