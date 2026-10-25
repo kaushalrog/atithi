@@ -61,8 +61,19 @@ Telugu, qualifies and books. Inbound reception is a side feature for them. Our w
    say that.** This is the whole positioning.
 2. **Questions inbox.** They offer "knowledge base training" (you upload what it should know). We close the
    loop: the agent reports what it *could not* answer, the owner answers once, it becomes an FAQ.
-3. **Latency.** They advertise 0.8–1.3s. Our Live path measured ~0.1–0.5s gaps on a real call. Verify under
-   load, then say it loudly.
+3. **Latency — DO NOT QUOTE A NUMBER YET.** An earlier draft of this document
+   claimed "~0.1–0.5s on a real call". That was wrong and it must not be
+   repeated to anyone. Those figures come from `bench_load.py`, which drives
+   **fake** providers with a hardcoded 250 ms "model think" sleep, and whose
+   own header says: *"These numbers say nothing about real Gemini/Twilio
+   latency. Never quote them as call latency."* They measure our code's
+   overhead, not what a caller hears.
+   Independent 2026 benchmarks put every platform at roughly 1.3–3.1s
+   voice-to-voice, and measured **Gemini Live itself at about 3.05s**, so
+   Outpero's 0.8–1.3s is normal-to-good and we have no basis to claim better.
+   Before any marketing use, measure **utterance-end → audible-at-handset**,
+   p50 and p95, over at least 100 real calls. (Vapi advertised sub-500 ms and
+   was independently measured at 1.5–3.1s — that is the outcome to avoid.)
 4. **Double-booking is structurally impossible**, not a calendar integration detail.
 
 ### Strategy

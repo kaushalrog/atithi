@@ -19,6 +19,8 @@ Two things live here:
    whether the phone call should stay on Gemini's native audio (fastest) or
    go through a dedicated Indian TTS (smoothest). English stays native;
    Telugu/Tamil/Hindi prefer a real Indian voice when one is configured.
+   **The phone half of this policy is not wired yet** — see
+   `use_cascaded_on_phone`. Today a call uses `live_voice()` only.
 
 A business can override any of it in its YAML:
 
@@ -344,7 +346,15 @@ def live_voice(config: dict | None = None) -> str:
 
 
 def use_cascaded_on_phone(text: str, config: dict | None = None) -> bool:
-    """Should this reply be spoken by a dedicated TTS instead of native audio?"""
+    """Should this reply be spoken by a dedicated TTS instead of native audio?
+
+    NOT WIRED YET. The policy is correct and tested, but `telephony.py` only
+    calls `live_voice()`, so a real phone call still speaks every language
+    through one Gemini prebuilt voice. Routing it means taking Gemini off
+    response_modalities=["AUDIO"] for those languages and streaming the TTS
+    back as mu-law. Until that lands, do not read this function as shipped
+    behaviour.
+    """
     return not plan(detect_language(text), config)["native_ok"]
 
 

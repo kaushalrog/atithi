@@ -63,7 +63,7 @@ A second piece is now being built on top of it: **voxcheck**, a free offline che
 - **Books real appointments.** It checks live availability first, and the database allows only one confirmed booking per slot, so two simultaneous callers can never both get 10:30.
 - **Captures leads** when a caller is interested but doesn't book: name, phone and what they wanted, for the owner to follow up.
 - **Works on four channels** with the same brain: the terminal, push-to-talk voice, a real-time interruptible voice call (barge-in supported), and a browser test call in the portal. Real phone calls via Twilio are code-complete.
-- **Speaks Indian languages.** It understands and answers Telugu, Hindi and Tamil with matching neural voices via edge-tts (free, no key).
+- **Speaks Indian languages.** It understands and answers Telugu, Hindi and Tamil. In the portal and the push-to-talk channel these use matching Indian neural voices (edge-tts, free, no key). **On a real phone call the voice is currently a Gemini prebuilt voice, which is English-first** — the per-language routing in `voices.py` exists but is not yet wired into the phone path (`docs/STRATEGY.md` §3).
 - **Gives the owner a dashboard** with calls handled, minutes, bookings, leads, a 7-day chart, the full call history with transcripts, and bookings and leads tables.
 - **Records every call twice.** A human-readable call record feeds the dashboard, and a machine-readable trace feeds the upcoming checker.
 
