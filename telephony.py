@@ -71,6 +71,7 @@ from starlette.websockets import WebSocketState
 
 import billing
 import perf
+import memory
 import storage
 import voices
 from agent import TOOL_SCHEMAS, ReceptionistAgent, TurnRecorder
@@ -701,6 +702,10 @@ async def twilio_stream(ws: WebSocket):
                 "— when taking a booking or lead you may offer to use it, but always "
                 "confirm it with the caller first."
             )
+            # Caller ID means we may already know this person. A receptionist
+            # who asks a regular patient for their name every time feels like
+            # a form, not a receptionist (memory.py).
+            agent.system_prompt += await _off_loop(memory.brief_for, client_id, caller)
         perf.gauge("calls.active", _active_calls)
         perf.ensure_loop_monitor()
         # The business picks its own Gemini voice (voices.py); it used to be
