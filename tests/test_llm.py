@@ -116,3 +116,35 @@ def test_thinking_is_switched_off_only_where_the_model_accepts_it():
         return m._config_for("prompt", None)
     assert config_for("gemini-2.5-flash").thinking_config.thinking_budget == 0
     assert config_for("gemini-3.5-flash-lite").thinking_config is None
+
+
+def test_a_delay_longer_than_our_ceiling_stops_instead_of_retrying_early(monkeypatch):
+    """Found by a real eval run: Google said 'retry in 58s', we capped the
+    wait at 25 s, retried while still rate-limited and burned every attempt.
+    Waiting less than we were told is worse than not waiting at all."""
+    import llm
+
+    monkeypatch.delenv("LLM_MAX_RETRY_WAIT_S", raising=False)
+    error = type("E", (), {"code": 429,
+                           "__str__": lambda self: "{'retryDelay': '58s'}"})()
+    assert llm._retry_wait(error, 0) == 0            # 0 == do not bother
+
+
+def test_a_batch_job_may_sit_out_the_full_window(monkeypatch):
+    """The evals set these so a free-tier run can finish."""
+    import llm
+
+    monkeypatch.setenv("LLM_MAX_RETRY_WAIT_S", "70")
+    error = type("E", (), {"code": 429,
+                           "__str__": lambda self: "{'retryDelay': '58s'}"})()
+    assert llm._retry_wait(error, 0) == 59
+    assert llm.max_retry_wait() == 70
+
+
+def test_the_retry_budget_is_batch_aware(monkeypatch):
+    import llm
+
+    monkeypatch.delenv("LLM_RETRY_BUDGET_S", raising=False)
+    assert llm.retry_budget() == llm.RETRY_BUDGET_S
+    monkeypatch.setenv("LLM_RETRY_BUDGET_S", "150")
+    assert llm.retry_budget() == 150
