@@ -162,3 +162,39 @@ def test_price_check_flags_a_plan_that_is_too_cheap_to_serve():
 
     cheap = plans.price_check(1.0)                        # floor 3/min
     assert cheap["plans"]["clinic"]["safe"] is True
+
+
+# ---- the gate is actually wired (capability review, gap #1) -----------------------
+
+def test_a_trial_out_of_minutes_is_refused_by_billing(monkeypatch, measured):
+    """plans.py was written, tested and imported by nothing. The minutes gate
+    lives in billing.client_active so every caller gets it at once."""
+    import billing
+
+    fake_client(monkeypatch, plan="trial", minutes=61)
+    assert billing.client_active("x") is False
+
+
+def test_a_trial_inside_its_minutes_passes(monkeypatch, measured):
+    import billing
+
+    fake_client(monkeypatch, plan="trial", minutes=5)
+    assert billing.client_active("x") is True
+
+
+def test_a_paying_clinic_is_never_gated_on_minutes(monkeypatch, measured):
+    import billing
+
+    fake_client(monkeypatch, plan="clinic", minutes=99999)
+    assert billing.client_active("x") is True
+
+
+def test_a_metering_failure_does_not_take_a_clinic_off_the_air(monkeypatch):
+    """Fail open: a bug in our accounting must not silence someone's phone."""
+    import billing
+    import plans as plans_mod
+
+    fake_client(monkeypatch, plan="clinic", minutes=0)
+    monkeypatch.setattr(plans_mod, "allowance",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert billing.client_active("x") is True

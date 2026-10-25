@@ -36,11 +36,29 @@ def _is_active(billing: dict | None) -> bool:
 
 
 def client_active(client_id: str) -> bool:
-    """May this business use the agent (portal sessions + phone calls)?"""
+    """May this business use the agent (portal sessions + phone calls)?
+
+    Two gates: the plan must not have lapsed, and a TRIAL must not have used
+    up its free minutes. Wiring the minutes gate here rather than at each
+    caller means every existing check — the portal session, the inbound
+    webhook, the stream, the callback worker — picks it up at once.
+
+    A paying business is never stopped by minutes; it bills overage instead
+    (plans.allowance). Cutting off a clinic's phone line mid-day over a
+    threshold would cost them, and us, far more than the minutes.
+    """
     cfg = storage.read_client_config(client_id)
     if cfg is None:
         return False
-    return _is_active(cfg.get("billing"))
+    if not _is_active(cfg.get("billing")):
+        return False
+    try:
+        import plans
+        return plans.allowance(client_id)["allowed"]
+    except Exception as e:
+        # A metering bug must never take a paying clinic off the air.
+        print(f"  [billing] allowance check failed for {client_id}: {e}")
+        return True
 
 
 def status(client_id: str) -> dict:
