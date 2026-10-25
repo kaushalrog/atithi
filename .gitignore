@@ -28,3 +28,6 @@ bookings.db-*
 
 # every customer SMS (phone numbers): never commit
 notifications.jsonl
+
+# Voice lab output (generated samples, not source)
+voice_lab/
