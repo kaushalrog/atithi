@@ -7,10 +7,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 import server
+from conftest import access_key
+
 import storage
 
-DEMO_KEY = {"X-Client-Key": "VX-84KQ2N"}
-SALON_KEY = {"X-Client-Key": "VX-7TPX3R"}
+DEMO_KEY = {"X-Client-Key": access_key()}
+SALON_KEY = {"X-Client-Key": access_key("lakshmi_beauty_salon")}
 
 
 @pytest.fixture

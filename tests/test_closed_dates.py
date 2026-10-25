@@ -10,9 +10,9 @@ import scheduling
 import server
 import storage
 from agent import ReceptionistAgent
-from conftest import FakeLLM, open_day, open_times
+from conftest import access_key, FakeLLM, open_day, open_times
 
-DEMO_KEY = "VX-84KQ2N"
+DEMO_KEY = access_key()
 
 
 _REAL_READ = storage.read_client_config

@@ -295,9 +295,19 @@ def create_reset(email: str) -> str | None:
     answer identically either way, so nobody can probe which emails exist)."""
     email = email.strip().lower()
     with _db() as conn:
-        if not conn.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
+        row = conn.execute("SELECT role FROM users WHERE email=?", (email,)).fetchone()
+        if row is None:
             return None
-        code = "RS-" + secrets.token_hex(3).upper()
+        if row["role"] == "admin":
+            # The platform admin is not one more tenant: that account can read
+            # every business's data and place outbound calls. Its password
+            # lives in .env, so it has no business in a reset table that an
+            # unauthenticated stranger can fill (security audit C2).
+            print("  [auth] refused a password reset for the admin account")
+            return None
+        # 128 bits, not 24. The old 6 hex characters were guessable at a
+        # sustained request rate well inside one code's lifetime.
+        code = "RS-" + secrets.token_urlsafe(16)
         expires = (dt.datetime.now() + dt.timedelta(minutes=RESET_MINUTES)).isoformat(timespec="seconds")
         conn.execute("DELETE FROM resets WHERE email=? OR expires < ?", (email, _now()))
         conn.execute("INSERT INTO resets VALUES (?,?,?,0)", (code, email, expires))
@@ -311,7 +321,7 @@ def reset_password(email: str, code: str, new_password: str) -> dict:
     with _db() as conn:
         row = conn.execute(
             "SELECT * FROM resets WHERE code=? AND email=? AND used=0 AND expires >= ?",
-            (code.strip().upper(), email, _now()),
+            (code.strip(), email, _now()),
         ).fetchone()
         if row is None:
             raise PermissionError("That reset code is wrong or has expired")

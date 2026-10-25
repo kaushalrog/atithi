@@ -187,7 +187,7 @@ python server.py --host 0.0.0.0       # listen on all interfaces (only behind pr
 - the list of business access codes
 
 **Who sees what:**
-- Every business has a **business code** (`access_key:` in its YAML, e.g. `VX-84KQ2N`). An owner enters it on the portal and sees **only** their own business. Requests for another business's data are rejected server-side.
+- Every business has a **business code** (`access_key:` in its YAML). An owner enters it on the portal and sees **only** their own business. Requests for another business's data are rejected server-side.
 - `ADMIN_PASSWORD` opens everything.
 
 ---

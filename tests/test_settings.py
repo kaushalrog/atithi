@@ -7,10 +7,11 @@ import yaml
 from fastapi.testclient import TestClient
 
 import server
+from conftest import access_key
 import storage
 
-DEMO_KEY = "VX-84KQ2N"      # demo_clinic's code (from its YAML)
-SALON_KEY = "VX-7TPX3R"     # lakshmi_beauty_salon's code
+DEMO_KEY = access_key()      # demo_clinic's code (from its YAML)
+SALON_KEY = access_key("lakshmi_beauty_salon")     # lakshmi_beauty_salon's code
 
 
 @pytest.fixture
@@ -66,7 +67,7 @@ def test_saving_updates_what_the_agent_knows_and_keeps_everything_else(client):
         assert after.get(kept) == before.get(kept)
     # The receptionist's next conversation uses the new details.
     from agent import ReceptionistAgent
-    from conftest import FakeLLM
+    from conftest import access_key, FakeLLM
     assert "Teeth whitening" in ReceptionistAgent("demo_clinic", llm=FakeLLM([])).system_prompt
 
 

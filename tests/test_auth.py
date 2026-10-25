@@ -155,3 +155,32 @@ def test_owner_cannot_use_admin_endpoints(client):
     assert client.get("/api/clients", headers=bearer(token)).status_code == 401
     assert client.post("/api/admin/activate", json={"client_id": "x"},
                        headers=bearer(token)).status_code == 401
+
+
+def test_the_admin_account_cannot_be_password_reset(client, monkeypatch):
+    """Security audit C2: reset_password had no role check and handed back a
+    session token, so anyone who guessed a 24-bit code owned every tenant's
+    data and the Twilio account. The admin's password lives in .env."""
+    import auth
+
+    assert auth.create_reset("sai@test.com") is None          # the admin email
+    # and the endpoint still answers identically, so nobody learns why
+    res = client.post("/api/auth/forgot", json={"email": "sai@test.com"})
+    assert res.status_code == 200
+
+
+def test_an_owner_can_still_reset(client):
+    import auth
+
+    client.post("/api/auth/signup", json={"email": "owner@x.com", "password": "secret1"})
+    code = auth.create_reset("owner@x.com")
+    assert code and code.startswith("RS-")
+
+
+def test_reset_codes_are_not_guessable(client):
+    """24 bits was brute-forceable inside one code's 60-minute life."""
+    import auth
+
+    client.post("/api/auth/signup", json={"email": "owner2@x.com", "password": "secret1"})
+    code = auth.create_reset("owner2@x.com")
+    assert len(code) >= 20            # RS- + 128 bits of base64url
