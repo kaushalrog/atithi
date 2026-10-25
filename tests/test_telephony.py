@@ -315,7 +315,9 @@ def sign(url, params=None):
 class SpyLive:
     created = []
 
-    def __init__(self):
+    def __init__(self, voice=None):
+        # Real GeminiLive takes the business's chosen voice (voices.py).
+        self.voice = voice
         SpyLive.created.append(self)
 
     async def connect(self, system_prompt, tools):
@@ -1006,6 +1008,7 @@ def test_a_failed_live_connect_leaves_nothing_to_close():
 
     live = llm_mod.GeminiLive.__new__(llm_mod.GeminiLive)
     live.model, live._cm, live._session = "fake", None, None
+    live.voice = "Kore"                      # set by __init__, bypassed here
     live.client = type("C", (), {"aio": type("A", (), {"live": type("L", (), {
         "connect": staticmethod(lambda **kw: Refuses())})()})()})()
 

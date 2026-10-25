@@ -72,6 +72,7 @@ from starlette.websockets import WebSocketState
 import billing
 import perf
 import storage
+import voices
 from agent import TOOL_SCHEMAS, ReceptionistAgent, TurnRecorder
 
 router = APIRouter()
@@ -702,7 +703,9 @@ async def twilio_stream(ws: WebSocket):
             )
         perf.gauge("calls.active", _active_calls)
         perf.ensure_loop_monitor()
-        live = GeminiLive()
+        # The business picks its own Gemini voice (voices.py); it used to be
+        # one English-first voice for every business and every language.
+        live = GeminiLive(voice=voices.live_voice(agent.config))
         # Bounded: a handshake that hangs used to leave the caller in silence
         # (holding a line) for as long as the network let it.
         try:

@@ -340,9 +340,13 @@ class GeminiLive:
     # Mic audio must be 16 kHz mono 16-bit PCM; the agent's voice comes back at 24 kHz.
     INPUT_MIME = "audio/pcm;rate=16000"
 
-    def __init__(self, model: str = LIVE_MODEL):
+    def __init__(self, model: str = LIVE_MODEL, voice: str | None = None):
         self.client = shared_client()   # ~780 ms saved on every phone call
         self.model = model
+        # Which prebuilt Gemini voice speaks on a native-audio call. It used to
+        # be hardcoded, so every business in every language shared one
+        # English-first voice. See voices.py for the per-business policy.
+        self.voice = voice or "Kore"
         self._cm = None
         self._session = None
 
@@ -353,7 +357,7 @@ class GeminiLive:
             tools=_tools_to_gemini(tools),
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Kore")
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.voice)
                 )
             ),
             # Ask the server to also send TEXT transcripts of both sides, so we

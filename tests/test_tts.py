@@ -1,6 +1,8 @@
 """Voice picking: reply script decides which Indian voice speaks."""
 
-from tts import VOICES, detect_language
+from voices import EdgeProvider, detect_language
+
+VOICES = EdgeProvider.voices
 
 
 def test_script_detection():
@@ -27,7 +29,7 @@ def test_a_stalled_speech_stream_times_out(monkeypatch):
 
     import pytest
 
-    import tts
+    import voices
 
     class Stalled:
         def __init__(self, text, voice):
@@ -37,9 +39,9 @@ def test_a_stalled_speech_stream_times_out(monkeypatch):
             await asyncio.Event().wait()
             yield {}
 
-    monkeypatch.setattr(tts.edge_tts, "Communicate", Stalled)
-    monkeypatch.setattr(tts, "TTS_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(voices.edge_tts, "Communicate", Stalled)
+    monkeypatch.setattr(voices, "SYNTH_TIMEOUT_S", 0.1)
     t0 = time.perf_counter()
-    with pytest.raises(tts.TTSTimeout):
-        tts.EdgeTTS().synthesize_bytes("Hello")
+    with pytest.raises(voices.VoiceError):
+        voices.EdgeProvider().synthesize("Hello", "en-IN-NeerjaNeural")
     assert time.perf_counter() - t0 < 1.0
