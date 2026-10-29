@@ -6,7 +6,7 @@
 
 **An AI receptionist for any business that takes bookings**: clinics, salons, restaurants, gyms, coaching centres, repair shops and more, built for India. It talks to customers by text, voice or phone, checks real availability, books appointments into a database that refuses double-bookings, saves leads, and logs every conversation for the business owner.
 
-## Watch the demo
+### Watch the demo
 
 [![Atithi demo: a customer books, an unknown question goes to the owner's inbox, WhatsApp, and the promise check](demo/atithi-demo-poster.jpg)](demo/atithi-demo.mp4)
 
