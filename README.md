@@ -1,6 +1,6 @@
 <p align="center"><img src="web/logo.svg" width="380" alt="Atithi"></p>
 
-# Atithi
+### Atithi
 
 *Every caller, welcomed.* Named after **Atithi Devo Bhava**, "the guest is God": how a good front desk treats every caller. (Formerly VoxAgent; the code, folder and settings still use the `voxagent` name.)
 
