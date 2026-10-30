@@ -27,7 +27,7 @@ export const RETENTION = [
   ["Conversation transcripts and their action traces", "90 days"],
   ["Leads: name, number and what they asked about", "180 days"],
   ["Bookings", "the customer's name and number are removed 1 year after the appointment"],
-  ["Unanswered questions", "180 days after you answer or dismiss them"],
+  ["Unanswered questions", "180 days after a customer last asked"],
   ["Missed-call callback list (phone numbers)", "30 days"],
   ["Log of text messages (sent or dry-run)", "30 days"],
   ["Call audio", "not stored by Atithi: calls are turned into text"],

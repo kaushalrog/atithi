@@ -78,6 +78,6 @@ Revised 2026-10-21 after the four-agent audit (red team RT-1–RT-4, demand stra
   - retention and deletion are in `docs/DATA_HANDLING.md`.
 
   **Merge `feat/pilot-readiness` before publishing the site.** The phone disclosure has still never played on a real call, but phone calls aren't offered in the pilot.
-- The retention table must match `storage.RETENTION_DAYS`: 90 / 180 / 1 year after the appointment / 180 / 30 / 30 days.
+- The retention table must match `storage.RETENTION_DAYS`: transcripts and traces 90 days, leads 180, booking name and number removed 1 year after the appointment, questions 180 after last asked, callback list 30, SMS log 30.
 - The interactive sample on the page is labelled "**Sample conversation. Scripted, no AI is running.**"
 - No numbers about outcomes. The only numbers on the page are times and prices inside sample conversations, taken from the repo's demo clinic (`clients/demo_clinic.yaml`).
