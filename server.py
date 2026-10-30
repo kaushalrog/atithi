@@ -16,9 +16,11 @@ Run:  python server.py            (opens http://127.0.0.1:8765)
 
 import argparse
 import contextlib
+import contextvars
 import copy
 import datetime as dt
 import hmac
+import ipaddress
 import os
 import re
 import secrets
@@ -37,6 +39,7 @@ import callbacks
 import llm as llm_module
 import notify
 import perf
+import ratelimit
 import scheduling
 import storage
 import telephony
@@ -84,6 +87,90 @@ class BodySizeLimit:
 
 app.add_middleware(BodySizeLimit)
 app.include_router(telephony.router)  # /twilio/voice + /twilio/stream (phone calls)
+
+# ---------- credential throttle (audit RT-3, review 2026-10-21) ---------------
+#
+# Wrong credentials are counted where they are checked, per (address, what is
+# being guessed): each business's code separately, the admin key, code login,
+# password login and reset codes. So one attacker guessing business A can't
+# lock out business B, and nobody can lock out everyone behind a shared
+# address (an earlier version counted every 401 per address and could).
+# Expired sign-in tokens aren't counted: tokens are long random strings, not
+# guessable, and a stale browser tab would otherwise lock its own owner out.
+
+CREDENTIAL_FAILURES = ratelimit.FailureLimiter()
+_request_ip: contextvars.ContextVar[str] = contextvars.ContextVar("request_ip", default="?")
+
+
+def _proxy_hops() -> int:
+    """How many proxies of ours sit in front of the server (VOXAGENT_TRUST_PROXY:
+    'true' = 1, or a number). 0 = trust no forwarding header."""
+    raw = os.getenv("VOXAGENT_TRUST_PROXY", "").strip().lower()
+    if raw in ("true", "yes"):
+        return 1
+    return int(raw) if raw.isdigit() else 0
+
+
+def _client_ip(request: Request) -> str:
+    """The caller's address. Behind our own proxy, X-Forwarded-For is read from
+    the RIGHT: each proxy appends the address it saw, so the last N entries
+    come from our proxies and anything to their left is whatever the client
+    sent (spoofable). IPv6 addresses count per /64, which one user controls."""
+    ip = request.client.host if request.client else "?"
+    hops = _proxy_hops()
+    if hops:
+        chain = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+        if len(chain) >= hops:
+            ip = chain[-hops]
+    try:
+        addr = ipaddress.ip_address(ip)
+        if addr.version == 6:
+            return str(ipaddress.ip_network(f"{addr}/64", strict=False))
+    except ValueError:
+        pass
+    return ip
+
+
+@app.middleware("http")
+async def remember_client_ip(request: Request, call_next):
+    """Make the caller's address available to the credential checks below
+    (contextvars follow the request into FastAPI's worker threads)."""
+    token = _request_ip.set(_client_ip(request))
+    try:
+        return await call_next(request)
+    finally:
+        _request_ip.reset(token)
+
+
+def throttle(scope: str):
+    """Refuse (429) while this address has too many wrong guesses at `scope`.
+    Checked BEFORE the credential, so a blocked guesser learns nothing even
+    when the next guess would have been right."""
+    wait = CREDENTIAL_FAILURES.retry_after(f"{_request_ip.get()}|{scope}")
+    if wait:
+        perf.event("auth.throttled")
+        minutes = max(1, round(wait / 60))
+        raise HTTPException(status_code=429, headers={"Retry-After": str(wait)},
+                            detail=f"Too many failed sign-in attempts. Try again in about "
+                                   f"{minutes} minute{'s' if minutes != 1 else ''}.")
+
+
+def wrong_guess(scope: str):
+    CREDENTIAL_FAILURES.fail(f"{_request_ip.get()}|{scope}")
+
+
+def admin_key_ok(key: str | None) -> bool:
+    """THE only place the admin key is compared (a test enforces it): every
+    route that accepts X-Admin-Key goes through the same throttle. A route
+    that compared it directly was an unthrottled password oracle (review
+    P2-N1, 2026-10-21)."""
+    if not key:
+        return False
+    throttle("admin")
+    if auth.admin_password_matches(key):
+        return True
+    wrong_guess("admin")
+    return False
 tts = EdgeTTS()
 
 
@@ -109,6 +196,10 @@ def _warm_up():
     if paused:
         print(f"  [bookings] NEW BOOKINGS ARE PAUSED: {paused}")
     print(_capacity_line())
+    short = storage.short_code_businesses()
+    if short:
+        print(f"  [security] {len(short)} business(es) still use an old short code "
+              f"({', '.join(short)}). Rotate before going public: python storage.py rotate-code <id>")
     # The callback dialer runs in the background and checks its switch
     # (ENABLE_CALLBACKS) on every round, so it does nothing until turned on.
     callbacks.start_worker(_callbacks_stop)
@@ -349,11 +440,17 @@ def authorize_client(client_id: str, client_key: str | None, admin_key: str | No
     user = bearer_user(authorization)
     if is_admin(user) or (user and user["client_id"] == client_id):
         return
-    if auth.admin_password_matches(admin_key):
+    if admin_key_ok(admin_key):
         return
     expected = client_access_key(client_id)
-    if expected and client_key and same_secret(client_key, expected):
-        return
+    if client_key:
+        # An unknown business id shares one bucket, so made-up ids can't
+        # buy an attacker extra guesses.
+        scope = f"code:{client_id}" if expected else "code:?"
+        throttle(scope)
+        if expected and same_secret(client_key, expected):
+            return
+        wrong_guess(scope)
     raise HTTPException(status_code=401, detail="Not authorized for this business")
 
 
@@ -464,7 +561,9 @@ def require_admin(x_admin_key: str | None = Header(default=None, alias="X-Admin-
         # anonymous caller shouldn't learn that admin is misconfigured or how.
         print(f"  [admin] admin console disabled: {problem}")
         raise HTTPException(status_code=503, detail="Admin console unavailable")
-    if is_admin(bearer_user(authorization)) or auth.admin_password_matches(x_admin_key):
+    if is_admin(bearer_user(authorization)):
+        return
+    if admin_key_ok(x_admin_key):
         return
     raise HTTPException(status_code=401, detail="Admin access only")
 
@@ -622,9 +721,11 @@ def auth_signup(req: CredentialsRequest):
 
 @app.post("/api/auth/login")
 def auth_login(req: CredentialsRequest):
+    throttle("password-login")
     try:
         return _with_business_name(auth.login(req.email, req.password))
     except PermissionError as e:
+        wrong_guess("password-login")
         raise HTTPException(status_code=401, detail=str(e))
 
 
@@ -643,17 +744,20 @@ def auth_forgot(req: ForgotRequest):
 
 @app.post("/api/auth/reset")
 def auth_reset(req: ResetRequest):
+    throttle("reset")
     try:
         return _with_business_name(auth.reset_password(req.email, req.code, req.new_password))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except PermissionError as e:
+        wrong_guess("reset")
         raise HTTPException(status_code=401, detail=str(e))
 
 
 @app.post("/api/portal/login")
 def portal_login(req: PortalLoginRequest):
     """A business owner logs in with their business code."""
+    throttle("code-login")
     code = req.access_key.strip()
     if code:
         for entry in storage.all_clients():
@@ -661,6 +765,7 @@ def portal_login(req: PortalLoginRequest):
             if cfg.get("access_key") and same_secret(code, cfg["access_key"]):
                 return {"client_id": entry["client_id"],
                         "business_name": cfg.get("business_name", entry["client_id"])}
+    wrong_guess("code-login")
     raise HTTPException(status_code=401, detail="That code doesn't match any business")
 
 
@@ -671,7 +776,7 @@ def create_business(req: BusinessRequest,
     # Admin can create any number of businesses; a signed-up owner exactly one
     # (their own — it gets linked to their account and starts a free trial).
     user = bearer_user(authorization)
-    as_admin = is_admin(user) or auth.admin_password_matches(x_admin_key)
+    as_admin = is_admin(user) or admin_key_ok(x_admin_key)
     if not as_admin:
         if user is None:
             raise HTTPException(status_code=401, detail="Sign in to create your business")
@@ -690,7 +795,7 @@ def create_business(req: BusinessRequest,
     config = {
         "client_id": client_id,
         # The owner's login code — shown once to the admin at creation.
-        "access_key": "VX-" + secrets.token_hex(3).upper(),
+        "access_key": storage.new_access_code(),
         "business_name": req.business_name.strip(),
         "address": req.address.strip(),
         "phone": req.phone.strip(),
@@ -1162,9 +1267,10 @@ def public_session(req: PublicSessionRequest, request: Request):
     client_id, cfg = entry["client_id"], entry["config"]
     if not billing.client_active(client_id):
         raise HTTPException(status_code=404, detail="This chat isn't available")
-    if not _ip_allowed(request.client.host if request.client else "?"):
+    if not _ip_allowed(_client_ip(request)):
         raise HTTPException(status_code=429, detail="Too many chats started — please wait a few minutes.")
     agent = ReceptionistAgent(client_id)
+    agent.set_channel("public")       # anyone on the internet: no look-ups, capped bookings
     session_id = _open_session(client_id, agent, "website", WIDGET_SESSIONS_PER_BUSINESS)
     return {"session_id": session_id, "business_name": cfg.get("business_name", "")}
 

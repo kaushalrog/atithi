@@ -9,9 +9,9 @@ from fastapi.testclient import TestClient
 import server
 import storage
 from agent import ReceptionistAgent
-from conftest import FakeLLM
+from conftest import FakeLLM, DEMO_CODE
 
-DEMO_KEY = {"X-Client-Key": "VX-84KQ2N"}
+DEMO_KEY = {"X-Client-Key": DEMO_CODE}
 
 
 @pytest.fixture
@@ -46,7 +46,7 @@ def test_off_by_default_and_unknown_keys_get_nothing(client):
 def test_switching_on_gives_a_public_key_that_is_not_the_login_code(client):
     s = enable(client)
     key = s["widget_key"]
-    assert key.startswith("wk_") and key != "VX-84KQ2N"
+    assert key.startswith("wk_") and key != DEMO_CODE
     assert enable(client)["widget_key"] == key                  # stable across saves
     res = client.post("/api/public/session", json={"key": key})
     assert res.status_code == 200

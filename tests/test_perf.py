@@ -12,7 +12,7 @@ import perf
 import server
 import storage
 from agent import ReceptionistAgent
-from conftest import FakeLLM, open_day
+from conftest import FakeLLM, open_day, DEMO_CODE
 
 
 @pytest.fixture(autouse=True)
@@ -148,7 +148,7 @@ def test_perf_endpoint_is_admin_only(tmp_storage, monkeypatch):
     client = TestClient(server.app)
     assert client.get("/api/admin/perf").status_code in (401, 503)
     assert client.get("/api/admin/perf",
-                      headers={"X-Client-Key": "VX-84KQ2N"}).status_code in (401, 503)
+                      headers={"X-Client-Key": DEMO_CODE}).status_code in (401, 503)
     res = client.get("/api/admin/perf", headers={"X-Admin-Key": "test-admin-pw"})
     assert res.status_code == 200
     assert {"spans", "events", "gauges"} <= set(res.json())

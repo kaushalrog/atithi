@@ -297,7 +297,7 @@ def create_reset(email: str) -> str | None:
     with _db() as conn:
         if not conn.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
             return None
-        code = "RS-" + secrets.token_hex(3).upper()
+        code = "RS-" + secrets.token_hex(6).upper()   # 48 bits; tries are also rate-limited
         expires = (dt.datetime.now() + dt.timedelta(minutes=RESET_MINUTES)).isoformat(timespec="seconds")
         conn.execute("DELETE FROM resets WHERE email=? OR expires < ?", (email, _now()))
         conn.execute("INSERT INTO resets VALUES (?,?,?,0)", (code, email, expires))

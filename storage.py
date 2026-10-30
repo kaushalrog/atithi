@@ -1092,6 +1092,11 @@ def call_outcome(history: list[dict]) -> dict:
     return {"booked": "book" in done, "lead": "lead" in done}
 
 
+def phone10(phone) -> str:
+    """Public name for _phone10: the last 10 digits of a number."""
+    return _phone10(phone)
+
+
 def _phone10(phone) -> str:
     """Last 10 digits: the same number written +91 98..., 098... or 98... ."""
     return re.sub(r"\D", "", str(phone or ""))[-10:]
@@ -1284,6 +1289,38 @@ def read_client_config(client_id: str) -> dict | None:
     return _cached(CLIENTS_DIR / f"{client_id}.yaml", _load_yaml)
 
 
+# Business codes: 12 characters from an alphabet without look-alikes
+# (no 0/O, 1/I/L), grouped for reading aloud: VX-7KQM-3RTW-9HDF. That is
+# about 2^59 possibilities; the old VX- + 6 hex was 2^24 (audit RT-3).
+CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
+LEGACY_CODE_LEN = 9   # "VX-" + 6 characters
+
+
+def new_access_code() -> str:
+    import secrets
+    chars = "".join(secrets.choice(CODE_ALPHABET) for _ in range(12))
+    return "VX-" + "-".join(chars[i:i + 4] for i in range(0, 12, 4))
+
+
+def short_code_businesses() -> list[str]:
+    """Businesses still on an old short code (rotate them before going public)."""
+    return [e["client_id"] for e in all_clients()
+            if len(str(e["config"].get("access_key") or "")) <= LEGACY_CODE_LEN
+            and e["config"].get("access_key")]
+
+
+def rotate_access_code(client_id: str) -> str:
+    """Give a business a new code; the old one stops working at once."""
+    import copy
+    cfg = read_client_config(client_id)
+    if cfg is None:
+        raise RuntimeError(f"no business '{client_id}'")
+    cfg = copy.deepcopy(cfg)              # the cached parse is shared: never mutate it
+    cfg["access_key"] = new_access_code()
+    write_client_config(client_id, cfg)
+    return cfg["access_key"]
+
+
 def write_client_config(client_id: str, cfg: dict):
     path = CLIENTS_DIR / f"{client_id}.yaml"
     _guard_write(path)
@@ -1449,6 +1486,8 @@ def main(argv=None) -> int:
                            help="one-time import of bookings from the configured Google Sheet")
     sheet.add_argument("--skip", action="store_true",
                        help="record that the Sheet has no bookings to import")
+    rotate = sub.add_parser("rotate-code", help="give a business a new business code")
+    rotate.add_argument("client_id")
     args = parser.parse_args(argv)
     try:
         if args.cmd == "export-csv":
@@ -1457,6 +1496,9 @@ def main(argv=None) -> int:
         elif args.cmd == "import-sheet":
             import_sheet(skip=args.skip)
             print("Sheet import " + ("skipped" if args.skip else "done") + "; new bookings are open.")
+        elif args.cmd == "rotate-code":
+            print(f"New business code for {args.client_id}: {rotate_access_code(args.client_id)}")
+            print("The old code no longer works. Give the new one to the owner privately.")
     except (RuntimeError, FileExistsError, OSError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1

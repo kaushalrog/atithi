@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 import server
 import storage
 from agent import ReceptionistAgent
-from conftest import FakeLLM
+from conftest import FakeLLM, DEMO_CODE
 
 
 def test_the_prompt_names_the_business_type_and_what_customers_book(tmp_storage, monkeypatch):
@@ -34,7 +34,7 @@ def test_settings_save_the_type_and_refuse_odd_booking_words(tmp_storage, monkey
     monkeypatch.setattr(auth, "DB_FILE", tmp_storage / "voxagent.db")
     monkeypatch.setattr(auth, "LEGACY_USERS", tmp_storage / "no_users.json")
     monkeypatch.setattr(auth, "LEGACY_TOKENS", tmp_storage / "no_tokens.json")
-    client, key = TestClient(server.app), {"X-Client-Key": "VX-84KQ2N"}
+    client, key = TestClient(server.app), {"X-Client-Key": DEMO_CODE}
     s = client.get("/api/business/demo_clinic/settings", headers=key).json()
     assert s["booking_word"] == "appointment"
     body = {k: v for k, v in s.items() if k in server.BusinessRequest.model_fields}

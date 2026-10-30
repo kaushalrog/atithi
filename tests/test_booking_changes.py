@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 import server
 import storage
 from agent import ReceptionistAgent
-from conftest import FakeLLM, open_day, open_times
+from conftest import FakeLLM, open_day, open_times, DEMO_CODE, SALON_CODE
 
 PHONE = "9876543210"
 
@@ -98,12 +98,12 @@ def test_the_owner_cancels_from_the_dashboard_and_counts_stay_honest(tmp_storage
     monkeypatch.setattr(auth, "LEGACY_USERS", tmp_storage / "no_users.json")
     monkeypatch.setattr(auth, "LEGACY_TOKENS", tmp_storage / "no_tokens.json")
     client = TestClient(server.app)
-    key = {"X-Client-Key": "VX-84KQ2N"}
+    key = {"X-Client-Key": DEMO_CODE}
     day = open_day(); t = open_times(date=day)[0]
     book(agent, day, t)
     [row] = storage.read_bookings("demo_clinic")
     assert client.post("/api/bookings/cancel", json={"client_id": "demo_clinic", "booking_id": row["id"]},
-                       headers={"X-Client-Key": "VX-7TPX3R"}).status_code == 401   # another business
+                       headers={"X-Client-Key": SALON_CODE}).status_code == 401   # another business
     res = client.post("/api/bookings/cancel", json={"client_id": "demo_clinic", "booking_id": row["id"]},
                       headers=key)
     assert res.status_code == 200

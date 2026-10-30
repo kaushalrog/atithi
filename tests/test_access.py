@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import server
+from conftest import DEMO_CODE, SALON_CODE
 
 
 @pytest.fixture
@@ -19,7 +20,7 @@ def client(tmp_storage, monkeypatch):
     return TestClient(server.app)
 
 
-DEMO_KEY = "VX-84KQ2N"  # demo_clinic's code from its YAML
+DEMO_KEY = DEMO_CODE  # demo_clinic's code from its YAML
 
 
 def test_no_key_is_rejected(client):
@@ -28,7 +29,7 @@ def test_no_key_is_rejected(client):
 
 def test_wrong_business_code_is_rejected(client):
     res = client.get("/api/stats?client_id=demo_clinic",
-                     headers={"X-Client-Key": "VX-7TPX3R"})  # the salon's code
+                     headers={"X-Client-Key": SALON_CODE})  # the salon's code
     assert res.status_code == 401
 
 
@@ -368,9 +369,9 @@ def test_sessions_are_capped_per_business_and_in_total(client, session, monkeypa
     assert new("demo_clinic", DEMO_KEY) == 200        # the fixture's + this one = 2
     assert new("demo_clinic", DEMO_KEY) == 200        # at the cap its oldest idle one goes (D1)...
     assert sum(v["client_id"] == "demo_clinic" for v in server.sessions.values()) == 2  # ...never more
-    assert new("lakshmi_beauty_salon", "VX-7TPX3R") == 200   # other businesses unaffected
+    assert new("lakshmi_beauty_salon", SALON_CODE) == 200   # other businesses unaffected
     monkeypatch.setattr(server, "MAX_SESSIONS", 3)
-    assert new("lakshmi_beauty_salon", "VX-7TPX3R") == 429
+    assert new("lakshmi_beauty_salon", SALON_CODE) == 429
 
 
 def test_idle_sessions_are_purged_on_any_request(client, session):

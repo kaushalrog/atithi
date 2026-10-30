@@ -205,6 +205,30 @@ short trial notice before connecting. Upgrading (adding a card) removes both.
 
 ---
 
+## Before anyone outside can reach the server
+
+- **Business codes.** Every business signs in with its code. The two sample
+  businesses' codes are in git, so anyone with the repo knows them. Give each
+  business you put online a fresh one:
+
+  ```
+  python storage.py rotate-code demo_clinic
+  ```
+
+  The server prints a `[security]` warning at startup for any business still
+  on an old short code.
+- **Wrong sign-ins are limited:** 10 wrong guesses from one address at the
+  same thing (one business's code, the admin key, the login form, a reset
+  code) in 15 minutes, and that address is refused (HTTP 429) for that thing
+  until the oldest failure is 15 minutes old. Guessing one business's code
+  never locks out another business. Behind ngrok or another proxy of yours,
+  set `VOXAGENT_TRUST_PROXY=1` (the number of proxies in front of the server)
+  so each visitor is counted separately. Only the address your proxy added is
+  trusted, so a visitor can't fake one.
+- **Website chat** treats every visitor as a stranger: it never reads back a
+  booking, cancel/move requests go to the team as leads, and one conversation
+  (or one phone number) can hold at most 2 upcoming bookings.
+
 ## Capacity: what one server can carry (read before a pilot)
 
 Atithi runs as **one process**. Two things only exist in its memory: the
