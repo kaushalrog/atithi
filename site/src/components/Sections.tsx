@@ -60,6 +60,7 @@ export function Capabilities() {
 }
 
 export function Product() {
+  const [videoFailed, setVideoFailed] = useState(false);
   return (
     <section id="product" className="product" aria-labelledby="product-title">
       <div className="wrap">
@@ -97,12 +98,20 @@ export function Product() {
             <p>A narrated tour of the real portal, recorded on sample data with the live model: a booking, the promise check, the questions inbox, Telugu, a cancellation and the settings.</p>
             <p className="small">The video loads only when you press play (3.8 MB).</p>
           </div>
-          <video controls preload="none" playsInline width={1280} height={800}
-            poster={img("media/walkthrough-poster.webp")}
-            aria-label="Narrated walkthrough of the Atithi owner portal">
-            <source src={img("media/atithi-walkthrough.mp4")} type="video/mp4" />
-            <a href={img("media/atithi-walkthrough.mp4")}>Download the walkthrough (MP4, 3.8 MB)</a>
-          </video>
+          <div>
+            <video controls preload="none" playsInline width={1280} height={800}
+              poster={img("media/walkthrough-poster.webp")}
+              aria-label="Narrated walkthrough of the Atithi owner portal">
+              <source src={img("media/atithi-walkthrough.mp4")} type="video/mp4"
+                onError={() => setVideoFailed(true)} />
+              <a href={img("media/atithi-walkthrough.mp4")}>Download the walkthrough (MP4, 3.8 MB)</a>
+            </video>
+            {videoFailed && (
+              <p className="small video-failed" role="status">
+                The video couldn't load here. <a href={img("media/atithi-walkthrough.mp4")}>Open it directly (MP4, 3.8 MB)</a>.
+              </p>
+            )}
+          </div>
         </div>
       </div>
     </section>

@@ -37,13 +37,13 @@ test("the pilot section says what happens next and links the privacy notice", as
   await pilot.getByRole("link", { name: "privacy notice" }).click();
   await expect(page.getByRole("heading", { name: "What we collect, and for how long" })).toBeInViewport();
   const privacy = page.locator("#privacy");
-  for (const t of ["No cookies", "90 days", "180 days", "not stored by Atithi", "Gemini", "Twilio"])
+  for (const t of ["No cookies", "90 days", "180 days", "30 days", "not stored by Atithi", "Gemini", "Twilio", "deletes the rest automatically"])
     await expect(privacy).toContainText(t);
 });
 
 test.describe("sample booking", () => {
   test("never says booked unless the record is saved", async ({ page }) => {
-    test.setTimeout(90_000);      // three full scenarios, played in real time
+    // Stepped by hand, so every state is checked, not just the ones a timer happens to catch.
     await page.goto("/#sample");
     for (const [tab, record, booked] of [
       ["The slot is free", "Confirmed", true],
@@ -51,15 +51,15 @@ test.describe("sample booking", () => {
       ["The save fails", "Not saved", false],
     ] as const) {
       await page.getByRole("button", { name: tab }).click();
-      // While it plays, a "You're booked" line must never sit beside an unsaved record.
-      for (let i = 0; i < 40; i++) {
+      await page.getByRole("button", { name: "Pause" }).click();
+      await expect(page.getByRole("button", { name: "Play" })).toBeVisible();
+      const next = page.getByRole("button", { name: "Next step" });
+      while (await next.isEnabled()) {
+        await next.click();
         const said = (await page.locator(".say-agent").allTextContents()).join(" ");
         const status = await page.locator(".stage-side .status-pill").allTextContents();
-        if (/You're booked/.test(said)) expect(status).toContain("Confirmed");
-        if (await page.getByRole("button", { name: "Replay" }).isVisible()) break;
-        await page.waitForTimeout(250);
+        if (/You're booked/.test(said)) expect(status, `${tab}: booked beside ${status}`).toContain("Confirmed");
       }
-      await expect(page.getByRole("button", { name: "Replay" })).toBeVisible({ timeout: 20_000 });
       await expect(page.locator(".stage-side .status-pill")).toHaveText(record);
       const said = (await page.locator(".say-agent").allTextContents()).join(" ");
       expect(/You're booked/.test(said)).toBe(booked);
@@ -70,6 +70,7 @@ test.describe("sample booking", () => {
     await page.goto("/#sample");
     await page.getByRole("button", { name: "The save fails" }).click();
     await page.getByRole("button", { name: "Pause" }).click();
+    await expect(page.getByRole("button", { name: "Play" })).toBeVisible();   // really paused
     const before = await page.locator(".talk > li").count();
     await page.getByRole("button", { name: "Next step" }).click();
     await expect(page.locator(".talk > li")).toHaveCount(before + 1);
@@ -89,6 +90,38 @@ test("the walkthrough video downloads only when played, and has a fallback link"
   await page.waitForTimeout(500);
   expect(mp4).toEqual([]);
   await expect(page.locator("#walkthrough video")).toHaveAttribute("preload", "none");
+  await expect(page.locator("#walkthrough video")).toHaveAttribute("poster", /walkthrough-poster/);
+});
+
+test("a video that can't load says so and offers the file", async ({ page }) => {
+  await page.route("**/*.mp4", (r) => r.fulfill({ status: 404, body: "" }));
+  await page.goto("/");
+  const video = page.locator("#walkthrough video");
+  await video.scrollIntoViewIfNeeded();
+  await video.evaluate((v: HTMLVideoElement) => { v.play().catch(() => {}); });
+  await expect(page.getByRole("status")).toContainText("couldn't load");
+  await expect(page.getByRole("link", { name: "Open it directly (MP4, 3.8 MB)" })).toHaveAttribute("href", /atithi-walkthrough\.mp4$/);
+});
+
+test("the pilot section's own button is the real email link too", async ({ page }) => {
+  await page.goto("/#pilot");
+  const href = await page.locator("#pilot").getByRole("link", { name: "Request a pilot by email" }).getAttribute("href");
+  expect(href).toMatch(/^mailto:atithi\.support@gmail\.com\?subject=Atithi%20early-access%20pilot%20request&body=/);
+});
+
+test("no request on the page fails", async ({ page }) => {
+  const failed: string[] = [];
+  page.on("response", (r) => { if (r.status() >= 400) failed.push(`${r.status()} ${r.url()}`); });
+  page.on("requestfailed", (r) => failed.push(`failed ${r.url()}`));
+  await page.goto("/", { waitUntil: "networkidle" });
+  for (const y of [0.25, 0.5, 0.75, 1]) {
+    await page.evaluate((f) => window.scrollTo(0, document.documentElement.scrollHeight * f), y);
+    await page.waitForLoadState("networkidle");
+  }
+  expect(failed).toEqual([]);
+  const broken = await page.locator("img").evaluateAll((imgs) =>
+    (imgs as HTMLImageElement[]).filter((i) => i.complete && i.naturalWidth === 0).map((i) => i.src));
+  expect(broken).toEqual([]);
 });
 
 for (const width of [1440, 1280, 768, 390, 320]) {

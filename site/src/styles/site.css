@@ -194,6 +194,8 @@ html:not(.js) .js-only { display: none !important; }
 .walkthrough { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: clamp(24px, 4vw, 56px); align-items: center;
                margin-top: clamp(56px, 7vw, 104px); padding-top: clamp(40px, 5vw, 64px); border-top: 1px solid var(--line); }
 .walkthrough p { margin-top: var(--s3); color: var(--ink-2); }
+.video-failed { margin-top: var(--s3); color: var(--danger); }
+.video-failed a { color: var(--danger); }
 .walkthrough video { width: 100%; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--paper-deep); aspect-ratio: 1280 / 800; }
 
 /* ---------- use cases ---------- */

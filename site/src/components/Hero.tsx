@@ -24,7 +24,7 @@ export function Hero() {
                 Play a sample booking
               </a>
             </div>
-            <p className="small cta-note">Opens your email app. <a href="#pilot">What happens next</a></p>
+            <p className="small cta-note">Opens your email app. <a href="#pilot">What happens next</a> · <a href="#privacy">Privacy</a></p>
           </div>
         </div>
 
