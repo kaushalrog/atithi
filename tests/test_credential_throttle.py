@@ -163,3 +163,20 @@ def test_rotating_a_code_retires_the_old_one(client, tmp_storage, monkeypatch):
     assert new != DEMO_CODE
     assert guess(client, DEMO_CODE) == 401
     assert guess(client, new) == 200
+
+
+def test_creating_a_business_cannot_be_used_to_guess_the_admin_key(client, monkeypatch):
+    """Review P2-N1: POST /api/business compared the admin key directly."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "Correct-Horse-Battery-77")
+    body = {"business_name": "Probe Biz", "services": [{"name": "x", "price": "1"}]}
+    codes = [client.post("/api/business", json=body, headers={"X-Admin-Key": f"wrong{i}"}).status_code
+             for i in range(ratelimit.MAX_FAILURES + 1)]
+    assert codes[:-1] == [401] * ratelimit.MAX_FAILURES and codes[-1] == 429
+
+
+def test_the_admin_key_is_compared_in_exactly_one_place():
+    """Any new route must use server.admin_key_ok, or it skips the throttle."""
+    import inspect
+    src = inspect.getsource(server)
+    assert src.count("admin_password_matches(") == 1
+    assert "def admin_key_ok" in src
