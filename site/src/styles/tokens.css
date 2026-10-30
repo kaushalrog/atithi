@@ -1,0 +1,51 @@
+/* Atithi site tokens: every colour, size and timing lives here. */
+:root {
+  /* colour */
+  --paper: #f5f3ea;
+  --paper-deep: #ece8da;     /* sections that sit one step back */
+  --card: #fffdf7;           /* product surfaces on paper */
+  --ink: #182a25;
+  --ink-2: #33463f;          /* body copy: 9.0:1 on paper */
+  --muted: #5a6a64;          /* secondary text: 5.1:1 on paper (4.65:1 on paper-deep) */
+  --line: #ddd8c8;           /* hairlines */
+  --line-strong: #c9c2ad;
+  --teal: #176f63;           /* 5.4:1 on paper */
+  --teal-deep: #0f5249;
+  --teal-soft: #e2eee9;
+  --brass: #d7a66b;          /* fills only: 2.0:1, never text */
+  --brass-ink: #8a5a1e;      /* brass for text: 5.3:1 on paper */
+  --danger: #a33a2a;         /* 5.9:1 on paper */
+  --danger-soft: #f6e4dd;
+
+  /* type */
+  --font-sans: "Instrument Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: "Instrument Serif", ui-serif, Georgia, "Times New Roman", serif;
+  --step--1: 0.875rem;
+  --step-0: 1rem;
+  --step-1: 1.1875rem;
+  --step-2: clamp(1.4rem, 1.1rem + 1vw, 1.75rem);
+  --step-3: clamp(1.9rem, 1.3rem + 2.2vw, 3rem);
+  --step-4: clamp(2.4rem, 1.4rem + 3.8vw, 4.5rem);
+  --display: clamp(2.75rem, 0.6rem + 7.2vw, 7rem);
+
+  /* space (4px base) */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px;
+  --s6: 32px; --s7: 48px; --s8: 64px; --s9: 96px; --s10: 144px;
+  --gutter: clamp(16px, 4vw, 56px);
+  --section: clamp(72px, 9vw, 144px);
+
+  /* widths */
+  --max: 1320px;
+  --measure: 36rem;
+
+  /* shape */
+  --r-sm: 8px; --r-md: 14px; --r-lg: 22px; --r-pill: 999px;
+  --shadow: 0 1px 0 rgba(24, 42, 37, 0.04), 0 24px 48px -32px rgba(24, 42, 37, 0.35);
+
+  /* motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --t-fast: 140ms;
+  --t-base: 260ms;
+  --t-draw: 1600ms;
+}

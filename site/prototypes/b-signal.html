@@ -1,0 +1,25 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>B · Living signal</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#0f1d19;--paper:#F5F3EA;--teal:#2bb39f;--muted:#8fa39d}
+*{box-sizing:border-box}body{margin:0;background:var(--ink);color:var(--paper);font:16px/1.55 "Instrument Sans",system-ui,sans-serif;min-height:100vh}
+nav{display:flex;justify-content:space-between;padding:22px 56px;font-size:14px;color:var(--muted)}nav b{color:var(--paper)}
+.hero{padding:70px 56px;text-align:center}
+h1{font-weight:600;font-size:76px;line-height:1;letter-spacing:-.03em;margin:0 auto;max-width:14ch}
+p{color:var(--muted);font-size:19px;max-width:44ch;margin:22px auto}
+.cta a{display:inline-block;padding:13px 22px;border-radius:10px;background:var(--teal);color:#05221d;font-weight:600;text-decoration:none}
+svg{display:block;width:min(1100px,100%);margin:40px auto 0;filter:drop-shadow(0 0 14px rgba(43,179,159,.55))}
+.labels{display:flex;justify-content:space-between;width:min(1000px,100%);margin:6px auto 0;font:12px ui-monospace,Menlo,monospace;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}
+</style></head><body>
+<nav><b>Atithi</b><span>Product · How it works · Businesses</span><span>Sample →</span></nav>
+<section class="hero">
+  <h1>Every caller heard. Every booking recorded.</h1>
+  <p>An AI receptionist that turns a customer's words into a confirmed booking, and shows you the proof.</p>
+  <div class="cta"><a href="#">Play a sample booking</a></div>
+  <svg id="s" fill="none" stroke="#2bb39f" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></svg>
+  <div class="labels"><span>01 · listen</span><span>02 · check</span><span>03 · confirm</span></div>
+</section>
+<script src="signal.js"></script><script>
+const s=document.getElementById('s');s.setAttribute('viewBox',SIGNAL.viewBox);s.innerHTML=`<path d="${SIGNAL.path}"/><path d="${SIGNAL.mark}" stroke-width="1.5" opacity=".6"/>`;
+</script></body></html>
