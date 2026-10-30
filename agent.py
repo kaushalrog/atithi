@@ -278,6 +278,10 @@ def default_llm() -> GeminiLLM:
 TRUST_LEVELS = ("owner", "verified", "public")
 MAX_BOOKINGS_PER_CONVERSATION = 2   # non-owner channels
 MAX_UPCOMING_PER_PHONE = 2          # non-owner channels: confirmed, upcoming
+MAX_CHANGE_REQUESTS = 2             # public channels: requests saved per conversation
+# These caps slow down casual abuse inside one conversation. They are not a
+# hard control: a bot can open new conversations and use other numbers. The
+# website chat's per-address and per-day limits (server.py) are the outer brake.
 
 
 class ReceptionistAgent:
@@ -308,6 +312,7 @@ class ReceptionistAgent:
         self.trust = "owner"
         self.verified_phone: str | None = None
         self.bookings_made = 0
+        self.change_requests = 0
         # A random id that ties this conversation's perf measurements
         # together. Deliberately NOT the phone number or the Twilio SID.
         self.perf_id = secrets.token_hex(6)
@@ -626,13 +631,14 @@ class ReceptionistAgent:
             return None
         if self.bookings_made >= MAX_BOOKINGS_PER_CONVERSATION:
             return {"status": "failed",
-                    "error": f"This conversation has already made {self.bookings_made} bookings, "
-                             "the most allowed in one chat. Offer to save their details "
-                             "(save_lead) so the team can arrange more."}
+                    "error": "This booking can't be made in this chat. Offer to save their "
+                             "details (save_lead) so the team can arrange it."}
         if len(storage.find_bookings(self.client_id, phone)) >= MAX_UPCOMING_PER_PHONE:
+            # Same wording as the conversation cap: this must not reveal
+            # whether someone else's number already has bookings.
             return {"status": "failed",
-                    "error": "This number already has the most upcoming bookings allowed. "
-                             "Offer to save their details (save_lead) so the team can help."}
+                    "error": "This booking can't be made in this chat. Offer to save their "
+                             "details (save_lead) so the team can arrange it."}
         return None
 
     def _change_request(self, phone, what: str) -> dict:
@@ -641,7 +647,14 @@ class ReceptionistAgent:
         about any existing booking is revealed."""
         if not _phone_ok(phone):
             return self._BAD_PHONE
-        storage.save_lead(self.client_id, "", phone, "Booking change request", what[:200])
+        if self.change_requests >= MAX_CHANGE_REQUESTS:
+            return {"status": "failed",
+                    "error": "Enough requests have been passed to the team from this chat. "
+                             "Tell the customer the team will be in touch."}
+        self.change_requests += 1
+        # Dates and times come from the model; keep only plain characters.
+        what = re.sub(r"[^0-9A-Za-z :,\-]", "", what)[:120]
+        storage.save_lead(self.client_id, "", phone, "Booking change request", what)
         return {"status": "request_saved",
                 "note": "For privacy, bookings can't be looked up or changed in this chat. "
                         "The request has been passed to the team. Tell the customer the team "

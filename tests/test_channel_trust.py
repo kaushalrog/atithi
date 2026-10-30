@@ -79,6 +79,19 @@ def test_one_number_cannot_hold_more_than_two_upcoming_bookings(tmp_storage):
         assert book(public_agent(), day, times[i], "9123456789")["status"] == "confirmed"
     res = book(public_agent(), day, times[2], "9123456789")
     assert res["status"] == "failed" and "save_lead" in res["error"]
+    # Review P3-a: the refusal must not reveal that this number has bookings.
+    assert "number" not in res["error"]
+
+
+def test_change_requests_are_capped_and_cleaned(victim_booking):
+    day, t = victim_booking
+    a = public_agent()
+    for _ in range(2):
+        assert tool(a, "cancel_booking", phone=VICTIM, date=day, time=t)["status"] == "request_saved"
+    assert tool(a, "cancel_booking", phone=VICTIM, date=day, time=t)["status"] == "failed"
+    tool(public_agent(), "cancel_booking", phone=VICTIM, date="<script>x</script>", time=t)
+    notes = [l["note"] for l in storage.read_leads("demo_clinic")]
+    assert len(notes) == 3 and not any("<" in n for n in notes)
 
 
 # ---- verified channels act only for their own number ------------------------------
@@ -124,6 +137,8 @@ def test_website_chat_sessions_are_public(tmp_storage, monkeypatch):
     path.write_text(yaml.safe_dump(cfg, allow_unicode=True), encoding="utf-8")
     monkeypatch.setattr(storage, "CLIENTS_DIR", clients)
     storage.clear_caches()
+    # Hermetic: no model client (review P3-d: this needed GEMINI_API_KEY before).
+    monkeypatch.setattr(server, "ReceptionistAgent", lambda cid: ReceptionistAgent(cid, llm=FakeLLM([])))
     res = TestClient(server.app).post("/api/public/session", json={"key": "wk_trusttest"})
     assert res.status_code == 200
     assert server.sessions[res.json()["session_id"]]["agent"].trust == "public"

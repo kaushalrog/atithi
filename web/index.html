@@ -634,6 +634,15 @@ function authHeaders() {
   return AUTH ? { "Authorization": "Bearer " + AUTH.token } : {};
 }
 
+// A 401 means the stored sign-in no longer works (code rotated, account
+// changed). Stop and sign out instead of retrying: every failed retry counts
+// as a wrong guess, and the 20-second refresh would lock this owner out.
+function signedOut(res) {
+  if (res.status !== 401) return false;
+  localStorage.removeItem("voxagent_auth");
+  location.href = "/";
+  return true;
+}
 async function api(path, body) {
   const opts = { headers: authHeaders() };
   if (body !== undefined) {
@@ -642,6 +651,7 @@ async function api(path, body) {
     opts.body = JSON.stringify(body);
   }
   const res = await fetch(path, opts);
+  if (signedOut(res)) throw new Error("Signed out");
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
   return res.json();
 }
@@ -761,6 +771,7 @@ async function loadAll() {
   if (DASH_ETAG) headers["If-None-Match"] = DASH_ETAG;
   const res = await fetch("/api/dashboard?client_id=" + encodeURIComponent(CLIENT), { headers });
   if (res.status === 304) return;                 // unchanged: nothing to do
+  if (signedOut(res)) return;
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
   DASH_ETAG = res.headers.get("ETag");
   const d = await res.json();

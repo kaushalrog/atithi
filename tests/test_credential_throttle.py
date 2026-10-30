@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 import ratelimit
 import server
 import storage
-from conftest import DEMO_CODE
+from conftest import DEMO_CODE, SALON_CODE
 
 
 # ---- the limiter itself --------------------------------------------------------
@@ -74,22 +74,65 @@ def test_the_data_api_header_counts_too(client):
                       headers={"X-Client-Key": DEMO_CODE}).status_code == 429
 
 
-def test_correct_codes_never_count_as_failures(client):
+def test_guessing_one_business_never_locks_out_another(client):
+    """Review P1-2: counting every 401 per address let one attacker lock out
+    every owner behind the same address."""
+    for _ in range(ratelimit.MAX_FAILURES + 5):
+        client.get("/api/dashboard?client_id=demo_clinic", headers={"X-Client-Key": "VX-WRONG"})
+    assert client.get("/api/dashboard?client_id=lakshmi_beauty_salon",
+                      headers={"X-Client-Key": SALON_CODE}).status_code == 200
+    assert guess(client, SALON_CODE) == 200          # code login is its own count too
+
+
+def test_made_up_business_ids_share_one_count(client):
+    for i in range(ratelimit.MAX_FAILURES):
+        client.get(f"/api/dashboard?client_id=nobody_{i}", headers={"X-Client-Key": "VX-WRONG"})
+    assert client.get("/api/dashboard?client_id=nobody_x",
+                      headers={"X-Client-Key": "VX-WRONG"}).status_code == 429
+
+
+def test_admin_key_guesses_count_once_whatever_the_route(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "Correct-Horse-Battery-77")
+    for i in range(ratelimit.MAX_FAILURES):
+        client.get(f"/api/dashboard?client_id=biz_{i}", headers={"X-Admin-Key": "wrong"})
+    assert client.get("/api/admin/overview", headers={"X-Admin-Key": "wrong"}).status_code == 429
+    # Blocked on every route, even with the right key, so guessing can't move to another one.
+    assert client.get("/api/dashboard?client_id=demo_clinic",
+                      headers={"X-Admin-Key": "Correct-Horse-Battery-77"}).status_code == 429
+
+
+def test_an_expired_sign_in_token_is_not_a_guess(client):
+    """A stale browser tab polling with an old token must not lock its owner out."""
     for _ in range(ratelimit.MAX_FAILURES * 2):
-        assert guess(client, DEMO_CODE) == 200
+        assert client.get("/api/dashboard?client_id=demo_clinic",
+                          headers={"Authorization": "Bearer expired-token"}).status_code == 401
+    assert client.get("/api/dashboard?client_id=demo_clinic",
+                      headers={"X-Client-Key": DEMO_CODE}).status_code == 200
 
 
-def test_behind_our_own_proxy_each_visitor_has_their_own_count(client, monkeypatch):
+def test_behind_our_proxy_only_the_hop_it_added_is_trusted(client, monkeypatch):
+    """Review P1-1: the leftmost X-Forwarded-For entry is whatever the client
+    sent. Our proxy appends the address it saw, so read from the right."""
     monkeypatch.setenv("VOXAGENT_TRUST_PROXY", "true")
-    for _ in range(ratelimit.MAX_FAILURES):
-        guess(client, "VX-WRONG", **{"X-Forwarded-For": "203.0.113.9"})
-    assert guess(client, "VX-WRONG", **{"X-Forwarded-For": "203.0.113.9"}) == 429
-    assert guess(client, DEMO_CODE, **{"X-Forwarded-For": "198.51.100.4"}) == 200
-    # Without the setting, a forged header can't escape the count.
+    for i in range(ratelimit.MAX_FAILURES):
+        assert guess(client, "VX-WRONG", **{"X-Forwarded-For": f"1.1.1.{i}, 203.0.113.9"}) == 401
+    assert guess(client, DEMO_CODE, **{"X-Forwarded-For": "8.8.8.8, 203.0.113.9"}) == 429
+    assert guess(client, DEMO_CODE, **{"X-Forwarded-For": "198.51.100.4"}) == 200   # another visitor
+    # Without the setting the header is ignored entirely.
     monkeypatch.delenv("VOXAGENT_TRUST_PROXY")
-    for _ in range(ratelimit.MAX_FAILURES):
-        guess(client, "VX-WRONG", **{"X-Forwarded-For": f"192.0.2.{_}"})
+    for i in range(ratelimit.MAX_FAILURES):
+        guess(client, "VX-WRONG", **{"X-Forwarded-For": f"192.0.2.{i}"})
     assert guess(client, DEMO_CODE, **{"X-Forwarded-For": "192.0.2.200"}) == 429
+
+
+def test_ipv6_addresses_count_per_64_block():
+    from starlette.requests import Request
+
+    def req(host):
+        return Request({"type": "http", "headers": [], "client": (host, 1234)})
+    assert server._client_ip(req("2001:db8:1:2::1")) == server._client_ip(req("2001:db8:1:2:ffff::9"))
+    assert server._client_ip(req("2001:db8:1:3::1")) != server._client_ip(req("2001:db8:1:2::1"))
+    assert server._client_ip(req("203.0.113.5")) == "203.0.113.5"
 
 
 def test_website_chat_is_not_counted(client):
