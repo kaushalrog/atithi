@@ -89,6 +89,12 @@ If you ever scale out, switch the key to one derived from `TWILIO_AUTH_TOKEN`
 
 ## 5. The first real call is a verification step, not a launch
 
+**Also check the AI disclosure on this call.** Before the receptionist speaks,
+you should hear Twilio say: "Hello, you've reached {business}. You're speaking
+with an AI receptionist. This call is transcribed and saved as text so the team
+can follow up." If it doesn't play, stop: no real customer may call until it
+does (docs/DATA_HANDLING.md).
+
 One security check could not be verified offline: **the media stream's
 `x-twilio-signature`.** Twilio's documentation says to validate this header
 on Media Streams websockets (and that the header name is lowercase there), but

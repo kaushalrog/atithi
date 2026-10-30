@@ -43,7 +43,7 @@ import ratelimit
 import scheduling
 import storage
 import telephony
-from agent import ReceptionistAgent
+from agent import ReceptionistAgent, disclosure
 from tts import EdgeTTS, TTSTimeout
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -189,6 +189,9 @@ def _warm_up():
     # The callback dialer runs in the background and checks its switch
     # (ENABLE_CALLBACKS) on every round, so it does nothing until turned on.
     callbacks.start_worker(_callbacks_stop)
+    # Personal data past its retention period is removed once a day
+    # (docs/DATA_HANDLING.md). Off with VOXAGENT_RETENTION=off.
+    storage.start_retention_worker(_callbacks_stop)
 
 
 _callbacks_stop = threading.Event()
@@ -1264,7 +1267,8 @@ def public_session(req: PublicSessionRequest, request: Request):
     agent = ReceptionistAgent(client_id)
     agent.set_channel("public")       # anyone on the internet: no look-ups, capped bookings
     session_id = _open_session(client_id, agent, "website", WIDGET_SESSIONS_PER_BUSINESS)
-    return {"session_id": session_id, "business_name": cfg.get("business_name", "")}
+    return {"session_id": session_id, "business_name": cfg.get("business_name", ""),
+            "greeting": disclosure(cfg, "chat_greeting")}
 
 
 @app.post("/api/public/chat")

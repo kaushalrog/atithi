@@ -84,7 +84,8 @@ async function start() {
     const s = await post("/api/public/session", { key });
     SID = s.session_id;
     if (s.business_name) document.getElementById("biz").textContent = s.business_name;
-    add("them", "Hello! How can I help you today?");
+    // The server's greeting says this is an AI receptionist and the chat is saved.
+    add("them", s.greeting || "Hello! I'm an AI receptionist. This chat is saved so the team can follow up. How can I help?");
   } catch (e) {
     add("note", e.message);
     document.getElementById("send").disabled = true;

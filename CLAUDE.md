@@ -123,6 +123,14 @@ AI receptionist for any Indian business that takes bookings (clinics, salons, re
   One ReceptionistAgent per (business, sender) until 30 min idle; reply as
   TwiML <Message>, or via the API if the model takes over 12 s. Replies only;
   per-sender rate limit. Records saved with channel "whatsapp".
+- Disclosure and data (owner decision 2026-10-21, docs/DATA_HANDLING.md):
+  agent.disclosure() is the one source of the "AI receptionist, saved as text"
+  notice: Twilio <Say> before the AI joins a call, website chat greeting,
+  WhatsApp first reply. Prompt rule 12 = honest when asked (eval
+  honest_about_being_ai). Retention: storage.RETENTION_DAYS, enforced daily by
+  storage.start_retention_worker; `python storage.py purge` and
+  `delete-customer <phone>` (dry run unless --apply). Console logs mask
+  customers (agent._who). No call audio is stored.
 - Safety: VOXAGENT_ENV=test (tests, evals) disables the Sheets copy and makes
   writes to real data files raise. Live phone calls are off unless
   ENABLE_LIVE_CALLS=true; see docs/SAFE_TESTING.md before enabling.
