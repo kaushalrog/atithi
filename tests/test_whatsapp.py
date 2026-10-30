@@ -46,9 +46,26 @@ def send(client, body, sender=CUSTOMER, to=LINE, signature=None, **extra):
         "X-Twilio-Signature": signature if signature is not None else sign(URL, data)})
 
 
+NOTICE = "AI receptionist"
+
+
 def reply_of(res):
+    """The receptionist's words, without the AI notice that opens each conversation."""
     node = ET.fromstring(res.text).find("Message")
-    return None if node is None else node.text
+    if node is None:
+        return None
+    text = node.text
+    if text.startswith("(You're chatting with"):
+        text = text.split("\n\n", 1)[1]
+    return text
+
+
+def test_the_first_reply_says_it_is_an_ai_and_the_chat_is_saved(wa):
+    wa["scripts"].append([say("Hello!"), say("Sure.")])
+    first = ET.fromstring(send(wa["client"], "hi").text).find("Message").text
+    assert NOTICE in first and "saved" in first and first.endswith("Hello!")
+    second = ET.fromstring(send(wa["client"], "ok").text).find("Message").text
+    assert second == "Sure."                                   # once per conversation
 
 
 def test_a_customer_books_over_whatsapp_and_the_chat_is_recorded(wa):
@@ -119,7 +136,8 @@ def test_a_slow_reply_is_sent_through_the_api_instead(wa, monkeypatch):
         if sent:
             break
         threading.Event().wait(0.02)
-    assert sent == [(CUSTOMER, LINE, "sorry for the wait")]
+    assert [(to, frm) for to, frm, _ in sent] == [(CUSTOMER, LINE)]
+    assert sent[0][2].endswith("sorry for the wait") and NOTICE in sent[0][2]
 
 
 def test_the_twiml_reply_is_escaped(wa):

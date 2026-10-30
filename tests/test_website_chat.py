@@ -51,7 +51,8 @@ def test_switching_on_gives_a_public_key_that_is_not_the_login_code(client):
     res = client.post("/api/public/session", json={"key": key})
     assert res.status_code == 200
     body = res.json()
-    assert set(body) == {"session_id", "business_name"}         # nothing private leaks
+    assert set(body) == {"session_id", "business_name", "greeting"}   # nothing private leaks
+    assert "AI receptionist" in body["greeting"] and "saved" in body["greeting"]
     reply = client.post("/api/public/chat", json={"session_id": body["session_id"], "message": "hi"})
     assert reply.status_code == 200 and "reply" in reply.json() and "tools" not in reply.json()
     [record] = storage.read_call_logs("demo_clinic")

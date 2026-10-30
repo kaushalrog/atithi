@@ -881,8 +881,20 @@ def test_twiml_apologises_after_the_stream_ends(phone):
     res = post_voice(phone["client"], {"To": "+15550001111", "From": "+919876543210",
                                        "CallSid": "CA1"})
     root = ET.fromstring(res.text)
-    assert [child.tag for child in root] == ["Connect", "Say"]
-    assert root.find("Say").text == telephony.APOLOGY
+    assert [child.tag for child in root] == ["Say", "Connect", "Say"]
+    assert root.findall("Say")[-1].text == telephony.APOLOGY
+
+
+def test_every_call_opens_with_the_ai_and_transcription_notice(phone):
+    """Owner decision 2026-10-21: Twilio itself says it, before the model joins."""
+    for data, query in (({"To": "+15550001111", "From": "+919876543210", "CallSid": "CA1"}, ""),
+                        ({"To": "+919876543210", "From": "+1555", "CallSid": "CA9",
+                          "Direction": "outbound-api"}, "?client_id=demo_clinic&purpose=callback")):
+        root = ET.fromstring(post_voice(phone["client"], data, query=query).text)
+        first = root[0]
+        assert first.tag == "Say" and first.get("language") == "en-IN"
+        assert "AI receptionist" in first.text and "transcribed" in first.text
+        assert "Sri Balaji Dental Care" in first.text
 
 
 def test_a_dropped_model_session_hangs_up_and_saves_the_record(phone, monkeypatch):

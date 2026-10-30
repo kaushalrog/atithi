@@ -72,7 +72,7 @@ from starlette.websockets import WebSocketState
 import billing
 import perf
 import storage
-from agent import TOOL_SCHEMAS, ReceptionistAgent, TurnRecorder
+from agent import TOOL_SCHEMAS, ReceptionistAgent, TurnRecorder, disclosure
 
 router = APIRouter()
 
@@ -198,10 +198,12 @@ _active_calls = 0                      # event-loop only, so a plain int is safe
 # stream arrives or it expires. Without this, a burst of calls all passed the
 # webhook's limit check and the extras were dropped silently at the stream.
 _pending_tickets: dict[str, float] = {}   # call_sid -> reservation expiry
-# A reservation is short: Twilio opens the stream within about a second of our
-# TwiML, so a stream that never arrives (caller hung up, rejected before its
-# 'start' message) gives its slot back after 30 s, not the ticket's 2 minutes.
-PENDING_SLOT_S = 30
+# A reservation is short: Twilio opens the stream as soon as the spoken AI
+# notice (<Say>, about 8-12 s) finishes, so a stream that never arrives
+# (caller hung up, rejected before its 'start' message) gives its slot back
+# after 45 s, not the ticket's 2 minutes. Measure the real <Say> length on the
+# first controlled call (review P2-2, 2026-10-30).
+PENDING_SLOT_S = 45
 # An outbound call holds its slot from dialling until answered (Twilio rings
 # for up to ~30 s by default), so inbound calls can't take the line meanwhile.
 OUTBOUND_RING_S = 60
@@ -386,12 +388,15 @@ class TwilioBridge:
             self.stream_sid = msg["start"]["streamSid"]
             # The receptionist speaks first on a phone call.
             self._greet_t = time.perf_counter()
+            # The caller has just heard the AI + transcription notice (TwiML <Say>).
+            heard = " They have just heard that this is an AI receptionist and the call is transcribed; don't repeat it."
             if self.purpose == "callback":
                 await self.live.send_text(
                     "(you are calling this customer BACK: they gave the business a missed call. "
-                    "Say you are calling from the business about their missed call, and ask how you can help)")
+                    "Say you are calling from the business about their missed call, and ask how you can help."
+                    + heard + ")")
             else:
-                await self.live.send_text("(the call has just connected — greet the caller briefly)")
+                await self.live.send_text("(the call has just connected — greet the caller briefly." + heard + ")")
         elif event == "media":
             mulaw = base64.b64decode(msg["media"]["payload"])
             await self.live.send_audio(self.converter.twilio_to_gemini(mulaw))
@@ -533,7 +538,8 @@ def _route_and_check(to_number: str, explicit: str | None) -> tuple[str, bool, d
     client = resolve_client(to_number, explicit)
     cfg = storage.read_client_config(client) or {}
     line = {"missed_call_mode": bool(cfg.get("missed_call_mode")),
-            "callback_when_busy": cfg.get("callback_when_busy", True) is not False}
+            "callback_when_busy": cfg.get("callback_when_busy", True) is not False,
+            "disclosure": disclosure(cfg, "phone")}
     return client, billing.client_active(client), line
 
 
@@ -601,8 +607,11 @@ async def twilio_voice(request: Request, client_id: str | None = None):
         f"      <Parameter name={quoteattr(k)} value={quoteattr(v)}/>"
         for k, v in ticket.items()
     )
+    # The AI disclosure is spoken by Twilio itself, BEFORE the model joins:
+    # every caller hears it, whatever the model does (owner decision 2026-10-21).
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
+  <Say language="en-IN">{escape(line["disclosure"])}</Say>
   <Connect>
     <Stream url={quoteattr(stream_url())}>
 {params}
@@ -707,6 +716,7 @@ async def twilio_stream(ws: WebSocket):
             agent.set_channel("verified", caller)
         else:
             agent.set_channel("public")
+        agent.disclosed = "phone"            # spoken by Twilio before the stream opened
         agent.can_transfer = handoff_enabled() and bool(agent.config.get("handoff_phone"))
         if caller:
             agent.system_prompt += (
@@ -952,13 +962,18 @@ def _wa_turn(session: dict, client_id: str, sender: str, text: str) -> str:
         if session["agent"] is None:
             agent = ReceptionistAgent(client_id)
             agent.set_channel("verified", sender)   # WhatsApp vouches for the sender's number
+            agent.disclosed = "chat_notice"         # put before this conversation's first reply
             agent.system_prompt += (
                 f"\n\nThis is a WHATSAPP chat. The customer's WhatsApp number is {sender}: when "
                 "booking or saving a lead you may offer to use it, but confirm it first. Keep "
                 "replies short, plain text, no markdown.")
             session["agent"] = agent
         agent = session["agent"]
+        first = not agent.history
         reply = agent.chat(text)
+        if first:
+            # Every WhatsApp conversation opens with the AI + saved-chat notice.
+            reply = disclosure(agent.config, "chat_notice") + "\n\n" + reply
         try:
             storage.log_call_from_agent(agent, "whatsapp", session["started"],
                                         call_id=session["call_id"], caller=sender)

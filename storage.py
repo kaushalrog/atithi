@@ -1038,6 +1038,9 @@ def log_call_from_agent(agent, channel: str, started: dt.datetime,
         "seconds": int((now - started).total_seconds()),
         "turns": turns,
         "transcript": agent.transcript_text(),
+        # Which AI notice this customer was given (agent.disclosure), as
+        # evidence per conversation; None for the owner's own test chat.
+        "disclosure": getattr(agent, "disclosed", None),
         # What the call actually achieved, from the tools' own results. The
         # dashboard used to guess from the transcript, so a FAILED booking
         # attempt counted as a booked call (audit M1).
@@ -1469,6 +1472,273 @@ def _read_csv(path: Path) -> list[dict]:
         return list(csv.DictReader(f))
 
 
+# ---- retention and deletion (owner decision 2026-10-21; docs/DATA_HANDLING.md) ----
+#
+# How long personal data is kept. Each can be changed with an environment
+# variable, e.g. VOXAGENT_RETAIN_CALLS_DAYS=60. Atithi stores no call audio.
+
+RETENTION_DAYS = {
+    "calls": 90,             # call/chat records (transcripts) and their traces
+    "leads": 180,            # leads + the owner's follow-up notes on them
+    "booking_contact": 365,  # after the appointment date: name + phone removed
+    "questions": 180,        # unanswered-question inbox, by last time asked
+    "callbacks": 30,         # the missed-call callback queue
+    "notifications": 30,     # the SMS log (sent or dry-run)
+}
+
+
+def retention_days() -> dict[str, int]:
+    out = {}
+    for key, default in RETENTION_DAYS.items():
+        raw = os.getenv(f"VOXAGENT_RETAIN_{key.upper()}_DAYS", "").strip()
+        out[key] = int(raw) if raw.isdigit() and int(raw) > 0 else default
+    return out
+
+
+def _rewrite_leads(keep) -> int:
+    """Rewrite leads.csv keeping rows where keep(row) is true. Returns rows removed."""
+    if not LEADS_CSV.exists():
+        return 0
+    _guard_write(LEADS_CSV)
+    with _write_lock:
+        rows = _read_csv(LEADS_CSV)
+        kept = [r for r in rows if keep(r)]
+        if len(kept) != len(rows):
+            tmp = LEADS_CSV.with_suffix(".csv.tmp")
+            with open(tmp, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=LEAD_HEADER, extrasaction="ignore")
+                w.writeheader()
+                w.writerows(kept)
+            os.replace(tmp, LEADS_CSV)
+    _invalidate(LEADS_CSV)
+    return len(rows) - len(kept)
+
+
+def _rewrite_notifications(keep) -> int:
+    if not NOTIFY_LOG.exists():
+        return 0
+    _guard_write(NOTIFY_LOG)
+    with _write_lock:
+        lines = [l for l in NOTIFY_LOG.read_text(encoding="utf-8").splitlines() if l.strip()]
+        kept = []
+        for line in lines:
+            try:
+                if keep(json.loads(line)):
+                    kept.append(line)
+            except json.JSONDecodeError:
+                pass                                 # a corrupt line is dropped, not kept forever
+        if len(kept) != len(lines):
+            tmp = NOTIFY_LOG.with_suffix(".jsonl.tmp")
+            tmp.write_text("".join(l + "\n" for l in kept), encoding="utf-8")
+            os.replace(tmp, NOTIFY_LOG)
+    return len(lines) - len(kept)
+
+
+def _call_files():
+    """(client folder, record path, trace path) for every saved call."""
+    if not CALLS_DIR.exists():
+        return
+    for folder in CALLS_DIR.iterdir():
+        if folder.is_dir():
+            for path in folder.glob("*.json"):
+                yield folder, path, folder / "traces" / path.name
+
+
+def _delete_call(path: Path, trace: Path):
+    for p in (path, trace):
+        _guard_write(p)
+        p.unlink(missing_ok=True)
+        _invalidate(p)
+
+
+def purge_expired(now: dt.datetime | None = None, dry_run: bool = False) -> dict[str, int]:
+    """Delete (or, for bookings, anonymise) personal data past its retention
+    period. Returns how many items each rule touched. dry_run counts only."""
+    now = now or dt.datetime.now()
+    days = retention_days()
+    cut = {k: now - dt.timedelta(days=v) for k, v in days.items()}
+    iso = {k: v.isoformat(timespec="seconds") for k, v in cut.items()}
+    counts = dict.fromkeys(RETENTION_DAYS, 0)
+
+    for _folder, path, trace in list(_call_files()):
+        rec = _load_json(path) or {}
+        started = rec.get("started")
+        if not isinstance(started, str) or not started[:4].isdigit():
+            # A corrupt record must not live forever: use the file's age.
+            started = dt.datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds")
+        if started < iso["calls"]:
+            counts["calls"] += 1
+            if not dry_run:
+                _delete_call(path, trace)
+    if CALLS_DIR.exists():                   # traces whose record is already gone
+        for trace in CALLS_DIR.glob("*/traces/*.json"):
+            if not (trace.parent.parent / trace.name).exists():
+                counts["calls"] += 1
+                if not dry_run:
+                    _guard_write(trace)
+                    trace.unlink(missing_ok=True)
+
+    lead_cut = iso["leads"]
+    old_leads = [r for r in _read_csv(LEADS_CSV) if (r.get("timestamp") or "9999") < lead_cut] \
+        if LEADS_CSV.exists() else []
+    counts["leads"] = len(old_leads)
+
+    conn = _bookings_db()
+    contact_cut = cut["booking_contact"].date().isoformat()
+    q = {
+        "booking_contact": ("SELECT COUNT(*) FROM bookings WHERE date < ? AND (name != '' OR phone != '')",
+                            "UPDATE bookings SET name='', phone='' WHERE date < ? AND (name != '' OR phone != '')",
+                            contact_cut),
+        "questions": ("SELECT COUNT(*) FROM questions WHERE last_asked < ?",
+                      "DELETE FROM questions WHERE last_asked < ?", iso["questions"]),
+        "callbacks": ("SELECT COUNT(*) FROM callbacks WHERE created < ?",
+                      "DELETE FROM callbacks WHERE created < ?", iso["callbacks"]),
+    }
+    for key, (count_sql, change_sql, arg) in q.items():
+        counts[key] = conn.execute(count_sql, (arg,)).fetchone()[0]
+    if not dry_run:
+        with _transaction(conn):
+            for key, (_c, change_sql, arg) in q.items():
+                conn.execute(change_sql, (arg,))
+            conn.execute("DELETE FROM lead_followups WHERE lead_ts < ?", (lead_cut,))
+        _invalidate(BOOKINGS_DB)
+        _rewrite_leads(lambda r: (r.get("timestamp") or "9999") >= lead_cut)
+
+    note_cut = cut["notifications"].astimezone()
+
+    def note_old(n) -> bool:
+        """Compare real moments, not strings: entries may carry another UTC offset."""
+        try:
+            at = dt.datetime.fromisoformat(n.get("at") or "")
+        except ValueError:
+            return True                      # unreadable timestamp: past any retention
+        if at.tzinfo is None:
+            at = at.astimezone()
+        return at < note_cut
+    old = [n for n in read_notifications() if note_old(n)]
+    counts["notifications"] = len(old)
+    if not dry_run and old:
+        _rewrite_notifications(lambda n: not note_old(n))
+    return counts
+
+
+# A phone-like run: digits with optional spaces/dashes inside, optionally a
+# leading +. Never spans lines, so digits from different turns or tool
+# results can't join into a number (review P1-1, 2026-10-30).
+_PHONE_RUN = re.compile(r"\+?\d(?:[ \t-]?\d){7,14}")
+
+
+def _mentions(text: str, p10: str) -> bool:
+    """Does free text contain this exact number, however it was written
+    (+91 98765 43210, 098765-43210, 9876543210)? A run is the person's number
+    only if it is the number itself plus at most a 0 or 91 / +91 prefix:
+    a longer run that merely contains those digits is someone else's."""
+    for line in str(text or "").splitlines():
+        for run in _PHONE_RUN.findall(line):
+            digits = re.sub(r"\D", "", run)
+            if digits == p10 or digits in ("0" + p10, "91" + p10):
+                return True
+    return False
+
+
+def delete_customer(phone: str, client_id: str | None = None, dry_run: bool = False) -> dict[str, int]:
+    """Remove one person's records (a deletion request), matched on the last
+    10 digits of their number, for one business or all of them.
+
+    Bookings are anonymised, not deleted: the business keeps the fact that a
+    slot was used. A future confirmed booking is also cancelled, because
+    nobody could be told about it any more."""
+    p10 = _phone10(phone)
+    if len(p10) < 10:
+        raise ValueError("Give the full 10-digit number.")
+    mine = (lambda cid: True) if client_id is None else (lambda cid: cid == client_id)
+    counts = {"bookings_anonymised": 0, "future_bookings_cancelled": 0, "leads": 0,
+              "lead_followups": 0, "calls": 0, "callbacks": 0, "notifications": 0}
+
+    conn = _bookings_db()
+    rows = [r for r in conn.execute("SELECT id, client_id, phone, date, status FROM bookings").fetchall()
+            if mine(r["client_id"]) and _phone10(r["phone"]) == p10]
+    today = dt.date.today().isoformat()
+    counts["bookings_anonymised"] = len(rows)
+    counts["future_bookings_cancelled"] = sum(1 for r in rows if r["status"] == "confirmed" and r["date"] >= today)
+    follow = [r for r in conn.execute("SELECT client_id, lead_ts, phone FROM lead_followups").fetchall()
+              if mine(r["client_id"]) and _phone10(r["phone"]) == p10]
+    cbs = [r for r in conn.execute("SELECT id, client_id, phone10 FROM callbacks").fetchall()
+           if mine(r["client_id"]) and r["phone10"] == p10]
+    counts["lead_followups"], counts["callbacks"] = len(follow), len(cbs)
+    leads = [r for r in (_read_csv(LEADS_CSV) if LEADS_CSV.exists() else [])
+             if mine(r.get("client_id")) and _phone10(r.get("phone")) == p10]
+    counts["leads"] = len(leads)
+
+    calls = []
+    for folder, path, trace in list(_call_files()):
+        if not mine(folder.name):
+            continue
+        rec = _load_json(path) or {}
+        if _phone10(rec.get("caller")) == p10 or _mentions(rec.get("transcript"), p10):
+            calls.append((path, trace))
+    counts["calls"] = len(calls)
+    notes = [n for n in read_notifications() if _phone10(n.get("to")) == p10]
+    counts["notifications"] = len(notes)
+    if dry_run:
+        return counts
+
+    with _transaction(conn):
+        for r in rows:
+            status = "cancelled" if r["status"] == "confirmed" and r["date"] >= today else r["status"]
+            conn.execute("UPDATE bookings SET name='', phone='', status=? WHERE id=?", (status, r["id"]))
+        for r in follow:
+            conn.execute("DELETE FROM lead_followups WHERE client_id=? AND lead_ts=? AND phone=?",
+                         (r["client_id"], r["lead_ts"], r["phone"]))
+        for r in cbs:
+            conn.execute("DELETE FROM callbacks WHERE id=?", (r["id"],))
+    _invalidate(BOOKINGS_DB)
+    _rewrite_leads(lambda r: not (mine(r.get("client_id")) and _phone10(r.get("phone")) == p10))
+    for path, trace in calls:
+        _delete_call(path, trace)
+    _rewrite_notifications(lambda n: _phone10(n.get("to")) != p10)
+    return counts
+
+
+RETENTION_FIRST_RUN_S = 3600   # first purge an hour after start: see below
+
+
+def start_retention_worker(stop: threading.Event, every_s: float = 24 * 3600,
+                           first_delay_s: float = RETENTION_FIRST_RUN_S) -> threading.Thread | None:
+    """Apply the retention periods once a day in the background (never in
+    test mode). VOXAGENT_RETENTION=off turns it off; the CLI still works.
+
+    At start it only PREVIEWS (prints what it would remove) and purges for
+    real an hour later, so whoever starts a server on old data sees what will
+    go and has time to stop it (review P2-1, 2026-10-30)."""
+    if in_test_mode() or os.getenv("VOXAGENT_RETENTION", "").strip().lower() == "off":
+        return None
+
+    def loop():
+        try:
+            preview = purge_expired(dry_run=True)
+            if any(preview.values()):
+                print(f"  [retention] in {first_delay_s / 60:.0f} min this will remove "
+                      f"past-retention data: {preview} (VOXAGENT_RETENTION=off to stop)")
+        except Exception as e:
+            print(f"  [retention] preview failed: {type(e).__name__}: {e}")
+        if stop.wait(first_delay_s):
+            return
+        while True:
+            try:
+                counts = purge_expired()
+                if any(counts.values()):
+                    print(f"  [retention] removed past-retention data: {counts}")
+            except Exception as e:      # one bad file must never stop the worker
+                print(f"  [retention] purge failed: {type(e).__name__}: {e}")
+            if stop.wait(every_s):
+                return
+
+    t = threading.Thread(target=loop, name="retention", daemon=True)
+    t.start()
+    return t
+
+
 def main(argv=None) -> int:
     """`python storage.py export-csv PATH [--force]` / `import-sheet [--skip]`.
     Expected problems (no credentials, file exists) print one clear line and
@@ -1488,6 +1758,12 @@ def main(argv=None) -> int:
                        help="record that the Sheet has no bookings to import")
     rotate = sub.add_parser("rotate-code", help="give a business a new business code")
     rotate.add_argument("client_id")
+    purge = sub.add_parser("purge", help="remove personal data past its retention period")
+    purge.add_argument("--apply", action="store_true", help="actually delete (default: show counts only)")
+    forget = sub.add_parser("delete-customer", help="remove one person's records (a deletion request)")
+    forget.add_argument("phone")
+    forget.add_argument("--client", help="only this business (default: all)")
+    forget.add_argument("--apply", action="store_true", help="actually delete (default: show counts only)")
     args = parser.parse_args(argv)
     try:
         if args.cmd == "export-csv":
@@ -1499,7 +1775,16 @@ def main(argv=None) -> int:
         elif args.cmd == "rotate-code":
             print(f"New business code for {args.client_id}: {rotate_access_code(args.client_id)}")
             print("The old code no longer works. Give the new one to the owner privately.")
-    except (RuntimeError, FileExistsError, OSError) as e:
+        elif args.cmd == "purge":
+            counts = purge_expired(dry_run=not args.apply)
+            print(("Removed" if args.apply else "Would remove (add --apply to do it)") + f": {counts}")
+            print(f"Retention (days): {retention_days()}")
+        elif args.cmd == "delete-customer":
+            counts = delete_customer(args.phone, args.client, dry_run=not args.apply)
+            print(("Deleted" if args.apply else "Would delete (add --apply to do it)") + f": {counts}")
+            if args.apply and _sheet_configured():
+                print("Bookings are also copied to your Google Sheet: delete that person's rows there by hand.")
+    except (RuntimeError, FileExistsError, OSError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
     return 0

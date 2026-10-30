@@ -193,6 +193,37 @@ _TOOL_NAMES = frozenset(t["name"] for t in TOOL_SCHEMAS)
 LANGUAGES = {"en": "English", "hi": "Hindi", "te": "Telugu", "ta": "Tamil"}
 
 
+def disclosure(config: dict, kind: str) -> str:
+    """What every customer is told before anything else: they are talking to
+    an AI receptionist, and the conversation is kept as text. Owner decision
+    2026-10-21. One place for the wording, so every channel says the same.
+
+    kind: "phone" (spoken by Twilio before the AI joins the call),
+          "chat_greeting" (website chat's first message),
+          "chat_notice" (put before WhatsApp's first reply).
+    Atithi stores no call audio; calls are kept as transcripts."""
+    # Capped: the phone version is spoken before the call connects, and a
+    # very long name would stretch that (review P2-2).
+    name = (config.get("business_name") or "this business").strip()[:60]
+    if kind == "phone":
+        return (f"Hello, you've reached {name}. You're speaking with an AI receptionist. "
+                "This call is transcribed and saved as text so the team can follow up.")
+    if kind == "chat_greeting":
+        return (f"Hello! I'm the AI receptionist for {name}. This chat is saved so the team "
+                "can follow up. How can I help you today?")
+    if kind == "chat_notice":
+        return f"(You're chatting with {name}'s AI receptionist. This chat is saved so the team can follow up.)"
+    raise ValueError(f"unknown disclosure kind {kind!r}")
+
+
+def _who(name: str, phone: str) -> str:
+    """A customer, for the console log: initial and last 4 digits only.
+    Server logs are often kept by the host; they don't need full details."""
+    digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
+    initial = (str(name or "").strip()[:1] + ".") if str(name or "").strip() else "(no name)"
+    return f"{initial} …{digits[-4:]}" if digits else initial
+
+
 def language_instruction(config: dict) -> str:
     codes = [c for c in (config.get("languages") or ["en"]) if c in LANGUAGES] or ["en"]
     names = [LANGUAGES[c] for c in codes]
@@ -313,6 +344,8 @@ class ReceptionistAgent:
         self.verified_phone: str | None = None
         self.bookings_made = 0
         self.change_requests = 0
+        # Which disclosure the channel gave this customer (set by the channel).
+        self.disclosed: str | None = None
         # A random id that ties this conversation's perf measurements
         # together. Deliberately NOT the phone number or the Twilio SID.
         self.perf_id = secrets.token_hex(6)
@@ -606,7 +639,7 @@ class ReceptionistAgent:
         notify.booking_event(self.client_id, "confirmed", dict(
             name=customer_name, phone=phone, service=service, date=date, time=time))
         print(
-            f"\n  ✅ BOOKING CONFIRMED — {customer_name} | {phone} | {service} "
+            f"\n  ✅ BOOKING CONFIRMED — {_who(customer_name, phone)} | {service} "
             f"| {date} {time}\n     saved to: {saved_to}\n"
         )
         return {
@@ -691,7 +724,7 @@ class ReceptionistAgent:
                              "Call find_booking and confirm which appointment the customer means."}
         self.slots = self._refresh_slots()      # the slot is free again
         notify.booking_event(self.client_id, "cancelled", done)
-        print(f"\n  ✖ BOOKING CANCELLED — {done['name']} | {date} {time}\n")
+        print(f"\n  ✖ BOOKING CANCELLED — {_who(done['name'], phone)} | {date} {time}\n")
         return {"status": "cancelled", "date": date, "time": time, "service": done["service"]}
 
     def _reschedule_booking(self, phone, date, time, new_date, new_time) -> dict:
@@ -719,7 +752,7 @@ class ReceptionistAgent:
                     "available_slots": self._refresh_slots().get(new_date) or []}
         self.slots = self._refresh_slots()
         notify.booking_event(self.client_id, "rescheduled", new)
-        print(f"\n  ↻ BOOKING MOVED — {new['name']} | {date} {time} -> {new_date} {new_time}\n")
+        print(f"\n  ↻ BOOKING MOVED — {_who(new['name'], phone)} | {date} {time} -> {new_date} {new_time}\n")
         return {"status": "rescheduled", "from": {"date": date, "time": time},
                 "to": {"date": new_date, "time": new_time}, "service": new["service"]}
 
@@ -740,7 +773,7 @@ class ReceptionistAgent:
                              "transfer_to_owner again with it."}
         storage.save_lead(self.client_id, name, phone, "Wants to talk to the team",
                           "URGENT callback: " + reason)
-        print(f"\n  ☎ CALLBACK REQUESTED — {name or '(no name)'} | {phone} | {reason}\n")
+        print(f"\n  ☎ CALLBACK REQUESTED — {_who(name, phone)}\n")
         return {"status": "callback_saved",
                 "note": "Tell the customer the team will call them back as soon as possible."}
 
@@ -752,7 +785,7 @@ class ReceptionistAgent:
                          "for a 10-digit mobile number so the front desk can call back.",
             }
         storage.save_lead(self.client_id, name, phone, interest, note)
-        print(f"\n  📇 LEAD SAVED — {name or '(no name)'} | {phone} | {interest}\n")
+        print(f"\n  📇 LEAD SAVED — {_who(name, phone)}\n")
         return {"status": "saved", "name": name, "phone": phone, "interest": interest}
 
     # ---- transcript ---------------------------------------------------------------
