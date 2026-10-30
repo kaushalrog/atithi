@@ -14,6 +14,8 @@ Every conversation starts with a disclosure (`agent.disclosure`), on every chann
 | Website chat | The first message, from the server | "Hello! I'm the AI receptionist for {business}. This chat is saved so the team can follow up. How can I help you today?" |
 | WhatsApp | Put before the first reply of each conversation | "(You're chatting with {business}'s AI receptionist. This chat is saved so the team can follow up.)" |
 
+**Evidence per conversation:** each conversation record has a `disclosure` field naming the notice that customer was given (`phone`, `chat_greeting` or `chat_notice`). It is `null` for the owner's own test chat, which has no notice because the owner is the user.
+
 **If asked:** prompt rule 12 tells the receptionist to say honestly that it is an AI receptionist, and to offer a person (`transfer_to_owner`). The eval `honest_about_being_ai` checks this. An older eval used to require the opposite.
 
 **Not yet verified:**
@@ -37,10 +39,15 @@ Everything lives on the server that runs Atithi, except where noted.
 | Performance log (optional) | `VOXAGENT_PERF_LOG` | **None**: allowlisted labels and a random id only | n/a | n/a |
 | **Call audio** | **Not stored by Atithi.** Calls are transcribed; Twilio call recording is not switched on. | n/a | n/a | n/a |
 | Copy of each booking in Google Sheets (optional) | The business's own Sheet | Name, number | Not managed by Atithi | Delete by hand in the Sheet |
+| Backups of the bookings database | `bookings.db.bak-*` (made by `export-csv --force` and imports) | Name, number | **Not purged automatically** | Delete old backups by hand; never copy them off the server |
+| Files you export | Wherever `python storage.py export-csv` or the portal's CSV export saved them | Name, number | **Not managed by Atithi** | Your responsibility once downloaded |
+| Twilio's own logs | Twilio's console: call records (numbers, times, duration), and WhatsApp/SMS message bodies | Number, message text | Twilio's retention, not Atithi's | Check and set it in the Twilio console before the pilot |
 
 **Changing a period:** each one can be set with an environment variable, e.g. `VOXAGENT_RETAIN_CALLS_DAYS=60`. The keys are `CALLS`, `LEADS`, `BOOKING_CONTACT`, `QUESTIONS`, `CALLBACKS` and `NOTIFICATIONS`.
 
-**Enforcement:** the server applies the periods **once a day** in the background (`storage.start_retention_worker`). `VOXAGENT_RETENTION=off` disables it.
+**Enforcement:** the server applies the periods **once a day** in the background (`storage.start_retention_worker`).
+- **At start it only previews.** It prints what it would remove, then really removes it **an hour later**. So if you start a server on a copy of old data, you see what will go and have time to stop it.
+- `VOXAGENT_RETENTION=off` disables it. Use that on a development machine whose old data you want to keep.
 
 ## Deleting a person's data
 
@@ -53,9 +60,10 @@ python storage.py delete-customer "98765 43210" --client demo_clinic --apply   #
 ```
 
 The number is matched on its last 10 digits, so `+91 98…`, `098…` and `98…` are the same person. The command does the following:
-- **Bookings:** anonymised (name and number removed). A **future** confirmed booking is also **cancelled**, since nobody could be told about it any more. The command reports how many.
+- **Bookings:** anonymised (name and number removed). A **future** confirmed booking is also **cancelled**, since nobody could be told about it any more. The command reports how many. **Nobody is notified automatically**: tell the business so the slot can be reused, and tell the customer if they asked.
 - **Leads, follow-ups, callback rows and SMS log lines:** deleted.
-- **Conversations:** every record and trace where they are the caller **or their number appears in the transcript** is deleted.
+- **Conversations:** every record and trace where they are the caller **or their number appears in the transcript** is deleted. A transcript only counts if it contains the whole number (optionally with 0, 91 or +91 in front), within one line. Digits from different messages never combine, so other people's conversations are not deleted by mistake.
+- **Run it once.** Running it again finds less, because the bookings are already anonymised. That's harmless.
 - **Google Sheets:** if a Sheet is configured, it reminds you to delete their rows there by hand.
 
 **Purge on demand:** to apply the periods now, run `python storage.py purge` (dry run), then `python storage.py purge --apply`.

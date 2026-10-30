@@ -141,7 +141,8 @@ def test_website_chat_sessions_are_public(tmp_storage, monkeypatch):
     monkeypatch.setattr(server, "ReceptionistAgent", lambda cid: ReceptionistAgent(cid, llm=FakeLLM([])))
     res = TestClient(server.app).post("/api/public/session", json={"key": "wk_trusttest"})
     assert res.status_code == 200
-    assert server.sessions[res.json()["session_id"]]["agent"].trust == "public"
+    agent = server.sessions[res.json()["session_id"]]["agent"]
+    assert (agent.trust, agent.disclosed) == ("public", "chat_greeting")
 
 
 def test_whatsapp_conversations_are_verified_to_the_sender(wa):
@@ -149,6 +150,7 @@ def test_whatsapp_conversations_are_verified_to_the_sender(wa):
     send(wa["client"], "hi")
     [session] = list(__import__("telephony")._wa_sessions.values())
     assert (session["agent"].trust, session["agent"].verified_phone) == ("verified", CUSTOMER)
+    assert session["agent"].disclosed == "chat_notice"
 
 
 def test_a_change_request_backs_a_callback_promise():
@@ -182,6 +184,7 @@ def test_an_inbound_caller_is_public_because_caller_id_can_be_faked(phone, made_
     assert stream(phone["client"], params) == 1000
     [a] = made_agents
     assert (a.trust, a.verified_phone) == ("public", None)
+    assert a.disclosed == "phone"
 
 
 @pytest.mark.parametrize("query,purpose", [("?client_id=demo_clinic", "outbound"),

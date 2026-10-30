@@ -198,10 +198,12 @@ _active_calls = 0                      # event-loop only, so a plain int is safe
 # stream arrives or it expires. Without this, a burst of calls all passed the
 # webhook's limit check and the extras were dropped silently at the stream.
 _pending_tickets: dict[str, float] = {}   # call_sid -> reservation expiry
-# A reservation is short: Twilio opens the stream within about a second of our
-# TwiML, so a stream that never arrives (caller hung up, rejected before its
-# 'start' message) gives its slot back after 30 s, not the ticket's 2 minutes.
-PENDING_SLOT_S = 30
+# A reservation is short: Twilio opens the stream as soon as the spoken AI
+# notice (<Say>, about 8-12 s) finishes, so a stream that never arrives
+# (caller hung up, rejected before its 'start' message) gives its slot back
+# after 45 s, not the ticket's 2 minutes. Measure the real <Say> length on the
+# first controlled call (review P2-2, 2026-10-30).
+PENDING_SLOT_S = 45
 # An outbound call holds its slot from dialling until answered (Twilio rings
 # for up to ~30 s by default), so inbound calls can't take the line meanwhile.
 OUTBOUND_RING_S = 60
@@ -714,6 +716,7 @@ async def twilio_stream(ws: WebSocket):
             agent.set_channel("verified", caller)
         else:
             agent.set_channel("public")
+        agent.disclosed = "phone"            # spoken by Twilio before the stream opened
         agent.can_transfer = handoff_enabled() and bool(agent.config.get("handoff_phone"))
         if caller:
             agent.system_prompt += (
@@ -959,6 +962,7 @@ def _wa_turn(session: dict, client_id: str, sender: str, text: str) -> str:
         if session["agent"] is None:
             agent = ReceptionistAgent(client_id)
             agent.set_channel("verified", sender)   # WhatsApp vouches for the sender's number
+            agent.disclosed = "chat_notice"         # put before this conversation's first reply
             agent.system_prompt += (
                 f"\n\nThis is a WHATSAPP chat. The customer's WhatsApp number is {sender}: when "
                 "booking or saving a lead you may offer to use it, but confirm it first. Keep "

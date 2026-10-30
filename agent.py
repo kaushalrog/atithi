@@ -202,7 +202,9 @@ def disclosure(config: dict, kind: str) -> str:
           "chat_greeting" (website chat's first message),
           "chat_notice" (put before WhatsApp's first reply).
     Atithi stores no call audio; calls are kept as transcripts."""
-    name = (config.get("business_name") or "this business").strip()
+    # Capped: the phone version is spoken before the call connects, and a
+    # very long name would stretch that (review P2-2).
+    name = (config.get("business_name") or "this business").strip()[:60]
     if kind == "phone":
         return (f"Hello, you've reached {name}. You're speaking with an AI receptionist. "
                 "This call is transcribed and saved as text so the team can follow up.")
@@ -342,6 +344,8 @@ class ReceptionistAgent:
         self.verified_phone: str | None = None
         self.bookings_made = 0
         self.change_requests = 0
+        # Which disclosure the channel gave this customer (set by the channel).
+        self.disclosed: str | None = None
         # A random id that ties this conversation's perf measurements
         # together. Deliberately NOT the phone number or the Twilio SID.
         self.perf_id = secrets.token_hex(6)

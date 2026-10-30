@@ -129,8 +129,11 @@ AI receptionist for any Indian business that takes bookings (clinics, salons, re
   WhatsApp first reply. Prompt rule 12 = honest when asked (eval
   honest_about_being_ai). Retention: storage.RETENTION_DAYS, enforced daily by
   storage.start_retention_worker; `python storage.py purge` and
-  `delete-customer <phone>` (dry run unless --apply). Console logs mask
-  customers (agent._who). No call audio is stored.
+  `delete-customer <phone>` (dry run unless --apply); the worker only previews
+  at start and purges an hour later. Phone matching (storage._mentions) is per
+  line and whole-number only. Each call record has a "disclosure" field
+  (agent.disclosed, set by the channel). Console logs mask customers
+  (agent._who). No call audio is stored.
 - Safety: VOXAGENT_ENV=test (tests, evals) disables the Sheets copy and makes
   writes to real data files raise. Live phone calls are off unless
   ENABLE_LIVE_CALLS=true; see docs/SAFE_TESTING.md before enabling.

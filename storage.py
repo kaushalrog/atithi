@@ -1038,6 +1038,9 @@ def log_call_from_agent(agent, channel: str, started: dt.datetime,
         "seconds": int((now - started).total_seconds()),
         "turns": turns,
         "transcript": agent.transcript_text(),
+        # Which AI notice this customer was given (agent.disclosure), as
+        # evidence per conversation; None for the owner's own test chat.
+        "disclosure": getattr(agent, "disclosed", None),
         # What the call actually achieved, from the tools' own results. The
         # dashboard used to guess from the transcript, so a FAILED booking
         # attempt counted as a booked call (audit M1).
@@ -1559,10 +1562,21 @@ def purge_expired(now: dt.datetime | None = None, dry_run: bool = False) -> dict
 
     for _folder, path, trace in list(_call_files()):
         rec = _load_json(path) or {}
-        if (rec.get("started") or "9999") < iso["calls"]:
+        started = rec.get("started")
+        if not isinstance(started, str) or not started[:4].isdigit():
+            # A corrupt record must not live forever: use the file's age.
+            started = dt.datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds")
+        if started < iso["calls"]:
             counts["calls"] += 1
             if not dry_run:
                 _delete_call(path, trace)
+    if CALLS_DIR.exists():                   # traces whose record is already gone
+        for trace in CALLS_DIR.glob("*/traces/*.json"):
+            if not (trace.parent.parent / trace.name).exists():
+                counts["calls"] += 1
+                if not dry_run:
+                    _guard_write(trace)
+                    trace.unlink(missing_ok=True)
 
     lead_cut = iso["leads"]
     old_leads = [r for r in _read_csv(LEADS_CSV) if (r.get("timestamp") or "9999") < lead_cut] \
@@ -1590,17 +1604,41 @@ def purge_expired(now: dt.datetime | None = None, dry_run: bool = False) -> dict
         _invalidate(BOOKINGS_DB)
         _rewrite_leads(lambda r: (r.get("timestamp") or "9999") >= lead_cut)
 
-    note_cut = cut["notifications"].astimezone().isoformat(timespec="seconds")
-    old = [n for n in read_notifications() if (n.get("at") or "9999") < note_cut]
+    note_cut = cut["notifications"].astimezone()
+
+    def note_old(n) -> bool:
+        """Compare real moments, not strings: entries may carry another UTC offset."""
+        try:
+            at = dt.datetime.fromisoformat(n.get("at") or "")
+        except ValueError:
+            return True                      # unreadable timestamp: past any retention
+        if at.tzinfo is None:
+            at = at.astimezone()
+        return at < note_cut
+    old = [n for n in read_notifications() if note_old(n)]
     counts["notifications"] = len(old)
     if not dry_run and old:
-        _rewrite_notifications(lambda n: (n.get("at") or "9999") >= note_cut)
+        _rewrite_notifications(lambda n: not note_old(n))
     return counts
 
 
+# A phone-like run: digits with optional spaces/dashes inside, optionally a
+# leading +. Never spans lines, so digits from different turns or tool
+# results can't join into a number (review P1-1, 2026-10-30).
+_PHONE_RUN = re.compile(r"\+?\d(?:[ \t-]?\d){7,14}")
+
+
 def _mentions(text: str, p10: str) -> bool:
-    """Does free text contain this number, however it was written?"""
-    return p10 in re.sub(r"\D", "", str(text or ""))
+    """Does free text contain this exact number, however it was written
+    (+91 98765 43210, 098765-43210, 9876543210)? A run is the person's number
+    only if it is the number itself plus at most a 0 or 91 / +91 prefix:
+    a longer run that merely contains those digits is someone else's."""
+    for line in str(text or "").splitlines():
+        for run in _PHONE_RUN.findall(line):
+            digits = re.sub(r"\D", "", run)
+            if digits == p10 or digits in ("0" + p10, "91" + p10):
+                return True
+    return False
 
 
 def delete_customer(phone: str, client_id: str | None = None, dry_run: bool = False) -> dict[str, int]:
@@ -1662,13 +1700,30 @@ def delete_customer(phone: str, client_id: str | None = None, dry_run: bool = Fa
     return counts
 
 
-def start_retention_worker(stop: threading.Event, every_s: float = 24 * 3600) -> threading.Thread | None:
+RETENTION_FIRST_RUN_S = 3600   # first purge an hour after start: see below
+
+
+def start_retention_worker(stop: threading.Event, every_s: float = 24 * 3600,
+                           first_delay_s: float = RETENTION_FIRST_RUN_S) -> threading.Thread | None:
     """Apply the retention periods once a day in the background (never in
-    test mode). VOXAGENT_RETENTION=off turns it off; the CLI still works."""
+    test mode). VOXAGENT_RETENTION=off turns it off; the CLI still works.
+
+    At start it only PREVIEWS (prints what it would remove) and purges for
+    real an hour later, so whoever starts a server on old data sees what will
+    go and has time to stop it (review P2-1, 2026-10-30)."""
     if in_test_mode() or os.getenv("VOXAGENT_RETENTION", "").strip().lower() == "off":
         return None
 
     def loop():
+        try:
+            preview = purge_expired(dry_run=True)
+            if any(preview.values()):
+                print(f"  [retention] in {first_delay_s / 60:.0f} min this will remove "
+                      f"past-retention data: {preview} (VOXAGENT_RETENTION=off to stop)")
+        except Exception as e:
+            print(f"  [retention] preview failed: {type(e).__name__}: {e}")
+        if stop.wait(first_delay_s):
+            return
         while True:
             try:
                 counts = purge_expired()

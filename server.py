@@ -1274,6 +1274,7 @@ def public_session(req: PublicSessionRequest, request: Request):
         raise HTTPException(status_code=429, detail="Too many chats started — please wait a few minutes.")
     agent = ReceptionistAgent(client_id)
     agent.set_channel("public")       # anyone on the internet: no look-ups, capped bookings
+    agent.disclosed = "chat_greeting"  # the greeting returned below says it's an AI
     session_id = _open_session(client_id, agent, "website", WIDGET_SESSIONS_PER_BUSINESS)
     return {"session_id": session_id, "business_name": cfg.get("business_name", ""),
             "greeting": disclosure(cfg, "chat_greeting")}
