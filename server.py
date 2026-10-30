@@ -157,6 +157,20 @@ def throttle(scope: str):
 
 def wrong_guess(scope: str):
     CREDENTIAL_FAILURES.fail(f"{_request_ip.get()}|{scope}")
+
+
+def admin_key_ok(key: str | None) -> bool:
+    """THE only place the admin key is compared (a test enforces it): every
+    route that accepts X-Admin-Key goes through the same throttle. A route
+    that compared it directly was an unthrottled password oracle (review
+    P2-N1, 2026-10-21)."""
+    if not key:
+        return False
+    throttle("admin")
+    if auth.admin_password_matches(key):
+        return True
+    wrong_guess("admin")
+    return False
 tts = EdgeTTS()
 
 
@@ -426,11 +440,8 @@ def authorize_client(client_id: str, client_key: str | None, admin_key: str | No
     user = bearer_user(authorization)
     if is_admin(user) or (user and user["client_id"] == client_id):
         return
-    if admin_key:
-        throttle("admin")
-        if auth.admin_password_matches(admin_key):
-            return
-        wrong_guess("admin")
+    if admin_key_ok(admin_key):
+        return
     expected = client_access_key(client_id)
     if client_key:
         # An unknown business id shares one bucket, so made-up ids can't
@@ -552,11 +563,8 @@ def require_admin(x_admin_key: str | None = Header(default=None, alias="X-Admin-
         raise HTTPException(status_code=503, detail="Admin console unavailable")
     if is_admin(bearer_user(authorization)):
         return
-    if x_admin_key:
-        throttle("admin")
-        if auth.admin_password_matches(x_admin_key):
-            return
-        wrong_guess("admin")
+    if admin_key_ok(x_admin_key):
+        return
     raise HTTPException(status_code=401, detail="Admin access only")
 
 
@@ -768,7 +776,7 @@ def create_business(req: BusinessRequest,
     # Admin can create any number of businesses; a signed-up owner exactly one
     # (their own — it gets linked to their account and starts a free trial).
     user = bearer_user(authorization)
-    as_admin = is_admin(user) or auth.admin_password_matches(x_admin_key)
+    as_admin = is_admin(user) or admin_key_ok(x_admin_key)
     if not as_admin:
         if user is None:
             raise HTTPException(status_code=401, detail="Sign in to create your business")
