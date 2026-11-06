@@ -8,8 +8,9 @@ YAML (single source of truth, visible to the admin in plain text):
       paid_until: "2026-07-17"
       renewal_requested: "2026-07-15T18:30:00"   # owner says "I've paid"
 
-Hand-made demo clients have no billing block and are grandfathered as
-always-active ("free" plan). Money flow at this stage: the owner pays by UPI,
+A business with NO billing block is inactive: a missing block must never
+mean "free forever" (security audit H5). Internal/demo businesses say so
+explicitly with `billing: {plan: free}`. Money flow at this stage: the owner pays by UPI,
 clicks "I've paid" (request_renewal), the admin sees the claim in the console
 and extends the plan (set_paid_until). A payment gateway slots into exactly
 these two functions later.
@@ -31,7 +32,9 @@ def new_trial() -> dict:
 
 def _is_active(billing: dict | None) -> bool:
     if not billing:
-        return True  # grandfathered demo client (no billing block)
+        return False  # fail closed: no block is a mistake, not a free plan
+    if str(billing.get("plan", "")).strip().lower() == "free":
+        return True   # an internal/demo business, marked as such on purpose
     return str(billing.get("paid_until", "")) >= dt.date.today().isoformat()
 
 

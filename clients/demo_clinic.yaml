@@ -89,3 +89,5 @@ schedule:
     - '20:30'
   gap_min: 30
   horizon_days: 14
+billing:
+  plan: free         # internal demo business: never charged (billing.py)
