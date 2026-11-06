@@ -66,14 +66,14 @@ def client(tmp_storage, monkeypatch):
     return TestClient(server.app)
 
 
-def test_settings_save_closed_dates_and_drop_past_ones(client):
+def test_settings_save_closed_dates_and_drop_past_ones(client, owner_headers):
     h = {"X-Client-Key": DEMO_KEY}
     body = client.get("/api/business/demo_clinic/settings", headers=h).json()
     future = (dt.date.today() + dt.timedelta(days=10)).isoformat()
     past = (dt.date.today() - dt.timedelta(days=3)).isoformat()
     body["closed_dates"] = [{"date": future, "reason": "Diwali"}, {"date": past}]
-    res = client.put("/api/business/demo_clinic/settings", json=body, headers=h)
+    res = client.put("/api/business/demo_clinic/settings", json=body, headers=owner_headers())
     assert res.status_code == 200 and res.json()["closed_dates"] == [{"date": future, "reason": "Diwali"}]
     body["closed_dates"] = [{"date": future, "from": "18:00", "to": "09:00"}]
-    bad = client.put("/api/business/demo_clinic/settings", json=body, headers=h)
+    bad = client.put("/api/business/demo_clinic/settings", json=body, headers=owner_headers())
     assert bad.status_code == 422 and "Closed dates" in bad.json()["detail"]

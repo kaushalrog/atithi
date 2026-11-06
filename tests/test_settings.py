@@ -47,7 +47,7 @@ def test_an_owner_cannot_read_or_change_another_business(client):
                       headers={"X-Client-Key": SALON_KEY}).status_code == 401
 
 
-def test_saving_updates_what_the_agent_knows_and_keeps_everything_else(client):
+def test_saving_updates_what_the_agent_knows_and_keeps_everything_else(client, owner_headers):
     before = yaml.safe_load((storage.CLIENTS_DIR / "demo_clinic.yaml").read_text(encoding="utf-8"))
     body = settings(client).json()
     body["services"].append({"name": "Teeth whitening", "price": "₹4,000"})
@@ -56,7 +56,7 @@ def test_saving_updates_what_the_agent_knows_and_keeps_everything_else(client):
     body["slot_ranges"] = [["10:00", "12:00"]]
     body["slot_gap_min"] = 45
     res = client.put("/api/business/demo_clinic/settings", json=body,
-                     headers={"X-Client-Key": DEMO_KEY})
+                     headers=owner_headers())
     assert res.status_code == 200
     after = yaml.safe_load((storage.CLIENTS_DIR / "demo_clinic.yaml").read_text(encoding="utf-8"))
     assert {"name": "Teeth whitening", "price": "₹4,000"} in after["services"]
@@ -72,46 +72,46 @@ def test_saving_updates_what_the_agent_knows_and_keeps_everything_else(client):
     assert "Teeth whitening" in ReceptionistAgent("demo_clinic", llm=FakeLLM([])).system_prompt
 
 
-def test_invalid_settings_are_refused_and_nothing_is_written(client):
+def test_invalid_settings_are_refused_and_nothing_is_written(client, owner_headers):
     path = storage.CLIENTS_DIR / "demo_clinic.yaml"
     original = path.read_text(encoding="utf-8")
     body = settings(client).json()
     for broken in ({"services": []}, {"business_name": "  "}, {"slot_days": []},
                    {"slot_ranges": [["13:00", "10:00"]]}):
         res = client.put("/api/business/demo_clinic/settings", json={**body, **broken},
-                         headers={"X-Client-Key": DEMO_KEY})
+                         headers=owner_headers())
         assert res.status_code == 422, broken
     assert path.read_text(encoding="utf-8") == original
 
 
-def test_saving_never_mutates_the_shared_cached_config(client):
+def test_saving_never_mutates_the_shared_cached_config(client, owner_headers):
     cached = storage.read_client_config("demo_clinic")
     snapshot = yaml.safe_dump(cached)
     body = settings(client).json()
     body["timings"] = "changed"
-    client.put("/api/business/demo_clinic/settings", json=body, headers={"X-Client-Key": DEMO_KEY})
+    client.put("/api/business/demo_clinic/settings", json=body, headers=owner_headers())
     assert yaml.safe_dump(cached) == snapshot
 
 
 # ---- languages (Telugu / Hindi) -------------------------------------------------------
 
-def test_languages_are_saved_and_shape_the_receptionist(client):
+def test_languages_are_saved_and_shape_the_receptionist(client, owner_headers):
     from agent import ReceptionistAgent
     from conftest import FakeLLM
     body = settings(client).json()
     assert body["languages"] == ["en"]                       # default for older businesses
     body["languages"] = ["te", "en", "hi"]
-    res = client.put("/api/business/demo_clinic/settings", json=body, headers={"X-Client-Key": DEMO_KEY})
+    res = client.put("/api/business/demo_clinic/settings", json=body, headers=owner_headers())
     assert res.status_code == 200 and res.json()["languages"] == ["te", "en", "hi"]
     prompt = ReceptionistAgent("demo_clinic", llm=FakeLLM([])).system_prompt
     assert "Start the conversation in Telugu" in prompt
     assert "Telugu, English and Hindi" in prompt
 
 
-def test_an_unknown_language_is_refused(client):
+def test_an_unknown_language_is_refused(client, owner_headers):
     body = settings(client).json()
     body["languages"] = ["en", "klingon"]
-    res = client.put("/api/business/demo_clinic/settings", json=body, headers={"X-Client-Key": DEMO_KEY})
+    res = client.put("/api/business/demo_clinic/settings", json=body, headers=owner_headers())
     assert res.status_code == 422
 
 

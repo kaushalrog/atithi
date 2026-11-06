@@ -476,3 +476,43 @@ def test_a_session_just_fetched_is_never_the_one_evicted(client, session, monkey
     server.get_session(session)                  # a request picks it up again now
     assert _open(client).status_code == 200
     assert session in server.sessions and other not in server.sessions
+
+
+# ---- a business code is read-only (security audit H2) ------------------------------
+
+WRITES = [
+    ("put", "/api/business/demo_clinic/settings", {}),
+    ("post", "/api/bookings/cancel", {"client_id": "demo_clinic", "booking_id": 1}),
+    ("post", "/api/callbacks/handled", {"client_id": "demo_clinic", "callback_id": 1}),
+    ("post", "/api/questions/answer", {"client_id": "demo_clinic", "question_id": 1, "answer": "x"}),
+    ("post", "/api/questions/dismiss", {"client_id": "demo_clinic", "question_id": 1}),
+    ("post", "/api/leads/update", {"client_id": "demo_clinic", "timestamp": "t", "phone": "9876543210",
+                                   "status": "new"}),
+    ("post", "/api/billing/renew", {"client_id": "demo_clinic"}),
+]
+
+
+@pytest.mark.parametrize("method,path,body", WRITES)
+def test_a_business_code_can_read_but_never_change(client, method, path, body):
+    headers = {"X-Client-Key": DEMO_KEY}
+    assert client.get("/api/stats?client_id=demo_clinic", headers=headers).status_code == 200
+    if method == "put":
+        body = client.get("/api/business/demo_clinic/settings", headers=headers).json()
+    res = getattr(client, method)(path, json=body, headers=headers)
+    assert res.status_code == 403 and "Sign in" in res.json()["detail"]
+
+
+def test_a_signed_in_owner_can_change_their_own_business(client, owner_headers, tmp_storage,
+                                                         monkeypatch):
+    import shutil
+    import storage
+    clients = tmp_storage / "clients"
+    shutil.copytree(storage.CLIENTS_DIR, clients)          # writes go to a copy
+    monkeypatch.setattr(storage, "CLIENTS_DIR", clients)
+    storage.clear_caches()
+    owner = owner_headers("demo_clinic")
+    res = client.post("/api/billing/renew", json={"client_id": "demo_clinic"}, headers=owner)
+    assert res.status_code == 200
+    # ...but not someone else's.
+    res = client.post("/api/billing/renew", json={"client_id": "lakshmi_beauty_salon"}, headers=owner)
+    assert res.status_code == 401

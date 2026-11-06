@@ -290,7 +290,7 @@ def test_two_workers_never_ring_the_same_customer(dialer, monkeypatch):
     assert dialer == [PHONE]
 
 
-def test_owner_sets_the_transfer_number_and_marks_callbacks_handled(tmp_storage, monkeypatch):
+def test_owner_sets_the_transfer_number_and_marks_callbacks_handled(tmp_storage, monkeypatch, owner_headers):
     import shutil
     import auth
     import server
@@ -306,10 +306,10 @@ def test_owner_sets_the_transfer_number_and_marks_callbacks_handled(tmp_storage,
     s = client.get("/api/business/demo_clinic/settings", headers=key).json()
     assert (s["handoff_phone"], s["missed_call_mode"], s["callback_when_busy"]) == ("", False, True)
     body = {k: v for k, v in s.items() if k in server.BusinessRequest.model_fields}
-    bad = client.put("/api/business/demo_clinic/settings", json={**body, "handoff_phone": "12345"}, headers=key)
+    bad = client.put("/api/business/demo_clinic/settings", json={**body, "handoff_phone": "12345"}, headers=owner_headers())
     assert bad.status_code == 422
     ok = client.put("/api/business/demo_clinic/settings",
-                    json={**body, "handoff_phone": "098765 43210", "missed_call_mode": True}, headers=key)
+                    json={**body, "handoff_phone": "098765 43210", "missed_call_mode": True}, headers=owner_headers())
     assert ok.json()["handoff_phone"] == "+919876543210" and ok.json()["missed_call_mode"] is True
 
     storage.queue_callback("demo_clinic", PHONE, "missed call")
@@ -317,6 +317,6 @@ def test_owner_sets_the_transfer_number_and_marks_callbacks_handled(tmp_storage,
     req = {"client_id": "demo_clinic", "callback_id": cb["id"]}
     assert client.post("/api/callbacks/handled", json=req,
                        headers={"X-Client-Key": SALON_CODE}).status_code == 401   # another business
-    assert client.post("/api/callbacks/handled", json=req, headers=key).status_code == 200
+    assert client.post("/api/callbacks/handled", json=req, headers=owner_headers()).status_code == 200
     assert storage.pending_callbacks() == []
-    assert client.post("/api/callbacks/handled", json=req, headers=key).status_code == 404
+    assert client.post("/api/callbacks/handled", json=req, headers=owner_headers()).status_code == 404

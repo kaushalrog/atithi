@@ -24,7 +24,7 @@ def test_old_configs_without_a_type_still_work(tmp_storage):
     assert "appointments" in prompt
 
 
-def test_settings_save_the_type_and_refuse_odd_booking_words(tmp_storage, monkeypatch):
+def test_settings_save_the_type_and_refuse_odd_booking_words(tmp_storage, monkeypatch, owner_headers):
     import shutil
     import auth
     clients = tmp_storage / "clients"
@@ -39,8 +39,8 @@ def test_settings_save_the_type_and_refuse_odd_booking_words(tmp_storage, monkey
     assert s["booking_word"] == "appointment"
     body = {k: v for k, v in s.items() if k in server.BusinessRequest.model_fields}
     body.update(business_type="gym", booking_word="session")
-    assert client.put("/api/business/demo_clinic/settings", json=body, headers=key).status_code == 200
+    assert client.put("/api/business/demo_clinic/settings", json=body, headers=owner_headers()).status_code == 200
     s = client.get("/api/business/demo_clinic/settings", headers=key).json()
     assert (s["business_type"], s["booking_word"]) == ("gym", "session")
     body["booking_word"] = "kidney"
-    assert client.put("/api/business/demo_clinic/settings", json=body, headers=key).status_code == 422
+    assert client.put("/api/business/demo_clinic/settings", json=body, headers=owner_headers()).status_code == 422

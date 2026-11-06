@@ -31,29 +31,29 @@ def leads(client):
     return client.get("/api/dashboard?client_id=demo_clinic", headers=DEMO_KEY).json()["leads"]
 
 
-def test_new_leads_start_as_new_and_follow_ups_are_saved(client):
+def test_new_leads_start_as_new_and_follow_ups_are_saved(client, owner_headers):
     lead = next(l for l in leads(client) if l["name"] == "Kiran")
     assert (lead["status"], lead["callback_on"], lead["has_booked"]) == ("new", "", False)
     res = client.post("/api/leads/update", json={
         "client_id": "demo_clinic", "timestamp": lead["timestamp"], "phone": lead["phone"],
-        "status": "called", "note": "Call after 6 pm", "callback_on": "2026-11-02"}, headers=DEMO_KEY)
+        "status": "called", "note": "Call after 6 pm", "callback_on": "2026-11-02"}, headers=owner_headers())
     assert res.status_code == 200
     lead = next(l for l in leads(client) if l["name"] == "Kiran")
     assert (lead["status"], lead["followup_note"], lead["callback_on"]) == ("called", "Call after 6 pm", "2026-11-02")
     # Saving again updates, never duplicates.
     client.post("/api/leads/update", json={"client_id": "demo_clinic", "timestamp": lead["timestamp"],
-                                           "phone": lead["phone"], "status": "booked"}, headers=DEMO_KEY)
+                                           "phone": lead["phone"], "status": "booked"}, headers=owner_headers())
     assert [l["status"] for l in leads(client) if l["name"] == "Kiran"] == ["booked"]
 
 
-def test_bad_updates_are_refused(client):
+def test_bad_updates_are_refused(client, owner_headers):
     lead = leads(client)[0]
     base = {"client_id": "demo_clinic", "timestamp": lead["timestamp"], "phone": lead["phone"]}
-    assert client.post("/api/leads/update", json={**base, "status": "maybe"}, headers=DEMO_KEY).status_code == 422
+    assert client.post("/api/leads/update", json={**base, "status": "maybe"}, headers=owner_headers()).status_code == 422
     assert client.post("/api/leads/update", json={**base, "status": "new", "callback_on": "tomorrow"},
-                       headers=DEMO_KEY).status_code == 422
+                       headers=owner_headers()).status_code == 422
     assert client.post("/api/leads/update", json={**base, "phone": "000", "status": "new"},
-                       headers=DEMO_KEY).status_code == 404
+                       headers=owner_headers()).status_code == 404
     assert client.post("/api/leads/update", json={**base, "status": "new"}, headers=SALON_KEY).status_code == 401
 
 

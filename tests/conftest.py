@@ -133,3 +133,27 @@ def access_key(client_id: str = "demo_clinic") -> str:
     """
     import storage
     return (storage.read_client_config(client_id) or {})["access_key"]
+
+
+@pytest.fixture
+def owner_headers(tmp_path, monkeypatch):
+    """Sign in a real owner account (temp accounts DB) and return its headers.
+
+    Changing a business's data needs a signed-in account; a business code is
+    read-only (server.authorize_client). Call it with a client_id:
+        client.post(..., headers=owner_headers("demo_clinic"))
+    """
+    import auth
+    monkeypatch.setattr(auth, "DB_FILE", tmp_path / "accounts.db")
+    monkeypatch.setattr(auth, "LEGACY_USERS", tmp_path / "no_users.json")
+    monkeypatch.setattr(auth, "LEGACY_TOKENS", tmp_path / "no_tokens.json")
+
+    def headers(client_id: str = "demo_clinic") -> dict:
+        email = f"owner-{client_id}@example.test"
+        try:
+            auth.signup(email, "Correct-Horse-9-Battery")
+        except LookupError:
+            pass                                   # already made in this test
+        auth.attach_client(email, client_id)
+        return {"Authorization": "Bearer " + auth.issue_token(email)["token"]}
+    return headers

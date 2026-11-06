@@ -92,7 +92,7 @@ def test_the_database_refuses_a_race_into_the_same_new_slot(tmp_storage):
     assert len(confirmed) == 2 and [r["time"] for r in confirmed].count(target) == 1
 
 
-def test_the_owner_cancels_from_the_dashboard_and_counts_stay_honest(tmp_storage, monkeypatch, agent):
+def test_the_owner_cancels_from_the_dashboard_and_counts_stay_honest(tmp_storage, monkeypatch, agent, owner_headers):
     import auth
     monkeypatch.setattr(auth, "DB_FILE", tmp_storage / "voxagent.db")
     monkeypatch.setattr(auth, "LEGACY_USERS", tmp_storage / "no_users.json")
@@ -105,10 +105,10 @@ def test_the_owner_cancels_from_the_dashboard_and_counts_stay_honest(tmp_storage
     assert client.post("/api/bookings/cancel", json={"client_id": "demo_clinic", "booking_id": row["id"]},
                        headers={"X-Client-Key": SALON_CODE}).status_code == 401   # another business
     res = client.post("/api/bookings/cancel", json={"client_id": "demo_clinic", "booking_id": row["id"]},
-                      headers=key)
+                      headers=owner_headers())
     assert res.status_code == 200
     again = client.post("/api/bookings/cancel", json={"client_id": "demo_clinic", "booking_id": row["id"]},
-                        headers=key)
+                        headers=owner_headers())
     assert again.status_code == 404
     stats = client.get("/api/dashboard?client_id=demo_clinic", headers=key).json()["stats"]
     assert stats["bookings"] == 0                      # a cancelled booking isn't a booking

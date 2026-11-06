@@ -43,27 +43,27 @@ def test_repeats_are_counted_as_one_question(tmp_storage):
     assert storage.open_questions("lakshmi_beauty_salon") == []        # per business
 
 
-def test_answering_adds_an_faq_the_receptionist_then_uses(client):
+def test_answering_adds_an_faq_the_receptionist_then_uses(client, owner_headers):
     agent = ReceptionistAgent("demo_clinic", llm=FakeLLM([]))
     ask(agent, "Do you have parking?")
     h = {"X-Client-Key": DEMO_KEY}
     [q] = client.get("/api/questions?client_id=demo_clinic", headers=h).json()
     assert client.get("/api/dashboard?client_id=demo_clinic", headers=h).json()["open_questions"] == 1
     assert client.post("/api/questions/answer", json={"client_id": "demo_clinic", "question_id": q["id"],
-                                                      "answer": ""}, headers=h).status_code == 422
+                                                      "answer": ""}, headers=owner_headers()).status_code == 422
     res = client.post("/api/questions/answer", json={"client_id": "demo_clinic", "question_id": q["id"],
-                                                     "answer": "Yes, free parking behind the building."}, headers=h)
+                                                     "answer": "Yes, free parking behind the building."}, headers=owner_headers())
     assert res.status_code == 200
     cfg = yaml.safe_load((storage.CLIENTS_DIR / "demo_clinic.yaml").read_text(encoding="utf-8"))
     assert {"q": "Do you have parking?", "a": "Yes, free parking behind the building."} in cfg["faq"]
     assert "free parking behind the building" in ReceptionistAgent("demo_clinic", llm=FakeLLM([])).system_prompt
     assert client.get("/api/questions?client_id=demo_clinic", headers=h).json() == []
     again = client.post("/api/questions/answer", json={"client_id": "demo_clinic", "question_id": q["id"],
-                                                       "answer": "x"}, headers=h)
+                                                       "answer": "x"}, headers=owner_headers())
     assert again.status_code == 404
 
 
-def test_dismiss_and_other_businesses_cannot_touch_it(client):
+def test_dismiss_and_other_businesses_cannot_touch_it(client, owner_headers):
     agent = ReceptionistAgent("demo_clinic", llm=FakeLLM([]))
     ask(agent, "What's the wifi password?")
     [q] = storage.open_questions("demo_clinic")
@@ -72,7 +72,7 @@ def test_dismiss_and_other_businesses_cannot_touch_it(client):
     assert client.post("/api/questions/dismiss", json={"client_id": "demo_clinic", "question_id": q["id"]},
                        headers=other).status_code == 401
     assert client.post("/api/questions/dismiss", json={"client_id": "demo_clinic", "question_id": q["id"]},
-                       headers={"X-Client-Key": DEMO_KEY}).status_code == 200
+                       headers=owner_headers()).status_code == 200
     assert storage.open_questions("demo_clinic") == []
     ask(agent, "What's the wifi password?")                    # asked again after dismissal: back as new
     assert storage.open_questions("demo_clinic")[0]["asked"] == 1

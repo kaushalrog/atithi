@@ -439,7 +439,15 @@ def client_access_key(client_id: str) -> str | None:
 
 
 def authorize_client(client_id: str, client_key: str | None, admin_key: str | None,
-                     authorization: str | None = None):
+                     authorization: str | None = None, write: bool = False):
+    """May this request see (or, with write=True, change) this business's data?
+
+    A business code opens READ access only. Changing anything (settings,
+    cancelling a booking, leads, questions, billing) needs a signed-in
+    account: a 12-character code is shared, pasted and screenshotted, and a
+    leaked one must not let a stranger cancel a clinic's appointments
+    (security audit H2).
+    """
     user = bearer_user(authorization)
     if is_admin(user) or (user and user["client_id"] == client_id):
         return
@@ -452,6 +460,9 @@ def authorize_client(client_id: str, client_key: str | None, admin_key: str | No
         scope = f"code:{client_id}" if expected else "code:?"
         throttle(scope)
         if expected and same_secret(client_key, expected):
+            if write:
+                raise HTTPException(status_code=403, detail=(
+                    "A business code can only view. Sign in to your account to make changes."))
             return
         wrong_guess(scope)
     raise HTTPException(status_code=401, detail="Not authorized for this business")
@@ -883,7 +894,7 @@ def save_settings(client_id: str, req: BusinessRequest,
     """Update what the receptionist knows. Everything else in the YAML (the
     owner's code, billing, phone-number mapping, client id) is kept as is.
     A test call already open keeps the old details; the next one gets these."""
-    authorize_client(client_id, x_client_key, x_admin_key, authorization)
+    authorize_client(client_id, x_client_key, x_admin_key, authorization, write=True)
     current = storage.read_client_config(client_id)
     if current is None:
         raise HTTPException(status_code=404, detail=f"No client '{client_id}'")
@@ -1160,7 +1171,7 @@ def callback_handled(req: CallbackDoneRequest,
                      x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
                      authorization: str | None = Header(default=None)):
     """The owner rang the customer themselves: Atithi must not call too."""
-    authorize_client(req.client_id, x_client_key, x_admin_key, authorization)
+    authorize_client(req.client_id, x_client_key, x_admin_key, authorization, write=True)
     pending = {c["id"] for c in storage.read_callbacks(req.client_id, 200) if c["status"] == "pending"}
     if req.callback_id not in pending or not storage.mark_callback(
             req.callback_id, "dismissed", "handled by the team", client_id=req.client_id):
@@ -1180,7 +1191,7 @@ def owner_cancel_booking(req: CancelRequest,
                          authorization: str | None = Header(default=None)):
     """The owner cancels a booking from the Bookings page (the customer
     phoned, or the slot can't be kept). The slot becomes free again."""
-    authorize_client(req.client_id, x_client_key, x_admin_key, authorization)
+    authorize_client(req.client_id, x_client_key, x_admin_key, authorization, write=True)
     done = storage.cancel_booking(req.client_id, booking_id=req.booking_id)
     if done is None:
         raise HTTPException(status_code=404, detail="That booking is not confirmed any more")
@@ -1320,7 +1331,7 @@ def answer_question(req: QuestionAction,
                     authorization: str | None = Header(default=None)):
     """The owner answers once; it becomes an FAQ the receptionist uses from
     the next conversation on."""
-    authorize_client(req.client_id, x_client_key, x_admin_key, authorization)
+    authorize_client(req.client_id, x_client_key, x_admin_key, authorization, write=True)
     answer = req.answer.strip()
     if not answer:
         raise HTTPException(status_code=422, detail="Type the answer first")
@@ -1341,7 +1352,7 @@ def dismiss_question(req: QuestionAction,
                      x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
                      x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
                      authorization: str | None = Header(default=None)):
-    authorize_client(req.client_id, x_client_key, x_admin_key, authorization)
+    authorize_client(req.client_id, x_client_key, x_admin_key, authorization, write=True)
     if storage.close_question(req.client_id, req.question_id, None) is None:
         raise HTTPException(status_code=404, detail="That question is no longer open")
     return {"ok": True}
@@ -1363,7 +1374,7 @@ def update_lead(req: LeadUpdate,
                 x_client_key: str | None = Header(default=None, alias="X-Client-Key"),
                 x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
                 authorization: str | None = Header(default=None)):
-    authorize_client(req.client_id, x_client_key, x_admin_key, authorization)
+    authorize_client(req.client_id, x_client_key, x_admin_key, authorization, write=True)
     try:
         found = storage.update_lead_followup(req.client_id, req.timestamp, req.phone, req.status,
                                              req.note.strip(), req.callback_on.strip())
@@ -1467,7 +1478,7 @@ def billing_renew(req: SessionRequest,
                   x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
                   authorization: str | None = Header(default=None)):
     """The owner clicked 'I've paid' — flag it for the admin to confirm."""
-    authorize_client(req.client_id, x_client_key, x_admin_key, authorization)
+    authorize_client(req.client_id, x_client_key, x_admin_key, authorization, write=True)
     try:
         return billing.request_renewal(req.client_id)
     except LookupError as e:

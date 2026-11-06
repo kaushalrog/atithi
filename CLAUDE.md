@@ -175,7 +175,9 @@ AI receptionist for any Indian business that takes bookings (clinics, salons, re
 - The dashboard is ONE request (`/api/dashboard`) with an ETag; the periodic
   refresh answers 304 with no body when nothing changed.
 - Access control: per-business codes (access_key in each client YAML,
-  X-Client-Key header) lock owners to their own data; ADMIN_PASSWORD
+  X-Client-Key header) lock owners to their own data and are READ-ONLY:
+  every write endpoint passes write=True to server.authorize_client and needs
+  a signed-in owner account (403 for a code; tests use conftest owner_headers); ADMIN_PASSWORD
   (X-Admin-Key) opens everything. Portal has a login gate; /admin
   (web/admin.html) is the platform console with system-status checks and
   the business-code list. Codes are 12 characters (storage.new_access_code;

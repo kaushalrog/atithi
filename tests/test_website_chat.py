@@ -15,7 +15,7 @@ DEMO_KEY = {"X-Client-Key": DEMO_CODE}
 
 
 @pytest.fixture
-def client(tmp_storage, monkeypatch):
+def client(tmp_storage, monkeypatch, owner_headers):
     import auth
     clients = tmp_storage / "clients"
     shutil.copytree(storage.CLIENTS_DIR, clients)
@@ -28,13 +28,15 @@ def client(tmp_storage, monkeypatch):
     monkeypatch.setattr(server, "_widget_ips", {})
     monkeypatch.setattr(server, "_widget_turns", {})
     storage.clear_caches()
-    return TestClient(server.app)
+    test_client = TestClient(server.app)
+    test_client.owner = owner_headers()   # changing settings needs a signed-in owner
+    return test_client
 
 
 def enable(client, on=True):
     body = client.get("/api/business/demo_clinic/settings", headers=DEMO_KEY).json()
     body["website_chat"] = on
-    return client.put("/api/business/demo_clinic/settings", json=body, headers=DEMO_KEY).json()
+    return client.put("/api/business/demo_clinic/settings", json=body, headers=client.owner).json()
 
 
 def test_off_by_default_and_unknown_keys_get_nothing(client):
