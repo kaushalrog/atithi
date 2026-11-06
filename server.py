@@ -295,6 +295,10 @@ class SessionRequest(BaseModel):
 # unbounded one costs quota and money for the rest of the conversation.
 MAX_CHAT_CHARS = 2000
 MAX_TTS_CHARS = 1000                # mirrored in web/index.html speak()
+# Spoken replies per test session. Speech now costs real money per call
+# (Gnani and the other paid voices), and without a cap one session could
+# synthesise without end. 60 turns + greetings fits comfortably.
+MAX_TTS_PER_SESSION = int(os.getenv("VOXAGENT_MAX_TTS_PER_SESSION", "70"))
 MAX_VOICE_BYTES = 5 * 1024 * 1024   # ~55 s of the portal's 48 kHz WAV; a turn is seconds
 MAX_BODY_BYTES = 6 * 1024 * 1024    # whole request, checked before it is parsed
 
@@ -1066,11 +1070,19 @@ def speak(req: TTSRequest):
     Requires a live test-call session: without one this endpoint was a free,
     unlimited text-to-speech proxy for anyone who found the URL (audit M4).
     """
-    _owner_session(req.session_id)
+    session = _owner_session(req.session_id)
+    with _sessions_lock:
+        spoken = session.get("tts_count", 0)
+        if spoken >= MAX_TTS_PER_SESSION:
+            raise HTTPException(status_code=429, detail=(
+                "This test call has used its spoken replies. Start a new test call."))
+        session["tts_count"] = spoken + 1
     clean = re.sub(r"[*_#`]", "", req.text)
+    # The business's own voice choice (its `voice:` block) is honoured.
+    cfg = storage.read_client_config(session["client_id"]) or {}
     # Straight from the network into the response — no temp file round trip.
     try:
-        audio = tts.synthesize_bytes(clean)
+        audio = tts.synthesize_bytes(clean, cfg)
     except TTSTimeout:
         perf.event("timeout.tts")
         raise HTTPException(status_code=504, detail="Voice reply took too long — the text reply stands.")

@@ -1444,7 +1444,8 @@ async function speak(text) {
     if (!voiceWarned) {
       voiceWarned = true;
       addBubble("note", "Voice reply unavailable" +
-        (res.status === 404 ? " — this test call expired; start a new one." : "."));
+        (res.status === 404 ? " — this test call expired; start a new one." :
+         res.status === 429 ? " — this test call has used its spoken replies; start a new one." : "."));
     }
   } catch (e) { /* voice output must never break the chat */ }
 }

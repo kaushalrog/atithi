@@ -32,18 +32,6 @@
 
 ## Cost control
 
-### Per-session budgets for test calls
-
-**What:** Cap each portal test-call session: number/characters of `/api/tts` syntheses, number of chat turns, and enforce the 2-hour idle limit inside `get_session` (today it's only purged when a new session is created).
-
-**Why:** Found in the Phase 0.5 review (Red Team + adversarial): a session holder can make unlimited 1000-char TTS calls, and each chat turn re-sends the whole history, so one session's model cost keeps growing. Anyone can sign up and get a session.
-
-**Context:** `server.py` `create_session`, `get_session`, `/api/tts`, `/api/chat`. Needs a product decision on the limits (what a fair demo costs). Pair with the credential rate limits above.
-
-**Effort:** S
-**Priority:** P2
-**Depends on:** Decision on per-session limits.
-
 ### A durable outbox for the Google Sheet copy
 
 **What:** Record in bookings.db which bookings reached the Sheet (a `sheet_copied` column or small table). Re-queue the unsynced ones at startup, and add `python storage.py sync-sheet`.
@@ -75,6 +63,12 @@
 ## Metrics
 
 ## Completed
+
+### Per-session budgets for test calls (2026-11-06)
+Chat turns were already capped (MAX_TURNS_PER_SESSION = 60) and idle sessions
+purged on every request. Spoken replies are now capped too
+(MAX_TTS_PER_SESSION, default 70, VOXAGENT_MAX_TTS_PER_SESSION), answering 429,
+because speech costs money per call once a paid voice (Gnani) is on.
 
 ### Reserve the outbound call slot atomically; dial only allowed numbers (2026-11-06)
 `telephony._claim_slot` checks capacity and reserves in one locked step before

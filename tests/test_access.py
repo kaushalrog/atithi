@@ -82,13 +82,31 @@ def session(client, monkeypatch):
 
 def test_tts_requires_a_live_session_and_bounds_text(client, session, monkeypatch):
     """Audit M4 (R5): /api/tts was an open, unlimited TTS proxy."""
-    monkeypatch.setattr(server.tts, "synthesize_bytes", lambda text: b"ID3fake")
+    monkeypatch.setattr(server.tts, "synthesize_bytes", lambda text, config=None: b"ID3fake")
     assert client.post("/api/tts", json={"text": "hi"}).status_code == 422
     assert client.post("/api/tts", json={"session_id": "nope", "text": "hi"}).status_code == 404
     too_long = {"session_id": session, "text": "x" * 1001}
     assert client.post("/api/tts", json=too_long).status_code == 422
     ok = client.post("/api/tts", json={"session_id": session, "text": "x" * 1000})
     assert ok.status_code == 200 and ok.content == b"ID3fake"
+
+
+def test_spoken_replies_are_capped_per_session(client, session, monkeypatch):
+    """Speech costs money per call (Gnani etc.): one session can't synthesise forever."""
+    monkeypatch.setattr(server, "MAX_TTS_PER_SESSION", 2)
+    monkeypatch.setattr(server.tts, "synthesize_bytes", lambda text, config=None: b"ID3fake")
+    for _ in range(2):
+        assert client.post("/api/tts", json={"session_id": session, "text": "hi"}).status_code == 200
+    res = client.post("/api/tts", json={"session_id": session, "text": "hi"})
+    assert res.status_code == 429 and "new test call" in res.json()["detail"]
+
+
+def test_spoken_replies_use_the_business_voice_settings(client, session, monkeypatch):
+    seen = []
+    monkeypatch.setattr(server.tts, "synthesize_bytes",
+                        lambda text, config=None: seen.append(config) or b"ID3fake")
+    client.post("/api/tts", json={"session_id": session, "text": "hi"})
+    assert seen and seen[0]["client_id"] == "demo_clinic"
 
 
 def test_chat_message_size_is_bounded(client, session):
@@ -394,7 +412,7 @@ def test_a_session_mid_turn_is_never_purged(client, session):
 def test_a_slow_voice_reply_is_a_504_not_a_hang(client, session, monkeypatch):
     from tts import TTSTimeout
 
-    def stalled(text):
+    def stalled(text, config=None):
         raise TTSTimeout("no speech after 15s")
     monkeypatch.setattr(server.tts, "synthesize_bytes", stalled)
     res = client.post("/api/tts", json={"session_id": session, "text": "hi"})
