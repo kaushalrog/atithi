@@ -31,3 +31,14 @@ notifications.jsonl
 
 # Voice lab output (generated samples, not source)
 voice_lab/
+
+# A local copy of a fork (has its own .env with real keys + databases): never commit
+Atithi/
+Atithi.zip
+# Personal agent notes; installed third-party skills (restore: npx skills add, see skills-lock.json)
+/AGENTS.md
+.agents/
+# macOS folder metadata
+.DS_Store
+# HyperFrames render scratch (snapshots, check reports)
+brag-output/composition/.hyperframes/
