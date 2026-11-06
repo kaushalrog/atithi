@@ -615,7 +615,7 @@ async def twilio_voice(request: Request, client_id: str | None = None):
     # their number is "To", and the lines were already checked when dialling,
     # so they must never hear "all our lines are busy" on picking up.
     outbound = form.get("Direction", "").startswith("outbound")
-    caller = form.get("To", "") if outbound else form.get("From", "")
+    caller = clean_caller_id(form.get("To", "") if outbound else form.get("From", ""))
     if not active:                                 # also False for an unknown business
         # Unpaid/expired business: apologize to the caller instead of answering.
         return _say("Sorry, this number is temporarily unavailable. Please try again later.")
@@ -852,6 +852,25 @@ async def twilio_stream(ws: WebSocket):
 
 
 # ---- outbound calls (started from the admin console) ---------------------------------
+
+def clean_caller_id(raw: str) -> str:
+    """A phone number made of '+' and digits only, or "" if there isn't one.
+
+    Twilio's From is usually E.164, but it can be "anonymous" or a SIP URI
+    whose text the caller controls. It is written into the system prompt,
+    the call record and the signed stream ticket, so nothing but a plain
+    number may get through (security audit: caller ID into the prompt).
+    """
+    raw = str(raw or "").strip()
+    if not raw or raw[0] not in "+0123456789":
+        return ""
+    if any(ch not in "+0123456789 -()" for ch in raw):
+        return ""
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if not 7 <= len(digits) <= 15:
+        return ""
+    return ("+" if raw.startswith("+") else "") + digits
+
 
 def dial_prefixes() -> tuple[str, ...]:
     """Where Atithi may place calls. Default: Indian numbers only."""
