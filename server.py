@@ -48,7 +48,19 @@ from tts import EdgeTTS, TTSTimeout
 
 BASE_DIR = Path(__file__).resolve().parent
 
-app = FastAPI(title="Atithi")
+@contextlib.asynccontextmanager
+async def _lifespan(_app):
+    """Startup work before the first request; background workers stop on shutdown.
+
+    (Replaces the deprecated @app.on_event("startup").)
+    """
+    _callbacks_stop.clear()          # a fresh start after an earlier shutdown (tests)
+    _warm_up()
+    yield
+    _callbacks_stop.set()            # callback dialer + retention worker wind down
+
+
+app = FastAPI(title="Atithi", lifespan=_lifespan)
 
 
 class BodySizeLimit:
@@ -174,7 +186,6 @@ def admin_key_ok(key: str | None) -> bool:
 tts = EdgeTTS()
 
 
-@app.on_event("startup")
 def _warm_up():
     """Build the Gemini client while the server boots.
 
