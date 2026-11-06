@@ -1047,3 +1047,71 @@ def test_caller_memory_only_for_a_proven_number(tmp_storage, fake_llm, monkeypat
     agent.set_channel("verified", "9876543210")    # a call Atithi placed
     assert telephony.caller_briefing(agent, "demo_clinic") == "RETURNING CALLER"
     assert calls == ["9876543210"]
+
+
+# ---- dial allowlist and atomic slot claim (security audit H4, TODOS) --------------
+
+def test_only_allowed_numbers_are_dialled(monkeypatch):
+    monkeypatch.delenv("VOXAGENT_DIAL_PREFIXES", raising=False)
+    assert telephony.dialable_number("+91 98765 43210") == "+919876543210"
+    assert telephony.dialable_number("9876543210") == "+919876543210"   # bare Indian mobile
+    assert telephony.dialable_number("+882 1234 5678") is None          # international premium
+    assert telephony.dialable_number("+1 900 555 0100") is None
+    assert telephony.dialable_number("anonymous") is None
+    assert telephony.dialable_number("+91+9876543210") is None
+    monkeypatch.setenv("VOXAGENT_DIAL_PREFIXES", "+91, +1")
+    assert telephony.dialable_number("+1 415 555 0100") == "+14155550100"
+
+
+def _outbound_ready(monkeypatch, phone):
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC1")
+    monkeypatch.setenv("TWILIO_NUMBER", "+15550001111")
+    monkeypatch.delenv("VOXAGENT_DIAL_PREFIXES", raising=False)
+
+
+def test_a_spoofed_foreign_number_is_never_dialled(phone, monkeypatch):
+    _outbound_ready(monkeypatch, phone)
+    dialled = []
+    import twilio.rest
+    monkeypatch.setattr(twilio.rest, "Client", lambda *a: dialled.append(a))
+    with pytest.raises(RuntimeError, match="Not calling that number"):
+        telephony.start_outbound_call("demo_clinic", "+8821234567", purpose="callback")
+    assert dialled == [] and telephony._calls_in_flight() == 0
+
+
+def test_a_failed_dial_gives_its_line_back(phone, monkeypatch):
+    _outbound_ready(monkeypatch, phone)
+    monkeypatch.setenv("MAX_CONCURRENT_CALLS", "1")
+
+    class Down:
+        def __init__(self, *a):
+            self.calls = self
+
+        def create(self, **kw):
+            raise ConnectionError("twilio down")
+    import twilio.rest
+    monkeypatch.setattr(twilio.rest, "Client", Down)
+    with pytest.raises(ConnectionError):
+        telephony.start_outbound_call("demo_clinic", "+919876543210")
+    assert telephony._calls_in_flight() == 0
+
+
+def test_the_line_is_held_while_twilio_is_still_dialling(phone, monkeypatch):
+    """The slot is claimed BEFORE the Twilio round trip, not after it."""
+    _outbound_ready(monkeypatch, phone)
+    monkeypatch.setenv("MAX_CONCURRENT_CALLS", "1")
+    seen = []
+
+    class Slow:
+        def __init__(self, *a):
+            self.calls = self
+
+        def create(self, **kw):
+            seen.append(telephony._calls_in_flight())     # mid-dial
+            seen.append(telephony._claim_slot("inbound", time.time() + 30))
+            return type("Call", (), {"sid": "CAOUT"})()
+    import twilio.rest
+    monkeypatch.setattr(twilio.rest, "Client", Slow)
+    assert telephony.start_outbound_call("demo_clinic", "9876543210") == "CAOUT"
+    assert seen == [1, False]                    # the line was ours during the dial
+    assert list(telephony._pending_tickets) == ["CAOUT"]

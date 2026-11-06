@@ -237,6 +237,30 @@ def _reserve_slot(call_sid: str, expires_at: float):
         _pending_tickets[call_sid] = expires_at
 
 
+def _claim_slot(key: str, expires_at: float) -> bool:
+    """Check capacity and reserve a line in ONE locked step.
+
+    Checking first and reserving later left a gap (the Twilio round trip, a
+    few hundred ms) in which an inbound call could take the last line; the
+    customer the business dialled then picked up to an apology.
+    """
+    now = time.time()
+    with _slots_lock:
+        for sid in [s for s, e in _pending_tickets.items() if e < now]:
+            _pending_tickets.pop(sid, None)
+        if _active_calls + len(_pending_tickets) >= max_concurrent_calls():
+            return False
+        _pending_tickets[key] = expires_at
+        return True
+
+
+def _rekey_slot(old_key: str, call_sid: str, expires_at: float):
+    """The dial went through: hold the same line under Twilio's call SID."""
+    with _slots_lock:
+        _pending_tickets.pop(old_key, None)
+        _pending_tickets[call_sid] = expires_at
+
+
 def _release_slot(call_sid: str):
     with _slots_lock:
         _pending_tickets.pop(call_sid, None)
@@ -829,6 +853,28 @@ async def twilio_stream(ws: WebSocket):
 
 # ---- outbound calls (started from the admin console) ---------------------------------
 
+def dial_prefixes() -> tuple[str, ...]:
+    """Where Atithi may place calls. Default: Indian numbers only."""
+    raw = os.getenv("VOXAGENT_DIAL_PREFIXES", "+91")
+    return tuple(p.strip() for p in raw.split(",") if p.strip().startswith("+"))
+
+
+def dialable_number(number: str) -> str | None:
+    """The E.164 number to dial, or None if Atithi must not call it.
+
+    WHY: a missed-call callback dials whatever caller ID the call arrived
+    with, and caller ID can be faked. Without a limit, a spoofed premium-rate
+    or international number turns callbacks into a bill (security audit H4).
+    A bare 10-digit Indian mobile number is read as +91.
+    """
+    digits = "".join(ch for ch in str(number or "") if ch.isdigit() or ch == "+")
+    if len(digits) == 10 and digits[0] in "6789":
+        digits = "+91" + digits
+    if not digits.startswith("+") or not 8 <= len(digits) - 1 <= 15 or "+" in digits[1:]:
+        return None
+    return digits if digits.startswith(dial_prefixes()) else None
+
+
 def start_outbound_call(client_id: str, to_number: str, purpose: str = "") -> str:
     """Ring a customer; when they pick up, the agent takes the call.
     purpose="callback" makes the agent open with "you gave us a missed call".
@@ -849,23 +895,32 @@ def start_outbound_call(client_id: str, to_number: str, purpose: str = "") -> st
     # out the business can't serve them.
     if not billing.client_active(client_id):
         raise RuntimeError(f"'{client_id}' has no active plan — not calling.")
-    if _calls_in_flight() >= max_concurrent_calls():
-        raise RuntimeError("All call slots are in use — try again in a few minutes.")
+    to = dialable_number(to_number)
+    if to is None:
+        raise RuntimeError(f"Not calling that number: only {', '.join(dial_prefixes())} "
+                           "numbers may be dialled (VOXAGENT_DIAL_PREFIXES).")
     client_cfg = storage.read_client_config(client_id) or {}
     from_number = client_cfg.get("twilio_number") or cfg["number"]
     if not from_number:
         raise RuntimeError("No TWILIO_NUMBER in .env and no twilio_number in the client YAML.")
+    placeholder = f"dialling:{secrets.token_hex(8)}"
+    if not _claim_slot(placeholder, time.time() + OUTBOUND_RING_S):
+        raise RuntimeError("All call slots are in use — try again in a few minutes.")
 
     from twilio.rest import Client
 
-    call = Client(cfg["sid"], cfg["token"]).calls.create(
-        to=to_number,
-        from_=from_number,
-        url=f"{cfg['public_url']}/twilio/voice?client_id={quote(client_id)}"
-            + ("&purpose=callback" if purpose == "callback" else ""),
-        method="POST",
-    )
-    _reserve_slot(call.sid, time.time() + OUTBOUND_RING_S)
+    try:
+        call = Client(cfg["sid"], cfg["token"]).calls.create(
+            to=to,
+            from_=from_number,
+            url=f"{cfg['public_url']}/twilio/voice?client_id={quote(client_id)}"
+                + ("&purpose=callback" if purpose == "callback" else ""),
+            method="POST",
+        )
+    except BaseException:
+        _release_slot(placeholder)        # the dial failed: give the line back
+        raise
+    _rekey_slot(placeholder, call.sid, time.time() + OUTBOUND_RING_S)
     return call.sid
 
 

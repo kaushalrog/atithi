@@ -58,18 +58,6 @@
 
 ## Telephony (pre-existing, found by perf/audit /review)
 
-### Reserve the outbound call slot atomically with the capacity check
-
-**What:** `start_outbound_call` checks `_calls_in_flight()` before `calls.create()`, but reserves the slot only after Twilio answers the REST call. Reserve a provisional slot inside the same lock as the check, then re-key it to `call.sid`, or release it if dialling fails.
-
-**Why:** During that round trip (hundreds of ms) an inbound call or a second admin dial can take the last line. The customer the business dialled then picks up and hears the apology. Separately, the state-machine review found three slot cells without tests: an unanswered outbound dial expiring, a genuine outbound ticket used for the wrong call, and a forged one.
-
-**Context:** `telephony.py` `start_outbound_call`, `_reserve_slot`, `_slots_lock`. This code is unchanged on perf/audit (introduced in e4a3d38).
-
-**Effort:** S
-**Priority:** P2 (P1 once outbound campaigns start)
-**Depends on:** None
-
 ## Dashboard
 
 ### Change detection that doesn't rely on file timestamps
@@ -87,6 +75,12 @@
 ## Metrics
 
 ## Completed
+
+### Reserve the outbound call slot atomically; dial only allowed numbers (2026-11-06)
+`telephony._claim_slot` checks capacity and reserves in one locked step before
+the Twilio round trip, and gives the line back if the dial fails.
+`dialable_number` limits outbound and callback dials to VOXAGENT_DIAL_PREFIXES
+(default +91), so a spoofed caller ID can't make callbacks ring a premium number.
 
 ### End phone calls cleanly when the model stream fails; keep the event loop non-blocking
 
