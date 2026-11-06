@@ -91,6 +91,17 @@ def test_deleting_a_customer_removes_them_everywhere(data):
     assert [n["to"] for n in storage.read_notifications()] == ["+91" + RAVI]   # Ravi untouched
 
 
+def test_deleting_a_customer_clears_their_unsent_sheet_copies(tmp_storage):
+    import json
+    conn = storage._bookings_db()
+    for phone in ("+919876543210", "+91" + RAVI):
+        conn.execute("INSERT INTO sheet_outbox (row, queued) VALUES (?, 'now')",
+                     (json.dumps(["t", "demo_clinic", "X", phone, "s", "2026-12-01", "10:00", "confirmed"]),))
+    assert storage.delete_customer("9876543210")["sheet_copies"] == 1
+    left = [json.loads(r["row"])[3] for r in conn.execute("SELECT row FROM sheet_outbox")]
+    assert left == ["+91" + RAVI]
+
+
 def test_a_future_booking_of_a_deleted_customer_is_cancelled(tmp_storage):
     day = open_day(); t = open_times(date=day)[0]
     a = ReceptionistAgent("demo_clinic", llm=FakeLLM([]))

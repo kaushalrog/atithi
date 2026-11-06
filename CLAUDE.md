@@ -111,7 +111,9 @@ AI receptionist for any Indian business that takes bookings (clinics, salons, re
   confirmed booking per slot (the double-booking guard). Google Sheets
   receives a copy of each booking; it is read only once, by the explicit
   `python storage.py import-sheet` upgrade step (new bookings pause until
-  then if SHEET_ID is set). Rollback: `python storage.py export-csv`. Every file is
+  then if SHEET_ID is set). Each copy goes through the durable sheet_outbox
+  table (resent at startup / `python storage.py sync-sheet`; a copy cut off
+  mid-append is "unconfirmed" and never retried blindly). Rollback: `python storage.py export-csv`. Every file is
   parsed once and cached until it changes (our writes invalidate exactly;
   outside edits are caught by an mtime+size check). **Cached values are
   shared — treat them as read-only and copy before mutating.**

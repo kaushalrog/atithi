@@ -203,6 +203,14 @@ def _warm_up():
         auth.ensure_admin_seed()
     except Exception as e:
         print(f"  [admin] could not seed the admin account: {type(e).__name__}: {e}")
+    # Sheet copies a crash or outage left behind go out again (storage outbox).
+    try:
+        left = storage.resume_sheet_outbox()
+        if left["requeued"] or left["unconfirmed"]:
+            print(f"  [sheets] resent {left['requeued']} copy(ies); {left['unconfirmed']} need a "
+                  "check in the Sheet: python storage.py sync-sheet")
+    except Exception as e:
+        print(f"  [sheets] could not resume the Sheet outbox: {type(e).__name__}: {e}")
     paused = storage.bookings_paused_reason()
     if paused:
         print(f"  [bookings] NEW BOOKINGS ARE PAUSED: {paused}")

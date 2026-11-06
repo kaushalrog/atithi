@@ -834,3 +834,56 @@ def test_a_timeout_while_opening_the_sheet_is_still_retried(sheets_on, monkeypat
     storage.reserve_booking(booking())
     assert storage._sheets_queue.drain(3) == 0
     assert sheet.rows == [booking()] and len(opens) == 2
+
+
+# ---- the durable Sheet outbox (TODOS: a crash used to lose queued copies) ----------
+
+def outbox_states():
+    conn = storage._bookings_db()
+    return [r["state"] for r in conn.execute("SELECT state FROM sheet_outbox ORDER BY id")]
+
+
+def test_a_confirmed_copy_leaves_nothing_in_the_outbox(sheets_on):
+    sheet = sheets_on(FakeWorksheet())
+    storage.reserve_booking(booking())
+    assert storage._sheets_queue.drain(2) == 0
+    assert sheet.rows == [booking()] and outbox_states() == []
+
+
+def test_a_copy_that_never_reached_google_waits_and_is_resent(sheets_on, monkeypatch):
+    monkeypatch.setattr(storage, "SHEETS_RETRY_WAITS_S", (0.01, 0.01, 0.01))
+    down = sheets_on(FakeWorksheet(fail=True))
+    storage.reserve_booking(booking())
+    assert storage._sheets_queue.drain(3) == 0
+    assert down.rows == [] and outbox_states() == ["pending"]     # kept, not lost
+    up = sheets_on(FakeWorksheet(), imported=False)               # Google is back
+    assert storage.resume_sheet_outbox() == {"requeued": 1, "unconfirmed": 0}
+    assert storage._sheets_queue.drain(3) == 0
+    assert up.rows == [booking()] and outbox_states() == []
+
+
+def test_a_crash_mid_append_is_never_retried_blindly(sheets_on):
+    """A row cut off while 'sending' may already be in the Sheet: a retry
+    could duplicate it, which reads as a double booking."""
+    sheets_on(FakeWorksheet())
+    conn = storage._bookings_db()
+    conn.execute("INSERT INTO sheet_outbox (row, queued, state) VALUES (?, 'now', 'sending')",
+                 (json.dumps(booking()),))
+    assert storage.resume_sheet_outbox() == {"requeued": 0, "unconfirmed": 1}
+    [copy] = storage.unconfirmed_sheet_copies()
+    assert (copy["client_id"], copy["date"], copy["time"]) == ("clinic_a", FUTURE, "09:30")
+    assert "Ravi" not in json.dumps(copy)                          # no customer details
+    assert storage.clear_unconfirmed_sheet_copy(copy["id"], resend=False)
+    assert outbox_states() == []
+
+
+def test_an_unconfirmed_copy_can_be_resent_after_a_check(sheets_on):
+    sheet = sheets_on(FakeWorksheet())
+    conn = storage._bookings_db()
+    conn.execute("INSERT INTO sheet_outbox (row, queued, state) VALUES (?, 'now', 'unconfirmed')",
+                 (json.dumps(booking()),))
+    [copy] = storage.unconfirmed_sheet_copies()
+    assert storage.clear_unconfirmed_sheet_copy(copy["id"], resend=True)
+    assert storage.resume_sheet_outbox()["requeued"] == 1
+    assert storage._sheets_queue.drain(3) == 0
+    assert sheet.rows == [booking()] and outbox_states() == []

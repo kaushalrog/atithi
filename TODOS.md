@@ -32,18 +32,6 @@
 
 ## Cost control
 
-### A durable outbox for the Google Sheet copy
-
-**What:** Record in bookings.db which bookings reached the Sheet (a `sheet_copied` column or small table). Re-queue the unsynced ones at startup, and add `python storage.py sync-sheet`.
-
-**Why:** Since perf/audit the Sheet copy waits in an in-memory queue, so a booking never waits for Google. But a crash, kill or redeploy loses whatever is queued, with no log. A clean exit drains for only 5 s, and a Google outage can fill the 1,000-item queue. The booking itself is always safe in bookings.db; only the owner's Sheet can silently miss rows.
-
-**Context:** `storage.py` `_copy_to_sheet`, `_sheets_queue`, `_drain_sheets_at_exit`. Read timeouts are already not retried; they're logged as "may or may not have landed" (perf/audit review D3). A re-sync must therefore check the Sheet for the booking before appending.
-
-**Effort:** M
-**Priority:** P2
-**Depends on:** Only matters for businesses using a Google Sheet.
-
 ## Telephony (pre-existing, found by perf/audit /review)
 
 ## Dashboard
@@ -63,6 +51,13 @@
 ## Metrics
 
 ## Completed
+
+### A durable outbox for the Google Sheet copy (2026-11-06)
+Each copy is written to `bookings.db` `sheet_outbox` before it is queued and
+deleted once Google confirms. Copies that never reached Google are resent at
+startup and by `python storage.py sync-sheet`; a copy cut off mid-append is
+marked unconfirmed and never retried blindly (a duplicate reads as a double
+booking): `sync-sheet --present ID` / `--resend ID` after checking the Sheet.
 
 ### Per-session budgets for test calls (2026-11-06)
 Chat turns were already capped (MAX_TURNS_PER_SESSION = 60) and idle sessions

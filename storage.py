@@ -276,6 +276,13 @@ CREATE TABLE IF NOT EXISTS callbacks (
     phone10 TEXT NOT NULL, reason TEXT NOT NULL, created TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending', updated TEXT NOT NULL, note TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS callbacks_by_client ON callbacks(client_id, created);
+-- Google Sheet copies not yet confirmed by Google. Written BEFORE the copy is
+-- queued, deleted once the append is confirmed, so a crash or redeploy can't
+-- silently lose one. state: pending (safe to send) | sending | unconfirmed
+-- (Google may already have it: a human checks, never an automatic retry).
+CREATE TABLE IF NOT EXISTS sheet_outbox (
+    id INTEGER PRIMARY KEY, row TEXT NOT NULL, queued TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending');
 """
 
 # One connection per thread (SQLite connections must not be shared across
@@ -826,7 +833,19 @@ SHEETS_TIMEOUT_S = (5, 10)         # gspread (connect, read); its default is no 
 SHEETS_EXIT_DRAIN_S = 5
 
 
-def _copy_to_sheet(row: list):
+def _outbox_set(outbox_id: int | None, state: str | None):
+    """Move an outbox row to `state`, or delete it (state None = confirmed)."""
+    if outbox_id is None:
+        return
+    conn = _bookings_db()
+    with _transaction(conn):
+        if state is None:
+            conn.execute("DELETE FROM sheet_outbox WHERE id=?", (outbox_id,))
+        else:
+            conn.execute("UPDATE sheet_outbox SET state=? WHERE id=?", (state, outbox_id))
+
+
+def _copy_to_sheet(item):
     """The Sheets worker: copy one COMMITTED booking to the owner's Sheet.
 
     Runs on the background thread, never on a call. The booking is already
@@ -834,10 +853,13 @@ def _copy_to_sheet(row: list):
     only costs the Sheet a row (retried, then logged and counted), never the
     booking. Edits made in the Sheet do not reach VoxAgent (it's read only by
     the one-time import-sheet step). Off entirely in test mode.
+
+    `item` is (outbox id, row) from the durable outbox, or a bare row.
     """
+    outbox_id, row = item if isinstance(item, tuple) else (None, item)
     target = _sheets_target()
     if target is None:
-        return
+        return                          # stays 'pending' in the outbox
     error = None
     for wait in (0, *SHEETS_RETRY_WAITS_S):
         if wait:
@@ -849,8 +871,10 @@ def _copy_to_sheet(row: list):
             error = e
             continue
         try:
+            _outbox_set(outbox_id, "sending")   # a crash from here on = unconfirmed
             with perf.span("sheets.copy"):
                 sheet.append_row(row)
+            _outbox_set(outbox_id, None)        # Google confirmed: done
             return
         except Exception as e:
             _reset_sheet_handle()       # a stale handle may be the problem
@@ -861,14 +885,18 @@ def _copy_to_sheet(row: list):
                 # booking in the owner's Sheet twice, which reads as a
                 # double booking. Say so instead of guessing.
                 perf.event("sheets.unconfirmed")
+                _outbox_set(outbox_id, "unconfirmed")
                 print(f"  [warning] Google Sheet copy may or may not have landed ({type(e).__name__}) "
                       f"— check the Sheet for {row[1]} {row[5]} {row[6]}; it is safe in bookings.db.")
                 return
     perf.event("sheets.dropped")
+    # Every failure here never reached Google (connection errors, 429s, 5xx),
+    # so the row goes back to 'pending': the next start or `sync-sheet` sends it.
+    _outbox_set(outbox_id, "pending")
     # Which booking, without the customer's name or number in the log.
     print(f"  [warning] Google Sheet copy dropped after {1 + len(SHEETS_RETRY_WAITS_S)} tries "
           f"({type(error).__name__}) — {row[1]} {row[5]} {row[6]} is safe in bookings.db; "
-          "the Sheet is missing that row.")
+          "the Sheet is missing that row until `python storage.py sync-sheet`.")
 
 
 def _may_have_landed(error: Exception) -> bool:
@@ -884,7 +912,13 @@ _sheets_queue = _BackgroundQueue("sheets-copy", _copy_to_sheet, maxsize=SHEETS_Q
 
 
 def _queue_sheet_copy(row: list):
-    if not _sheets_queue.put(list(row)):
+    # Durable first: the copy is in bookings.db before it is in memory, so a
+    # crash, kill or redeploy can no longer lose it without a trace.
+    conn = _bookings_db()
+    with _transaction(conn):
+        cursor = conn.execute("INSERT INTO sheet_outbox (row, queued) VALUES (?, ?)",
+                              (json.dumps(list(row)), dt.datetime.now().isoformat(timespec="seconds")))
+    if not _sheets_queue.put((cursor.lastrowid, list(row))):
         perf.event("sheets.dropped")
         print(f"  [warning] Google Sheet copy queue full ({SHEETS_QUEUE_MAX}) — "
               f"{row[1]} {row[5]} {row[6]} is safe in bookings.db; the Sheet is missing that row.")
@@ -902,6 +936,53 @@ def _drain_sheets_at_exit():
 
 
 atexit.register(_drain_sheets_at_exit)
+
+
+def resume_sheet_outbox() -> dict:
+    """Re-send Sheet copies left over from a crash or a Google outage.
+
+    'pending' rows never reached Google, so they are queued again. A row
+    still 'sending' was cut off mid-append and may have landed: it becomes
+    'unconfirmed' and is NOT retried (append_row is not idempotent, and a
+    duplicate row reads as a double booking). Returns the counts.
+    """
+    if _sheets_target(quiet=True) is None:
+        return {"requeued": 0, "unconfirmed": 0}
+    conn = _bookings_db()
+    with _transaction(conn):
+        conn.execute("UPDATE sheet_outbox SET state='unconfirmed' WHERE state='sending'")
+        pending = conn.execute("SELECT id, row FROM sheet_outbox WHERE state='pending' "
+                               "ORDER BY id").fetchall()
+        unconfirmed = conn.execute("SELECT COUNT(*) FROM sheet_outbox "
+                                   "WHERE state='unconfirmed'").fetchone()[0]
+    requeued = sum(_sheets_queue.put((r["id"], json.loads(r["row"]))) for r in pending)
+    return {"requeued": requeued, "unconfirmed": unconfirmed}
+
+
+def unconfirmed_sheet_copies() -> list[dict]:
+    """Copies a human must check in the Sheet (business, date, time; no PII)."""
+    conn = _bookings_db()
+    rows = conn.execute("SELECT id, row, queued FROM sheet_outbox WHERE state='unconfirmed' "
+                        "ORDER BY id").fetchall()
+    out = []
+    for r in rows:
+        row = json.loads(r["row"])
+        out.append({"id": r["id"], "client_id": row[1], "date": row[5], "time": row[6],
+                    "status": row[7] if len(row) > 7 else "", "queued": r["queued"]})
+    return out
+
+
+def clear_unconfirmed_sheet_copy(outbox_id: int, resend: bool) -> bool:
+    """After checking the Sheet by hand: resend the row, or mark it present."""
+    conn = _bookings_db()
+    with _transaction(conn):
+        if resend:
+            cur = conn.execute("UPDATE sheet_outbox SET state='pending' "
+                               "WHERE id=? AND state='unconfirmed'", (outbox_id,))
+        else:
+            cur = conn.execute("DELETE FROM sheet_outbox WHERE id=? AND state='unconfirmed'",
+                               (outbox_id,))
+    return cur.rowcount == 1
 
 
 def sheets_usable() -> bool:
@@ -1660,7 +1741,8 @@ def delete_customer(phone: str, client_id: str | None = None, dry_run: bool = Fa
         raise ValueError("Give the full 10-digit number.")
     mine = (lambda cid: True) if client_id is None else (lambda cid: cid == client_id)
     counts = {"bookings_anonymised": 0, "future_bookings_cancelled": 0, "leads": 0,
-              "lead_followups": 0, "calls": 0, "callbacks": 0, "notifications": 0}
+              "lead_followups": 0, "calls": 0, "callbacks": 0, "notifications": 0,
+              "sheet_copies": 0}
 
     conn = _bookings_db()
     rows = [r for r in conn.execute("SELECT id, client_id, phone, date, status FROM bookings").fetchall()
@@ -1673,6 +1755,10 @@ def delete_customer(phone: str, client_id: str | None = None, dry_run: bool = Fa
     cbs = [r for r in conn.execute("SELECT id, client_id, phone10 FROM callbacks").fetchall()
            if mine(r["client_id"]) and r["phone10"] == p10]
     counts["lead_followups"], counts["callbacks"] = len(follow), len(cbs)
+    # Sheet copies still waiting to go out hold a name and number too.
+    unsent = [r["id"] for r in conn.execute("SELECT id, row FROM sheet_outbox").fetchall()
+              if (lambda row: mine(row[1]) and _phone10(row[3]) == p10)(json.loads(r["row"]))]
+    counts["sheet_copies"] = len(unsent)
     leads = [r for r in (_read_csv(LEADS_CSV) if LEADS_CSV.exists() else [])
              if mine(r.get("client_id")) and _phone10(r.get("phone")) == p10]
     counts["leads"] = len(leads)
@@ -1699,6 +1785,8 @@ def delete_customer(phone: str, client_id: str | None = None, dry_run: bool = Fa
                          (r["client_id"], r["lead_ts"], r["phone"]))
         for r in cbs:
             conn.execute("DELETE FROM callbacks WHERE id=?", (r["id"],))
+        for outbox_id in unsent:
+            conn.execute("DELETE FROM sheet_outbox WHERE id=?", (outbox_id,))
     _invalidate(BOOKINGS_DB)
     _rewrite_leads(lambda r: not (mine(r.get("client_id")) and _phone10(r.get("phone")) == p10))
     for path, trace in calls:
@@ -1771,6 +1859,11 @@ def main(argv=None) -> int:
     forget.add_argument("phone")
     forget.add_argument("--client", help="only this business (default: all)")
     forget.add_argument("--apply", action="store_true", help="actually delete (default: show counts only)")
+    sync = sub.add_parser("sync-sheet", help="send Sheet copies left over from a crash or outage")
+    sync.add_argument("--present", type=int, metavar="ID",
+                      help="an unconfirmed copy you found in the Sheet: forget it")
+    sync.add_argument("--resend", type=int, metavar="ID",
+                      help="an unconfirmed copy missing from the Sheet: send it again")
     args = parser.parse_args(argv)
     try:
         if args.cmd == "export-csv":
@@ -1791,6 +1884,18 @@ def main(argv=None) -> int:
             print(("Deleted" if args.apply else "Would delete (add --apply to do it)") + f": {counts}")
             if args.apply and _sheet_configured():
                 print("Bookings are also copied to your Google Sheet: delete that person's rows there by hand.")
+        elif args.cmd == "sync-sheet":
+            for outbox_id, resend in ((args.present, False), (args.resend, True)):
+                if outbox_id is not None and not clear_unconfirmed_sheet_copy(outbox_id, resend):
+                    raise ValueError(f"no unconfirmed copy with id {outbox_id}")
+            if _sheets_target() is None:
+                raise RuntimeError("No Google Sheet configured (SHEET_ID + credentials).")
+            counts = resume_sheet_outbox()
+            left = _sheets_queue.drain(60)
+            print(f"Sent {counts['requeued'] - left} copy(ies); {left} still waiting.")
+            for c in unconfirmed_sheet_copies():
+                print(f"  check the Sheet: id {c['id']}  {c['client_id']} {c['date']} {c['time']} "
+                      f"{c['status']}  -> --present {c['id']} if it is there, --resend {c['id']} if not")
     except (RuntimeError, FileExistsError, OSError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1

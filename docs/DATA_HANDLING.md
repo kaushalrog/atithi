@@ -38,6 +38,7 @@ Everything lives on the server that runs Atithi, except where noted.
 | SMS log (sent or dry-run) | `notifications.jsonl` | Number, message text | **30 days** | Deleted |
 | Performance log (optional) | `VOXAGENT_PERF_LOG` | **None**: allowlisted labels and a random id only | n/a | n/a |
 | **Call audio** | **Not stored by Atithi.** Calls are transcribed; Twilio call recording is not switched on. | n/a | n/a | n/a |
+| Sheet copies not yet confirmed by Google (only when a Sheet is set up) | `bookings.db` `sheet_outbox` | Name, number | Until Google confirms the copy (usually seconds) | Deleted; also removed by `delete-customer` |
 | Copy of each booking in Google Sheets (optional) | The business's own Sheet | Name, number | Not managed by Atithi | Delete by hand in the Sheet |
 | Backups of the bookings database | `bookings.db.bak-*` (made by `export-csv --force` and imports) | Name, number | **Not purged automatically** | Delete old backups by hand; never copy them off the server |
 | Files you export | Wherever `python storage.py export-csv` or the portal's CSV export saved them | Name, number | **Not managed by Atithi** | Your responsibility once downloaded |
