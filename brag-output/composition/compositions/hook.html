@@ -1,0 +1,39 @@
+<template>
+  <style>
+    @font-face { font-family: "Instrument Serif"; src: url("assets/fonts/instrument-serif-latin-400-normal.woff2") format("woff2"); font-weight: 400; }
+    #root { position: absolute; inset: 0; }
+    #hook-line {
+      position: absolute; left: 0; right: 0; top: 380px; text-align: center;
+      font-family: "Instrument Serif", serif; font-weight: 400; font-size: 104px; line-height: 1;
+      letter-spacing: -0.015em; color: #182a25;
+    }
+    #hook-line .w { display: inline-block; margin: 0 0.12em; }
+    #hook-wave { position: absolute; left: 610px; top: 560px; width: 700px; height: 105px; }
+    #hook-wave path { fill: none; stroke: #176f63; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <div id="root" data-composition-id="hook" data-width="1920" data-height="1080">
+    <h1 id="hook-line" class="clip" data-start="0" data-duration="3.2">
+      <span class="w" id="hw1">A</span><span class="w" id="hw2">call</span><span class="w" id="hw3">isn't</span><span class="w" id="hw4">a</span><span class="w" id="hw5">booking.</span>
+    </h1>
+    <!-- The Welcome Signal's voice wave (site/src/components/Signal.tsx), as the bridge into the reveal. -->
+    <svg id="hook-wave" class="clip" data-start="0" data-duration="3.2" viewBox="0 0 640 96" aria-hidden="true">
+      <path id="hook-wave-path" pathLength="1"
+        d="M2 64 H40 q6 -8 12 0 q6 10 12 0 q6 -22 12 0 q6 26 12 0 q6 -40 12 0 q6 36 12 0 q6 -28 12 0 q6 20 12 0 q6 -12 12 0 q6 8 12 0 q6 -4 12 0 q6 2 12 0 H638" />
+    </svg>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    // The wave draws in first, quietly, under the line.
+    tl.fromTo("#hook-wave-path", { strokeDasharray: 1, strokeDashoffset: 1 },
+      { strokeDashoffset: 0, duration: 1.4, ease: "power2.inOut" }, 0.02);
+    // Per word: blur 6px -> 0, opacity 0 -> 1, no translate (motion.md titles).
+    ["#hw1", "#hw2", "#hw3", "#hw4", "#hw5"].forEach((id, i) => {
+      tl.fromTo(id, { opacity: 0, filter: "blur(6px)" },
+        { opacity: 1, filter: "blur(0px)", duration: 0.16, ease: "power4.out" }, 0.04 + i * 0.08);
+    });
+    // Landed by ~0.8 s, dead still, then a clean blur-out exit.
+    tl.to("#hook-line", { opacity: 0, filter: "blur(8px)", duration: 0.22, ease: "power3.in" }, 2.95);
+    tl.to("#hook-wave", { opacity: 0, duration: 0.22, ease: "power2.inOut" }, 2.95);
+    window.__timelines["hook"] = tl;
+  </script>
+</template>

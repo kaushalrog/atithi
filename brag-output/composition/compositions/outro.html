@@ -1,0 +1,52 @@
+<template>
+  <style>
+    @font-face { font-family: "Instrument Serif"; src: url("assets/fonts/instrument-serif-latin-400-normal.woff2") format("woff2"); font-weight: 400; }
+    @font-face { font-family: "Instrument Sans"; src: url("assets/fonts/instrument-sans-latin-500-normal.woff2") format("woff2"); font-weight: 500; }
+    @font-face { font-family: "Instrument Sans"; src: url("assets/fonts/instrument-sans-latin-600-normal.woff2") format("woff2"); font-weight: 600; }
+    #root { position: absolute; inset: 0; }
+    #ou-signal { position: absolute; left: 460px; top: 430px; width: 1000px; height: 150px; }
+    #ou-signal path { fill: none; stroke: #176f63; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+    #ou-lockup { position: absolute; left: 0; right: 0; top: 330px; display: flex; flex-direction: column; align-items: center; }
+    #ou-brand { display: flex; align-items: center; gap: 34px; }
+    #ou-mark { width: 150px; height: 150px; }
+    #ou-name { font-family: "Instrument Sans", sans-serif; font-weight: 600; font-size: 128px; letter-spacing: -0.03em; color: #182a25; }
+    #ou-tag { margin-top: 46px; font-family: "Instrument Serif", serif; font-size: 64px; color: #33463f; }
+    #ou-small { margin-top: 40px; font-family: "Instrument Sans", sans-serif; font-weight: 500; font-size: 30px;
+                letter-spacing: 0.02em; color: #5a6a64; }
+  </style>
+  <div id="root" data-composition-id="outro" data-width="1920" data-height="1080">
+    <!-- The full Welcome Signal as one stroke: voice wave -> doorway -> line -> check (Signal.tsx WAVE+DOOR+CONFIRM). -->
+    <svg id="ou-signal" class="clip" data-start="0" data-duration="3.2" viewBox="0 0 640 96" aria-hidden="true">
+      <path id="ou-path" pathLength="1"
+        d="M2 64 H40 q6 -8 12 0 q6 10 12 0 q6 -22 12 0 q6 26 12 0 q6 -40 12 0 q6 36 12 0 q6 -28 12 0 q6 20 12 0 q6 -12 12 0 q6 8 12 0 q6 -4 12 0 q6 2 12 0 H300 V36 a28 28 0 0 1 56 0 V64 H540 l16 16 l36 -44" />
+    </svg>
+    <div id="ou-lockup" class="clip" data-start="0" data-duration="3.2">
+      <div id="ou-brand">
+        <svg id="ou-mark" viewBox="0 0 88 88" aria-hidden="true">
+          <rect width="88" height="88" rx="20" fill="#176f63" />
+          <g fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="34.5" y="18" width="19" height="34" rx="9.5" />
+            <path d="M25 43a19 19 0 0 0 38 0" />
+            <path d="M44 62v10M35 72h18" />
+          </g>
+        </svg>
+        <div id="ou-name">Atithi</div>
+      </div>
+      <p id="ou-tag">Every caller, welcomed.</p>
+      <p id="ou-small">Early access · atithi.support@gmail.com</p>
+    </div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    // The signal draws once, end to end: what was said becomes a confirmed booking.
+    tl.fromTo("#ou-path", { strokeDasharray: 1, strokeDashoffset: 1 }, { strokeDashoffset: 0, duration: 0.6, ease: "power2.out" }, 0.0);
+    // It resolves into the mark on a beat, early enough that the closing lines hold 2 s+. beat-locked: 22.52s (abs) = 0.72 local
+    tl.to("#ou-signal", { opacity: 0, filter: "blur(6px)", duration: 0.12, ease: "power3.in" }, 0.6);
+    tl.fromTo("#ou-mark", { opacity: 0, scale: 0.6 }, { opacity: 1, scale: 1, duration: 0.55, ease: "expo.out" }, 0.72);
+    tl.fromTo("#ou-name", { opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.2, ease: "power4.out" }, 0.76);
+    tl.fromTo("#ou-tag", { opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.2, ease: "power4.out" }, 0.82);
+    tl.fromTo("#ou-small", { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power2.out" }, 0.88);
+    // Then silence: the last frame holds dead still to the end (outro: product name, tagline, silence).
+    window.__timelines["outro"] = tl;
+  </script>
+</template>

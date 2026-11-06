@@ -1,0 +1,76 @@
+<template>
+  <style>
+    @font-face { font-family: "Instrument Serif"; src: url("assets/fonts/instrument-serif-latin-400-normal.woff2") format("woff2"); font-weight: 400; }
+    #root { position: absolute; inset: 0; }
+    .w { display: inline-block; margin-right: 0.22em; }
+    /* Phase A: the booking request in the chat */
+    #bk-copy { position: absolute; left: 150px; top: 420px; width: 640px;
+               font-family: "Instrument Serif", serif; font-size: 76px; line-height: 1.06; color: #182a25; letter-spacing: -0.01em; }
+    #bk-copy .acc { color: #176f63; }
+    #bk-card { position: absolute; left: 870px; top: 290px; width: 920px; padding: 20px; background: #fafaf9;
+               border: 2px solid #ddd8c8; border-radius: 26px; box-shadow: 0 40px 80px -48px rgba(24, 42, 37, 0.45); }
+    #bk-card img { display: block; width: 880px; }
+    #bk-chipwrap { position: relative; }
+    #bk-underline { position: absolute; left: 34px; top: 45px; width: 600px; height: 4px; border-radius: 2px;
+                    background: #176f63; transform-origin: 0 50%; }
+    /* Phase B: the record. Same positions as the owner scene, so the cut between them is seamless. */
+    #bk-tx { position: absolute; left: 262px; top: 290px; width: 1396px; padding: 18px; background: #f5f5f4;
+             border: 2px solid #ddd8c8; border-radius: 22px; box-shadow: 0 40px 80px -48px rgba(24, 42, 37, 0.4); }
+    #bk-tx img, #bk-row img { display: block; width: 1360px; }
+    #bk-row { position: absolute; left: 262px; top: 564px; width: 1396px; padding: 18px; background: #ffffff;
+              border: 2px solid #ddd8c8; border-radius: 22px; box-shadow: 0 40px 80px -48px rgba(24, 42, 37, 0.4); }
+    #bk-hl { position: absolute; left: 352px; top: 343px; width: 202px; height: 40px; border: 3px solid #176f63; border-radius: 10px; }
+    #bk-ring { position: absolute; left: 1346px; top: 639px; width: 122px; height: 37px; border: 3px solid #176f63; border-radius: 19px; }
+    #bk-line { position: absolute; left: 262px; top: 742px; width: 1396px; height: 3px; background: #176f63; border-radius: 2px; transform-origin: 0 50%; }
+    #bk-check { position: absolute; left: 1666px; top: 716px; width: 54px; height: 54px; }
+    #bk-check circle, #bk-check path { fill: none; stroke: #176f63; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <div id="root" data-composition-id="book" data-width="1920" data-height="1080">
+    <p id="bk-copy" class="clip" data-start="0" data-duration="5.4"><span class="w" id="bc1">Then</span><span class="w" id="bc2">it</span><span class="w" id="bc3">books,</span><span class="w acc" id="bc4">and</span><span class="w acc" id="bc5">saves.</span></p>
+    <div id="bk-card" class="clip" data-start="0" data-duration="5.6">
+      <img id="bk-ask" src="assets/screens/booked-bubble.png" alt="Customer: 10:30 works. My name is Ananya Rao, number 9000012345." />
+      <div id="bk-chipwrap">
+        <img id="bk-chip" src="assets/screens/booked-chip.png" alt="Booking request: Scaling &amp; polishing (teeth cleaning), 31 Oct at 10:30" />
+        <div id="bk-underline"></div>
+      </div>
+      <img id="bk-reply" src="assets/screens/booked-reply.png" alt="All set, Ananya! I have booked your teeth cleaning for tomorrow at 10:30 AM." />
+    </div>
+    <!-- The record: the transcript's tool result and the owner's bookings row (real portal captures). -->
+    <div id="bk-tx" class="clip" data-start="5" data-duration="2">
+      <img src="assets/screens/transcript-confirmed.png" alt="Booking request: Scaling &amp; polishing, 31 Oct at 10:30. Result: confirmed. All set, Ananya!" />
+    </div>
+    <div id="bk-hl" class="clip" data-start="5" data-duration="2"></div>
+    <div id="bk-row" class="clip" data-start="5" data-duration="2">
+      <img src="assets/screens/bookings-row.png" alt="Bookings: Ananya Rao, 9000012345, Scaling &amp; polishing (teeth cleaning), 2026-10-31 10:30, confirmed" />
+    </div>
+    <div id="bk-ring" class="clip" data-start="5" data-duration="2"></div>
+    <div id="bk-line" class="clip" data-start="5" data-duration="2"></div>
+    <svg id="bk-check" class="clip" data-start="5" data-duration="2" viewBox="0 0 30 30" aria-hidden="true">
+      <circle id="bk-check-c" cx="15" cy="15" r="13.5" pathLength="1" />
+      <path id="bk-check-p" d="M7 15.5 l5.5 5.5 L22.5 9" pathLength="1" />
+    </svg>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    // Phase A: the request, the booking action, the reply.
+    ["#bc1", "#bc2", "#bc3", "#bc4", "#bc5"].forEach((id, i) => tl.fromTo(id, { opacity: 0, filter: "blur(6px)" },
+      { opacity: 1, filter: "blur(0px)", duration: 0.15, ease: "power4.out" }, 0.1 + i * 0.08));
+    tl.fromTo("#bk-card", { opacity: 0, x: 70 }, { opacity: 1, x: 0, duration: 0.8, ease: "expo.out" }, 0.05);
+    tl.fromTo("#bk-ask", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.5, ease: "power4.out" }, 0.5);
+    tl.fromTo("#bk-chip", { opacity: 0 }, { opacity: 1, duration: 0.25, ease: "power2.out" }, 2.22);   // beat-locked: 14.02s (abs)
+    tl.fromTo("#bk-underline", { scaleX: 0 }, { scaleX: 1, duration: 0.5, ease: "power3.inOut" }, 2.3);
+    tl.fromTo("#bk-reply", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.55, ease: "power4.out" }, 2.95);
+    // Payoff, beat-locked: 17.02s (abs) = 5.22 local. The chat carries away; the record arrives.
+    tl.to("#bk-copy", { opacity: 0, filter: "blur(6px)", duration: 0.25, ease: "power3.in" }, 4.9);
+    tl.to("#bk-card", { opacity: 0, scale: 0.86, x: -120, filter: "blur(6px)", duration: 0.3, ease: "power3.in" }, 4.9);
+    tl.fromTo("#bk-tx", { opacity: 0, y: 26 }, { opacity: 1, y: 0, duration: 0.7, ease: "expo.out" }, 5.22);   // beat-locked: 17.02s
+    tl.fromTo("#bk-hl", { opacity: 0, scale: 1.12 }, { opacity: 1, scale: 1, duration: 0.4, ease: "expo.out" }, 5.5);
+    tl.fromTo("#bk-row", { opacity: 0, y: 26 }, { opacity: 1, y: 0, duration: 0.7, ease: "expo.out" }, 5.5);
+    // The signal: a straight line under the record that resolves into the check (site hero motif).
+    tl.fromTo("#bk-line", { scaleX: 0 }, { scaleX: 1, duration: 0.5, ease: "power2.inOut" }, 5.75);
+    tl.fromTo("#bk-check-c", { strokeDasharray: 1, strokeDashoffset: 1 }, { strokeDashoffset: 0, duration: 0.3, ease: "power2.out" }, 6.12);
+    tl.fromTo("#bk-check-p", { strokeDasharray: 1, strokeDashoffset: 1 }, { strokeDashoffset: 0, duration: 0.22, ease: "power2.out" }, 6.22);   // beat-locked: 18.02s
+    tl.fromTo("#bk-ring", { opacity: 0, scale: 1.15 }, { opacity: 1, scale: 1, duration: 0.35, ease: "expo.out" }, 6.22);
+    window.__timelines["book"] = tl;
+  </script>
+</template>

@@ -1,0 +1,45 @@
+<template>
+  <style>
+    @font-face { font-family: "Instrument Serif"; src: url("assets/fonts/instrument-serif-latin-400-normal.woff2") format("woff2"); font-weight: 400; }
+    #root { position: absolute; inset: 0; }
+    .w { display: inline-block; margin-right: 0.22em; }
+    #ow-title { position: absolute; left: 262px; top: 150px; width: 1500px;
+                font-family: "Instrument Serif", serif; font-size: 76px; line-height: 1.05; color: #182a25; letter-spacing: -0.01em; }
+    #ow-title .acc { color: #176f63; }
+    /* Same geometry as the end of the booking scene: the cut between them is seamless. */
+    #ow-tx { position: absolute; left: 262px; top: 290px; width: 1396px; padding: 18px; background: #f5f5f4;
+             border: 2px solid #ddd8c8; border-radius: 22px; box-shadow: 0 40px 80px -48px rgba(24, 42, 37, 0.4); }
+    #ow-row { position: absolute; left: 262px; top: 564px; width: 1396px; padding: 18px; background: #ffffff;
+              border: 2px solid #ddd8c8; border-radius: 22px; box-shadow: 0 40px 80px -48px rgba(24, 42, 37, 0.4); }
+    #ow-tx img, #ow-row img { display: block; width: 1360px; }
+    #ow-hl { position: absolute; left: 352px; top: 343px; width: 202px; height: 40px; border: 3px solid #176f63; border-radius: 10px; }
+    #ow-ring { position: absolute; left: 1346px; top: 639px; width: 122px; height: 37px; border: 3px solid #176f63; border-radius: 19px; }
+    #ow-line { position: absolute; left: 262px; top: 742px; width: 1396px; height: 3px; background: #176f63; border-radius: 2px; }
+    #ow-check { position: absolute; left: 1666px; top: 716px; width: 54px; height: 54px; }
+    #ow-check circle, #ow-check path { fill: none; stroke: #176f63; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+    #ow-stage { position: absolute; inset: 0; }
+  </style>
+  <div id="root" data-composition-id="owner" data-width="1920" data-height="1080">
+    <p id="ow-title" class="clip" data-start="0" data-duration="3"><span class="w" id="ot1">You</span><span class="w" id="ot2">see</span><span class="w" id="ot3">what</span><span class="w" id="ot4">it</span><span class="w" id="ot5">said,</span><span class="w" id="ot6">and</span><span class="w acc" id="ot7">what</span><span class="w acc" id="ot8">it</span><span class="w acc" id="ot9">saved.</span></p>
+    <div id="ow-stage" class="clip" data-start="0" data-duration="3">
+      <div id="ow-tx"><img src="assets/screens/transcript-confirmed.png" alt="Transcript: Booking request, Result: confirmed, All set, Ananya!" /></div>
+      <div id="ow-hl"></div>
+      <div id="ow-row"><img src="assets/screens/bookings-row.png" alt="Bookings: Ananya Rao, Scaling &amp; polishing, 2026-10-31 10:30, confirmed" /></div>
+      <div id="ow-ring"></div>
+      <div id="ow-line"></div>
+      <svg id="ow-check" viewBox="0 0 30 30" aria-hidden="true">
+        <circle cx="15" cy="15" r="13.5" />
+        <path d="M7 15.5 l5.5 5.5 L22.5 9" />
+      </svg>
+    </div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    // The record holds still; the line that names it arrives word by word above it.
+    ["#ot1", "#ot2", "#ot3", "#ot4", "#ot5", "#ot6", "#ot7", "#ot8", "#ot9"].forEach((id, i) =>
+      tl.fromTo(id, { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.15, ease: "power4.out" }, 0.1 + i * 0.07));
+    // Soft crossfade out into the outro (polished, ~0.6 s).
+    tl.to(["#ow-title", "#ow-stage"], { opacity: 0, duration: 0.35, ease: "power2.inOut" }, 2.62);
+    window.__timelines["owner"] = tl;
+  </script>
+</template>
