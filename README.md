@@ -8,6 +8,9 @@
 
 ### Watch the demo
 
+**[▶ The 25-second launch film](brag-output/brag.mp4)**: a customer asks for a slot, the receptionist checks the real calendar and books it, and the owner sees the transcript's "Result: confirmed" next to the saved booking (synthetic data; made with [brag](https://github.com/latent-spaces/brag), see `brag-output/README.md`).
+
+
 [![Atithi demo: a customer books, an unknown question goes to the owner's inbox, WhatsApp, and the promise check](demo/atithi-demo-poster.jpg)](demo/atithi-demo.mp4)
 
 **[▶ Watch the 3½-minute narrated demo](demo/atithi-demo.mp4)** (recorded on throwaway data with the live model): a customer asks prices and books a slot; a question the business never answered goes to the owner's Questions inbox instead of being made up; every "you're booked" is verified against the real records; the owner switches the greeting to Telugu; a booking is cancelled in one click; a WhatsApp message is answered from the live calendar; and the phone-line settings for talking to a person and missed-call callbacks.

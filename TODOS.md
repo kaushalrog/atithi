@@ -1,39 +1,5 @@
 # TODOS
 
-## Telephony
-
-## Security
-
-### Rate-limit credential endpoints
-
-**What:** Per-IP and per-account attempt limits on `/api/auth/login`, `/api/portal/login`, `/api/auth/reset` and the admin key header.
-
-**Why:** Business codes and reset codes carry only 24 bits of entropy, so they're guessable with enough unthrottled requests once the server is public (audit M9).
-
-**Context:** `server.py` `portal_login` / `auth_reset`; `auth.py` `create_reset` (`RS-` + 3 random bytes). A small in-memory sliding-window limiter is enough for a single-process deploy. Consider also lengthening the codes.
-
-**Effort:** S
-**Priority:** P2
-**Depends on:** None
-
-**Update 2026-10-19 (perf/audit /review):** also throttle `/api/auth/signup` and `/api/business`. Since perf/audit, test-call sessions are capped at 500 in total, and each business can hold 20. About 25 throwaway trial businesses could fill the global table, and every real business would then get 429 on its test widget for up to 2 hours (idle sessions expire after 2 h). The per-business cap no longer locks an owner out (their own oldest idle session is evicted), but the global cap still can.
-
-### Personal-data retention and redaction
-
-**What:** A retention window for call logs, leads and bookings, a per-business delete path, and phone numbers redacted in console logs.
-
-**Why:** Names, phone numbers and caller IDs are stored indefinitely in plain files and printed to the console (audit M11). Any real pilot needs a defined policy, and obligations under India's DPDP Act still need to be assessed.
-
-**Context:** `storage.py` (call logs, leads, bookings DB, and per-call traces in `calls/<client>/traces/`, which hold the caller's own booking/lead rows and must be covered by any delete path), `agent.py` booking/lead `print` lines, `telephony.py` caller-ID line in transcripts. The first step is a policy decision by Sai (how long, who can delete); the code follows from that.
-
-**Effort:** M
-**Priority:** P2
-**Depends on:** Retention policy decision by the owner.
-
-## Cost control
-
-## Telephony (pre-existing, found by perf/audit /review)
-
 ## Dashboard
 
 ### Change detection that doesn't rely on file timestamps
@@ -48,9 +14,18 @@
 **Priority:** P3
 **Depends on:** None
 
-## Metrics
-
 ## Completed
+
+### Rate-limit credential endpoints (2026-10-21)
+Wrong guesses are counted per (address, scope) in server.throttle /
+wrong_guess (ratelimit.py): 10 per 15 min, then 429. Business codes are 12
+characters, reset codes 128 bits, and a business code is read-only
+(2026-11-06). See CLAUDE.md "Access control".
+
+### Personal-data retention and redaction (2026-10-21)
+storage.RETENTION_DAYS enforced daily by the retention worker; `python
+storage.py purge` and `delete-customer <phone>`; console logs mask customers.
+Policy: docs/DATA_HANDLING.md.
 
 ### Test live_main.py's streaming wiring (2026-11-06)
 `live_main.pump_events(live, turn, playback)` is module-level and driven by a
