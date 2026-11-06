@@ -11,7 +11,7 @@ sentence, while half a second of extra latency goes unnoticed.
 Two things live here:
 
 1. **A provider registry.** edge-tts is free and needs no key, so it is always
-   available. Sarvam, ElevenLabs and Cartesia switch themselves on the moment
+   available. Gnani, Sarvam, ElevenLabs and Cartesia switch themselves on the moment
    their key appears in `.env` — no code change, no redeploy. Adding a
    provider means adding one small class below and nothing else.
 
@@ -41,15 +41,19 @@ import threading
 import edge_tts
 
 # Languages we route. The detector in this module decides which one a reply is.
-LANGUAGES = ("en", "hi", "te", "ta")
+LANGUAGES = ("en", "hi", "te", "ta", "kn", "ml")
 
 # Who we would rather use for each language, best first. edge-tts is last
 # because it is the free fallback that is always there, not because it is bad.
+# Gnani leads: one voice speaks all six languages in the same timbre, so a
+# caller who switches from Telugu to English hears the same receptionist.
 PREFERENCE = {
-    "en": ("elevenlabs", "cartesia", "sarvam", "edge"),
-    "hi": ("sarvam", "elevenlabs", "cartesia", "edge"),
-    "te": ("sarvam", "elevenlabs", "cartesia", "edge"),
-    "ta": ("sarvam", "elevenlabs", "cartesia", "edge"),
+    "en": ("gnani", "elevenlabs", "cartesia", "sarvam", "edge"),
+    "hi": ("gnani", "sarvam", "elevenlabs", "cartesia", "edge"),
+    "te": ("gnani", "sarvam", "elevenlabs", "cartesia", "edge"),
+    "ta": ("gnani", "sarvam", "elevenlabs", "cartesia", "edge"),
+    "kn": ("gnani", "sarvam", "elevenlabs", "cartesia", "edge"),
+    "ml": ("gnani", "sarvam", "elevenlabs", "cartesia", "edge"),
 }
 
 # Gemini Live's own voice, used when a call stays on native audio.
@@ -67,13 +71,14 @@ class VoiceError(Exception):
 def detect_language(text: str) -> str:
     """Pick a language by which script the reply is written in.
 
-    Cheap but effective: count characters in the Devanagari, Telugu and Tamil
+    Cheap but effective: count characters in the Devanagari, Telugu, Tamil,
+    Kannada and Malayalam
     Unicode ranges. A script wins only when it makes up a real share of the
     letters — one Hindi word inside an English sentence must NOT flip the whole
     reply to the Hindi voice. Tanglish/Hinglish is roman script, so it lands on
     the Indian-English voice, which reads it with an Indian accent anyway.
     """
-    counts = {"hi": 0, "te": 0, "ta": 0}
+    counts = {"hi": 0, "te": 0, "ta": 0, "kn": 0, "ml": 0}
     letters = 0
     for ch in text:
         if ch.isalpha():
@@ -85,6 +90,10 @@ def detect_language(text: str) -> str:
             counts["te"] += 1
         elif 0x0B80 <= code <= 0x0BFF:
             counts["ta"] += 1
+        elif 0x0C80 <= code <= 0x0CFF:
+            counts["kn"] += 1
+        elif 0x0D00 <= code <= 0x0D7F:
+            counts["ml"] += 1
     best = max(counts, key=counts.get)
     if counts[best] >= 3 and counts[best] >= 0.3 * max(letters, 1):
         return best
@@ -122,6 +131,8 @@ class EdgeProvider(Provider):
         "hi": "hi-IN-SwaraNeural",
         "te": "te-IN-ShrutiNeural",
         "ta": "ta-IN-PallaviNeural",
+        "kn": "kn-IN-SapnaNeural",
+        "ml": "ml-IN-SobhanaNeural",
     }
 
     def synthesize(self, text: str, voice: str) -> bytes:
@@ -159,13 +170,15 @@ class _HTTPProvider(Provider):
         raise NotImplementedError
 
     def synthesize(self, text: str, voice: str) -> bytes:
+        return self._post(self._body(text, voice))
+
+    def _post(self, body: dict) -> bytes:
         import base64
 
         import httpx
 
         try:
-            response = httpx.post(self.url, headers=self._headers(),
-                                  json=self._body(text, voice),
+            response = httpx.post(self.url, headers=self._headers(), json=body,
                                   timeout=SYNTH_TIMEOUT_S)
             response.raise_for_status()
             if self.audio_field is None:
@@ -270,6 +283,44 @@ class CartesiaProvider(_HTTPProvider):
                                   "sample_rate": 24000}}
 
 
+class GnaniProvider(_HTTPProvider):
+    """Gnani Vachana (Timbre) — Indian voices; one voice speaks all our languages.
+
+    Docs: https://docs.gnani.ai/api/TTS/tts-inference. POST JSON, key in the
+    X-API-Key-ID header, and the response body is the audio itself (we ask
+    for mp3, like every other provider here). On `timbre-v3.0` each voice
+    speaks all ten supported languages, so one voice name covers our six.
+    """
+
+    name = "gnani"
+    env_key = "GNANI_API_KEY"
+    url = "https://api.vachana.ai/api/v1/tts/inference"
+    audio_field = None
+    _LOCALE = {"en": "en-IN", "hi": "hi-IN", "te": "te-IN", "ta": "ta-IN",
+               "kn": "kn-IN", "ml": "ml-IN"}
+
+    def __init__(self):
+        voice = os.getenv("GNANI_VOICE", "").strip() or "Shivani"
+        self.model = os.getenv("GNANI_MODEL", "").strip() or "timbre-v3.0"
+        self.voices = {lang: voice for lang in LANGUAGES}
+
+    def _headers(self) -> dict:
+        return {"X-API-Key-ID": os.getenv(self.env_key, ""),
+                "Content-Type": "application/json"}
+
+    def _body(self, text: str, voice: str, language: str = "") -> dict:
+        # "auto" lets Gnani detect the language from the script.
+        return {"text": text, "model": self.model, "voice": voice,
+                "language": self._LOCALE.get(language, "auto"),
+                "speed": 1.0,
+                "audio_config": {"container": "mp3", "sample_rate": 24000,
+                                 "bitrate": "64k"}}
+
+    def synthesize_in(self, text: str, voice: str, language: str) -> bytes:
+        """Gnani needs the language as well as the voice (one voice, many languages)."""
+        return self._post(self._body(text, voice, language))
+
+
 _REGISTRY: dict[str, Provider] = {}
 _registry_lock = threading.Lock()
 
@@ -278,7 +329,8 @@ def registry() -> dict[str, Provider]:
     """Provider instances, built once. Rebuilt when keys change (tests)."""
     with _registry_lock:
         if not _REGISTRY:
-            for cls in (EdgeProvider, SarvamProvider, ElevenLabsProvider, CartesiaProvider):
+            for cls in (EdgeProvider, GnaniProvider, SarvamProvider,
+                        ElevenLabsProvider, CartesiaProvider):
                 instance = cls()
                 _REGISTRY[instance.name] = instance
         # The real dict, not a copy: callers swap a provider in (tests do),
@@ -384,7 +436,10 @@ def synthesize(text: str, config: dict | None = None,
         if not voice:
             continue
         try:
-            audio = provider.synthesize(text, voice)
+            if hasattr(provider, "synthesize_in"):    # providers that take the language
+                audio = provider.synthesize_in(text, voice, language)
+            else:
+                audio = provider.synthesize(text, voice)
             if not audio:
                 raise VoiceError(f"{name}: empty audio")
             used = dict(first, provider=name, voice=voice, fell_back=bool(tried))

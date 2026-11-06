@@ -190,7 +190,8 @@ _TOOL_NAMES = frozenset(t["name"] for t in TOOL_SCHEMAS)
 # Languages a business can serve. The first in a client's `languages:` list
 # is the one the receptionist greets in; it always follows the customer's
 # own language after that. (Voices for each are picked in tts.py.)
-LANGUAGES = {"en": "English", "hi": "Hindi", "te": "Telugu", "ta": "Tamil"}
+LANGUAGES = {"en": "English", "hi": "Hindi", "te": "Telugu", "ta": "Tamil",
+             "kn": "Kannada", "ml": "Malayalam"}
 
 
 def disclosure(config: dict, kind: str) -> str:

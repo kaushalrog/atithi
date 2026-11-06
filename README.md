@@ -245,8 +245,14 @@ The format is specified in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §3.
 ## Voices, cost and plans
 
 **Voices (`voices.py`).** edge-tts is free and always available, so the agent
-can speak without any key. Add `SARVAM_API_KEY`, `ELEVENLABS_API_KEY` or
-`CARTESIA_API_KEY` to `.env` and that provider switches on by itself. English
+can speak without any key. Add `GNANI_API_KEY`, `SARVAM_API_KEY`,
+`ELEVENLABS_API_KEY` or `CARTESIA_API_KEY` to `.env` and that provider switches
+on by itself. **Gnani** (Vachana, `timbre-v3.0`) is first choice: one voice
+speaks English, Hindi, Telugu, Tamil, Kannada and Malayalam, so a caller who
+switches language still hears the same receptionist. Checked live on
+2026-11-06 in all six languages; each sentence took 2.3–6.3 s to generate, so
+it speaks in the portal and push-to-talk, while a live phone call stays on
+Gemini's native audio. English
 stays on Gemini's native audio because it is already good and it is the
 fastest path; Telugu, Tamil and Hindi move to a dedicated Indian voice once
 one is configured, because a caller judges an accent in the first sentence and

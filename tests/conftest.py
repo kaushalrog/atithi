@@ -22,6 +22,24 @@ import scheduling  # noqa: E402
 import storage  # noqa: E402
 
 
+# storage.py loads .env on import, so a real key for a paid voice would be in
+# the environment here and any test that speaks would call the vendor. Tests
+# never touch the network or spend real credit: every paid key is removed.
+PAID_VOICE_KEYS = ("GNANI_API_KEY", "GNANI_VOICE", "GNANI_MODEL",
+                   "SARVAM_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID",
+                   "CARTESIA_API_KEY", "CARTESIA_VOICE_ID")
+
+
+@pytest.fixture(autouse=True)
+def no_paid_voice_keys(monkeypatch):
+    for key in PAID_VOICE_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    voices = sys.modules.get("voices")
+    if voices is not None:
+        voices.reset_registry()
+    yield
+
+
 @pytest.fixture
 def tmp_storage(tmp_path, monkeypatch):
     """Point every persistence path at a fresh temp folder."""

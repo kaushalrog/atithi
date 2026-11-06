@@ -76,8 +76,12 @@ AI receptionist for any Indian business that takes bookings (clinics, salons, re
   tts.py is now a thin shim over it). ONE shared genai client for the process —
   constructing it costs ~780 ms, so it is built at server startup, never
   per conversation.
-- Voice routing (voices.py): edge-tts is free and always available; Sarvam,
-  ElevenLabs and Cartesia switch on the moment their key is in .env. English
+- Voice routing (voices.py): edge-tts is free and always available; Gnani,
+  Sarvam, ElevenLabs and Cartesia switch on the moment their key is in .env.
+  Gnani (GNANI_API_KEY, Vachana timbre-v3.0, voice Shivani) leads every
+  language: one voice speaks en/hi/te/ta/kn/ml, verified live 2026-11-06 at
+  2.3-6.3 s per sentence, so it serves the portal and push-to-talk, not a live
+  call. Tests strip every paid key (conftest no_paid_voice_keys). English
   stays on Gemini native audio (fastest); Telugu/Tamil/Hindi prefer a real
   Indian voice once one is configured, because a caller judges an accent in
   one sentence and never notices half a second. A business overrides any of it

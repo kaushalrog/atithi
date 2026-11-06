@@ -27,6 +27,8 @@ def test_detects_the_script_a_reply_is_written_in():
     assert voices.detect_language("आपका अपॉइंटमेंट पक्का हो गया है।") == "hi"
     assert voices.detect_language("మీ అపాయింట్‌మెంట్ నిర్ధారించబడింది.") == "te"
     assert voices.detect_language("உங்கள் முன்பதிவு உறுதி செய்யப்பட்டது.") == "ta"
+    assert voices.detect_language("ನಿಮ್ಮ ಅಪಾಯಿಂಟ್ಮೆಂಟ್ ಖಚಿತವಾಗಿದೆ.") == "kn"
+    assert voices.detect_language("നിങ്ങളുടെ അപ്പോയിന്റ്മെന്റ് സ്ഥിരീകരിച്ചു.") == "ml"
 
 
 def test_tanglish_stays_on_the_indian_english_voice():
@@ -155,3 +157,70 @@ def test_every_provider_failing_raises_rather_than_returning_nothing(monkeypatch
     monkeypatch.setitem(voices.registry(), "edge", FakeProvider(fail=True))
     with pytest.raises(voices.VoiceError):
         voices.synthesize("Hello")
+
+
+# ---- Gnani (Vachana) -------------------------------------------------------------
+
+class _FakeResponse:
+    def __init__(self, content=b"ID3-fake-mp3"):
+        self.content = content
+
+    def raise_for_status(self):
+        pass
+
+
+def test_gnani_switches_on_with_its_key_and_leads_every_language(monkeypatch):
+    assert "gnani" not in voices.available_providers()
+    monkeypatch.setenv("GNANI_API_KEY", "vach_test")
+    voices.reset_registry()
+    assert "gnani" in voices.available_providers()
+    for language in voices.LANGUAGES:
+        assert voices.plan(language)["provider"] == "gnani"
+
+
+def test_gnani_request_matches_the_documented_api(monkeypatch):
+    """docs.gnani.ai/api/TTS/tts-inference: key in X-API-Key-ID, body is the audio."""
+    monkeypatch.setenv("GNANI_API_KEY", "vach_test")
+    voices.reset_registry()
+    sent = {}
+
+    def fake_post(url, headers, json, timeout):
+        sent.update(url=url, headers=headers, json=json)
+        return _FakeResponse()
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", fake_post)
+    audio, used = voices.synthesize("ನಾಳೆ ಬೆಳಿಗ್ಗೆ 10:30 ಕ್ಕೆ ಬುಕ್ ಮಾಡಲೇ?")
+
+    assert audio == b"ID3-fake-mp3" and used["provider"] == "gnani"
+    assert sent["url"] == "https://api.vachana.ai/api/v1/tts/inference"
+    assert sent["headers"]["X-API-Key-ID"] == "vach_test"
+    body = sent["json"]
+    assert body["language"] == "kn-IN"                 # detected from the script
+    assert body["model"] == "timbre-v3.0" and body["voice"] == "Shivani"
+    assert body["audio_config"]["container"] == "mp3"
+
+
+def test_gnani_voice_and_model_come_from_env(monkeypatch):
+    monkeypatch.setenv("GNANI_API_KEY", "vach_test")
+    monkeypatch.setenv("GNANI_VOICE", "Avinash")
+    monkeypatch.setenv("GNANI_MODEL", "timbre-v2.5")
+    voices.reset_registry()
+    gnani = voices.registry()["gnani"]
+    assert gnani.voice_for("ml") == "Avinash"
+    assert gnani._body("hi", "Avinash", "ml")["model"] == "timbre-v2.5"
+
+
+def test_a_gnani_outage_falls_back_to_edge(monkeypatch):
+    monkeypatch.setenv("GNANI_API_KEY", "vach_test")
+    voices.reset_registry()
+
+    def broken(*args, **kwargs):
+        raise ConnectionError("vachana down")
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", broken)
+    monkeypatch.setattr(voices.registry()["edge"], "synthesize", lambda text, voice: b"edge-mp3")
+    audio, used = voices.synthesize("మీ అపాయింట్‌మెంట్ నిర్ధారించబడింది.")
+    assert audio == b"edge-mp3"
+    assert used["provider"] == "edge" and used["fell_back"] is True

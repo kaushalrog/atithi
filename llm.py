@@ -228,7 +228,8 @@ class GeminiLLM:
         """
         prompt = (
             "You are a transcription engine. Transcribe the speech in this audio "
-            "exactly as spoken. It may be English, Telugu, Hindi, Tamil, or a "
+            "exactly as spoken. It may be English, Telugu, Hindi, Tamil, Kannada, "
+            "Malayalam, or a "
             "roman-script mix (Tanglish/Hinglish) — keep the speaker's own words, "
             "language and script. Output ONLY the transcript, no quotes, no "
             "commentary. If there is no clear speech, output exactly: [no speech]"
