@@ -52,6 +52,12 @@
 
 ## Completed
 
+### Test live_main.py's streaming wiring (2026-11-06)
+`live_main.pump_events(live, turn, playback)` is module-level and driven by a
+scripted Live session in tests/test_live_main.py: history order with a tool
+mid-turn, barge-in, and a turn cut off before turn_complete. sounddevice is
+imported inside run(), so the module loads without audio hardware.
+
 ### A durable outbox for the Google Sheet copy (2026-11-06)
 Each copy is written to `bookings.db` `sheet_outbox` before it is queued and
 deleted once Google confirms. Copies that never reached Google are resent at
@@ -132,16 +138,6 @@ the Twilio round trip, and gives the line back if the dial fails.
 **Depends on:** Founder sends the Assignment messages; Lane A landed (E1, E3 provide real traces).
 
 ## Deferred by /review of phase-3/lane-a (2026-10-19)
-
-### Test live_main.py's streaming wiring
-
-**What:** Move `live_main.pump_events` into a function that takes `(live, turn)` so it can be driven with `FakeLive`. Then test history order, barge-in, and that a turn cut off by Ctrl+C is flushed and logged.
-
-**Why:** Its old test moved to `agent.run_tool`, so nothing in `tests/` exercises the live mic channel. The shared `TurnRecorder` it uses is tested, but the wiring is not (review I9, skipped by the owner).
-
-**Effort:** S
-**Priority:** P3
-**Depends on:** None
 
 ### Lead snapshot re-reads leads.csv on a web test turn
 

@@ -25,8 +25,6 @@ import argparse
 import asyncio
 from datetime import datetime
 
-import sounddevice as sd
-
 import storage
 from agent import TOOL_SCHEMAS, ReceptionistAgent, TurnRecorder
 from llm import GeminiLive
@@ -37,7 +35,40 @@ SPEAKER_RATE = 24000   # what the Live API sends back
 MIC_CHUNK = 800        # 50 ms of mic audio per network packet
 
 
+async def pump_events(live, turn: TurnRecorder, playback: bytearray, say=print):
+    """Play the agent's voice, record each turn, run tools, honour barge-in.
+
+    A module-level function (not a closure inside run) so tests can drive it
+    with a fake Live session and no sound card.
+    """
+    async for event in live.events():
+        kind = event["type"]
+        if kind == "audio":
+            playback.extend(event["data"])
+        elif kind == "interrupted":
+            playback.clear()  # caller barged in — go silent immediately
+            turn.flush()      # ...and end the turn the agent was speaking in
+        elif kind == "user_text":
+            turn.user_text(event["text"])
+        elif kind == "agent_text":
+            turn.agent_text(event["text"])
+        elif kind == "tool_calls":
+            for call in event["calls"]:
+                say(f"  [tool] {call['name']}({call['args']})")
+            # Off the event loop, like the phone bridge: while the
+            # database answers, the mic and speaker keep streaming.
+            await live.send_tool_results(await asyncio.to_thread(turn.tool_calls, event["calls"]))
+        elif kind == "turn_complete":
+            user_line, agent_line = turn.flush()
+            if user_line:
+                say(f"You said: {user_line}")
+            if agent_line:
+                say(f"Agent:    {agent_line}\n")
+
+
 async def run(client_id: str, half_duplex: bool):
+    import sounddevice as sd   # here, not at the top: needs audio hardware libraries
+
     agent = ReceptionistAgent(client_id)
     started = datetime.now()
     live = GeminiLive()
@@ -70,31 +101,6 @@ async def run(client_id: str, half_duplex: bool):
     # to history between the caller's words and the agent's reply.
     turn = TurnRecorder(agent)
 
-    async def pump_events():
-        async for event in live.events():
-            kind = event["type"]
-            if kind == "audio":
-                playback.extend(event["data"])
-            elif kind == "interrupted":
-                playback.clear()  # caller barged in — go silent immediately
-                turn.flush()      # ...and end the turn the agent was speaking in
-            elif kind == "user_text":
-                turn.user_text(event["text"])
-            elif kind == "agent_text":
-                turn.agent_text(event["text"])
-            elif kind == "tool_calls":
-                for call in event["calls"]:
-                    print(f"  [tool] {call['name']}({call['args']})")
-                # Off the event loop, like the phone bridge: while the
-                # database answers, the mic and speaker keep streaming.
-                await live.send_tool_results(await asyncio.to_thread(turn.tool_calls, event["calls"]))
-            elif kind == "turn_complete":
-                user_line, agent_line = turn.flush()
-                if user_line:
-                    print(f"You said: {user_line}")
-                if agent_line:
-                    print(f"Agent:    {agent_line}\n")
-
     business = agent.config["business_name"]
     mode = "half-duplex (mic muted while agent speaks)" if half_duplex else "full-duplex (🎧 headphones!)"
     print(f"\n=== VoxAgent LIVE — receptionist of {business} ===")
@@ -107,7 +113,7 @@ async def run(client_id: str, half_duplex: bool):
         ), sd.RawOutputStream(
             samplerate=SPEAKER_RATE, channels=1, dtype="int16", callback=on_speaker,
         ):
-            await asyncio.gather(pump_mic(), pump_events())
+            await asyncio.gather(pump_mic(), pump_events(live, turn, playback))
     finally:
         turn.flush()  # a turn cut off by Ctrl+C still belongs in the record
         try:
