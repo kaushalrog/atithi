@@ -31,6 +31,13 @@ os.environ["VOXAGENT_ENV"] = "test"
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# The evals are a batch job on a free-tier key that allows 5 requests a
+# minute, and Google's 429 tells us to wait nearly a minute. Nobody is waiting
+# on these, so let a retry sit out the full window instead of giving up like
+# an interactive caller would.
+os.environ.setdefault("LLM_MAX_RETRY_WAIT_S", "70")
+os.environ.setdefault("LLM_RETRY_BUDGET_S", "150")
+
 import scheduling  # noqa: E402
 import storage  # noqa: E402
 from agent import ReceptionistAgent  # noqa: E402

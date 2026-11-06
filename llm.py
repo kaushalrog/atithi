@@ -141,21 +141,48 @@ def _tools_to_gemini(tools):
 # raised, and /api/chat answers with the front-desk callback line instead.
 RETRY_BUDGET_S = 25
 
+
+def retry_budget() -> int:
+    """Total seconds we may spend retrying one request. Batch jobs raise it
+    with LLM_RETRY_BUDGET_S; interactive callers keep the short default."""
+    try:
+        return max(1, int(os.getenv("LLM_RETRY_BUDGET_S", str(RETRY_BUDGET_S))))
+    except ValueError:
+        return RETRY_BUDGET_S
+
 _RETRY_DELAY_RE = re.compile(r"'retryDelay':\s*'(\d+)")
+
+
+def max_retry_wait() -> int:
+    """Longest we will sit waiting on a rate limit.
+
+    Interactive by default: a customer on a chat or a phone line would rather
+    hear "the front desk will call you back" than silence for a minute, so we
+    give up at 25 s. Batch jobs (the evals) raise it, because there nobody is
+    waiting and finishing the run matters more than finishing it quickly.
+    """
+    try:
+        return max(1, int(os.getenv("LLM_MAX_RETRY_WAIT_S", "25")))
+    except ValueError:
+        return 25
 
 
 def _retry_wait(error, attempt: int) -> float:
     """How long to wait before retrying.
 
-    Google tells us exactly how long in the 429 body ('retryDelay': '5s').
-    Honouring it beats a fixed 20 s guess: a caller on a live phone line gets
-    the answer as soon as the window reopens instead of sitting in silence.
+    Google tells us exactly how long in the 429 body ('retryDelay': '58s').
+    Honouring it beats a fixed guess. Capping BELOW what Google asked for is
+    worse than useless — we retry while still rate-limited and burn an
+    attempt — so when the stated delay exceeds our ceiling we stop retrying
+    rather than pretend a short wait will help.
     """
     if error.code == 429:
         found = _RETRY_DELAY_RE.search(str(error))
         if found:
-            return min(int(found.group(1)) + 1, 25)
-        return 20
+            asked = int(found.group(1)) + 1
+            # 0 means "do not bother": the caller gives up immediately.
+            return asked if asked <= max_retry_wait() else 0
+        return min(20, max_retry_wait())
     return 2 * (attempt + 1)
 
 
@@ -276,9 +303,9 @@ class GeminiLLM:
                 # wait a moment and try again instead of crashing the conversation
                 # — but never past RETRY_BUDGET_S of waiting in total.
                 retriable = e.code in (429, 500, 503)
-                if retriable and attempt < attempts - 1:
-                    wait = _retry_wait(e, attempt)
-                    if time.monotonic() - started + wait <= RETRY_BUDGET_S:
+                wait = _retry_wait(e, attempt) if retriable else 0
+                if retriable and attempt < attempts - 1 and wait > 0:
+                    if time.monotonic() - started + wait <= retry_budget():
                         print(f"  [llm] API error {e.code}, retrying in {wait}s...")
                         perf.event("retry.model")
                         time.sleep(wait)
@@ -340,9 +367,13 @@ class GeminiLive:
     # Mic audio must be 16 kHz mono 16-bit PCM; the agent's voice comes back at 24 kHz.
     INPUT_MIME = "audio/pcm;rate=16000"
 
-    def __init__(self, model: str = LIVE_MODEL):
+    def __init__(self, model: str = LIVE_MODEL, voice: str | None = None):
         self.client = shared_client()   # ~780 ms saved on every phone call
         self.model = model
+        # Which prebuilt Gemini voice speaks on a native-audio call. It used to
+        # be hardcoded, so every business in every language shared one
+        # English-first voice. See voices.py for the per-business policy.
+        self.voice = voice or "Kore"
         self._cm = None
         self._session = None
 
@@ -353,7 +384,7 @@ class GeminiLive:
             tools=_tools_to_gemini(tools),
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Kore")
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.voice)
                 )
             ),
             # Ask the server to also send TEXT transcripts of both sides, so we

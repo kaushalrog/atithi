@@ -315,7 +315,9 @@ def sign(url, params=None):
 class SpyLive:
     created = []
 
-    def __init__(self):
+    def __init__(self, voice=None):
+        # Real GeminiLive takes the business's chosen voice (voices.py).
+        self.voice = voice
         SpyLive.created.append(self)
 
     async def connect(self, system_prompt, tools):
@@ -1018,6 +1020,7 @@ def test_a_failed_live_connect_leaves_nothing_to_close():
 
     live = llm_mod.GeminiLive.__new__(llm_mod.GeminiLive)
     live.model, live._cm, live._session = "fake", None, None
+    live.voice = "Kore"                      # set by __init__, bypassed here
     live.client = type("C", (), {"aio": type("A", (), {"live": type("L", (), {
         "connect": staticmethod(lambda **kw: Refuses())})()})()})()
 
@@ -1027,3 +1030,20 @@ def test_a_failed_live_connect_leaves_nothing_to_close():
         assert live._cm is None and live._session is None
         await live.close()                       # a no-op, not an error
     asyncio.run(main())
+
+
+def test_caller_memory_only_for_a_proven_number(tmp_storage, fake_llm, monkeypatch):
+    # Inbound caller ID can be faked: a spoofed number must not hear the real
+    # customer's name and appointments read back (memory.py + channel trust).
+    calls = []
+    monkeypatch.setattr(telephony.memory, "brief_for",
+                        lambda client_id, phone: calls.append(phone) or "RETURNING CALLER")
+    agent = ReceptionistAgent("demo_clinic", llm=fake_llm([]))
+
+    agent.set_channel("public")                    # inbound call
+    assert telephony.caller_briefing(agent, "demo_clinic") == ""
+    assert calls == []                             # not even looked up
+
+    agent.set_channel("verified", "9876543210")    # a call Atithi placed
+    assert telephony.caller_briefing(agent, "demo_clinic") == "RETURNING CALLER"
+    assert calls == ["9876543210"]

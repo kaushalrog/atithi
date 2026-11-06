@@ -72,9 +72,32 @@ AI receptionist for any Indian business that takes bookings (clinics, salons, re
   silently expired once and the agent lost the ability to book anything for
   two months; a rule cannot expire. Past times are never offered.
 - Providers (one-file swaps): llm.py (ALL Gemini code: chat, STT, Live),
-  tts.py (ALL edge-tts code). ONE shared genai client for the process —
+  voices.py (ALL text-to-speech: a provider registry + the routing policy;
+  tts.py is now a thin shim over it). ONE shared genai client for the process —
   constructing it costs ~780 ms, so it is built at server startup, never
   per conversation.
+- Voice routing (voices.py): edge-tts is free and always available; Sarvam,
+  ElevenLabs and Cartesia switch on the moment their key is in .env. English
+  stays on Gemini native audio (fastest); Telugu/Tamil/Hindi prefer a real
+  Indian voice once one is configured, because a caller judges an accent in
+  one sentence and never notices half a second. A business overrides any of it
+  under `voice:` in its YAML. Any provider failure falls back to edge-tts —
+  a bad key degrades the voice, it never silences the agent.
+  `python voice_lab.py` speaks one sentence through every configured provider
+  so a human picks by ear.
+- Money (costs.py + plans.py): costs.py prices one call from a rate card in
+  .env and writes a `cost` block onto every call record; plans.py turns that
+  into allowance, usage and an invoice (platform fee + included minutes +
+  overage). **Any COST_* rate missing from .env is a placeholder and is
+  flagged `assumed` everywhere it surfaces — never set a price off one.**
+  `python costs.py` and `python plans.py` report per business.
+- Caller memory (memory.py): on a call whose number is PROVEN (trust
+  "verified": a call Atithi placed), a short factual briefing (name, recent
+  call, upcoming appointment) is appended to the system prompt
+  (telephony.caller_briefing). Inbound calls get none: caller ID can be faked,
+  and a spoofed number must not hear a customer's name and appointments.
+  Summary only, never the old transcript; 120-day window; single business;
+  any failure returns nothing rather than blocking the call.
 - Persistence: storage.py (ALL disk I/O: bookings.db SQLite, leads.csv,
   calls/<client_id>/*.json, plus one trace per call in calls/<client_id>/traces/
   for the voxcheck checker — see docs/ARCHITECTURE.md). Nothing else touches

@@ -57,6 +57,7 @@ import yaml
 from dotenv import load_dotenv
 
 import perf
+import costs
 import proof
 import scheduling
 
@@ -1049,6 +1050,12 @@ def log_call_from_agent(agent, channel: str, started: dt.datetime,
         # against what the tools actually did (proof.py).
         "proof": proof.report(agent.history, getattr(agent, "caught", None)),
     }
+    try:
+        # What this conversation cost us to run (costs.py). A pricing decision
+        # needs the real number per call, not a guess at the end of the month.
+        record["cost"] = costs.cost_for(record)
+    except Exception as e:                     # costing must never lose a record
+        print(f"  [storage] cost not computed for {call_id}: {e}")
     if caller:
         # Who called is metadata, not something the customer said (audit M2).
         record["caller"] = caller

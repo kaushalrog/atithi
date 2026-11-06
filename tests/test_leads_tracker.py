@@ -7,6 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import server
+from conftest import access_key
+
 import storage
 from conftest import DEMO_CODE, SALON_CODE
 

@@ -43,6 +43,8 @@ Everything lives on the server that runs Atithi, except where noted.
 | Files you export | Wherever `python storage.py export-csv` or the portal's CSV export saved them | Name, number | **Not managed by Atithi** | Your responsibility once downloaded |
 | Twilio's own logs | Twilio's console: call records (numbers, times, duration), and WhatsApp/SMS message bodies | Number, message text | Twilio's retention, not Atithi's | Check and set it in the Twilio console before the pilot |
 
+**Caller memory** (`memory.py`) stores nothing new. On a call Atithi placed, it reads that business's own bookings and call records from the last 120 days to greet a returning customer by name. It is never used on inbound calls, because caller ID can be faked. It can only see what the periods above still keep.
+
 **Changing a period:** each one can be set with an environment variable, e.g. `VOXAGENT_RETAIN_CALLS_DAYS=60`. The keys are `CALLS`, `LEADS`, `BOOKING_CONTACT`, `QUESTIONS`, `CALLBACKS` and `NOTIFICATIONS`.
 
 **Enforcement:** the server applies the periods **once a day** in the background (`storage.start_retention_worker`).

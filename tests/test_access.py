@@ -66,7 +66,7 @@ def test_client_list_and_creation_are_admin_only(client):
 
 import auth  # noqa: E402
 from agent import ReceptionistAgent  # noqa: E402
-from conftest import FakeLLM  # noqa: E402
+from conftest import access_key, FakeLLM  # noqa: E402
 
 
 @pytest.fixture

@@ -104,3 +104,14 @@ def no_leftover_web_sessions():
     if server is not None:
         server.sessions.clear()
         server.CREDENTIAL_FAILURES.clear()
+
+
+def access_key(client_id: str = "demo_clinic") -> str:
+    """This business's current login code, read from its config.
+
+    Never hardcode a code in a test: a literal here is a literal in git, and
+    the committed codes turned out to be live credentials for a tenant that
+    owns a real phone number (security audit C1).
+    """
+    import storage
+    return (storage.read_client_config(client_id) or {})["access_key"]

@@ -1,0 +1,21 @@
+<!doctype html><meta charset="utf-8">
+<title>Atithi voice lab</title>
+<style>
+ body{font-family:system-ui,Segoe UI,sans-serif;margin:32px;max-width:900px;color:#16202e}
+ h1{margin:0 0 4px} .sub{color:#667; margin-bottom:24px}
+ table{border-collapse:collapse;width:100%}
+ th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #e6eaf0;vertical-align:middle}
+ th{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#667}
+ .lang{font-weight:700;text-transform:uppercase}
+ .prov{font-weight:600} .voice{color:#667;font-family:ui-monospace,monospace;font-size:13px}
+ .meta{color:#889;font-size:12px;margin-top:4px}
+ .fail{color:#b4232c;font-size:13px}
+ .missing{margin-top:28px;padding:14px 18px;background:#f6f8fb;border-radius:10px;font-size:14px}
+ .missing ul{margin:8px 0 0 18px} audio{height:34px}
+</style>
+<h1>Atithi voice lab</h1>
+<div class="sub">Same sentence, every configured provider. Generated 2026-10-25 10:46.
+Pick per language, then put it in the business YAML under <code>voice:</code>.</div>
+<table><tr><th>Lang</th><th>Provider</th><th>Voice</th><th>Listen</th></tr>
+<tr><td class="lang">te</td><td class="prov">edge</td><td class="voice">te-IN-ShrutiNeural</td><td><audio controls preload="none" src="te_edge_te-IN-ShrutiNeural.mp3"></audio><div class="meta">2680 ms · 101 KB</div></td></tr>
+</table><div class="missing"><strong>Not configured</strong> — add a key to <code>.env</code> and run again to compare these:<ul><li><code>SARVAM_API_KEY (sarvam)</code></li><li><code>ELEVENLABS_API_KEY (elevenlabs)</code></li><li><code>CARTESIA_API_KEY (cartesia)</code></li></ul></div>

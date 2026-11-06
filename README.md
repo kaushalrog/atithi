@@ -63,7 +63,7 @@ A second piece is now being built on top of it: **voxcheck**, a free offline che
 - **Books real appointments.** It checks live availability first, and the database allows only one confirmed booking per slot, so two simultaneous callers can never both get 10:30.
 - **Captures leads** when a caller is interested but doesn't book: name, phone and what they wanted, for the owner to follow up.
 - **Works on four channels** with the same brain: the terminal, push-to-talk voice, a real-time interruptible voice call (barge-in supported), and a browser test call in the portal. Real phone calls via Twilio are code-complete.
-- **Speaks Indian languages.** It understands and answers Telugu, Hindi and Tamil with matching neural voices via edge-tts (free, no key).
+- **Speaks Indian languages.** It understands and answers Telugu, Hindi and Tamil. In the portal and the push-to-talk channel these use matching Indian neural voices (edge-tts, free, no key). **On a real phone call the voice is currently a Gemini prebuilt voice, which is English-first** — the per-language routing in `voices.py` exists but is not yet wired into the phone path (`docs/STRATEGY.md` §3).
 - **Gives the owner a dashboard** with calls handled, minutes, bookings, leads, a 7-day chart, the full call history with transcripts, and bookings and leads tables.
 - **Records every call twice.** A human-readable call record feeds the dashboard, and a machine-readable trace feeds the upcoming checker.
 
@@ -241,6 +241,56 @@ Every conversation, on every channel, writes two files (both gitignored):
 The format is specified in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §3.
 
 ---
+
+## Voices, cost and plans
+
+**Voices (`voices.py`).** edge-tts is free and always available, so the agent
+can speak without any key. Add `SARVAM_API_KEY`, `ELEVENLABS_API_KEY` or
+`CARTESIA_API_KEY` to `.env` and that provider switches on by itself. English
+stays on Gemini's native audio because it is already good and it is the
+fastest path; Telugu, Tamil and Hindi move to a dedicated Indian voice once
+one is configured, because a caller judges an accent in the first sentence and
+never notices half a second. A business can override any of it:
+
+```yaml
+voice:
+  provider: sarvam     # force one provider
+  live: Puck           # the Gemini voice for native-audio calls
+  te: anushka          # a specific voice for one language
+```
+
+If a provider fails, synthesis falls back down the order to edge-tts. A wrong
+key degrades the voice; it never silences the agent.
+
+```bash
+python voice_lab.py              # same sentence, every provider, side by side
+python voice_lab.py --language te
+```
+
+**Cost (`costs.py`).** Every call record carries a `cost` block, priced from a
+rate card in `.env`. `python costs.py` reports cost-to-serve per business
+against what they pay.
+
+> Any `COST_*` rate you have not set is a **placeholder**, and every report
+> says `assumed`. Do not set a price off an assumed rate — measure one real
+> metered call first (`docs/STRATEGY.md` §5).
+
+**Plans (`plans.py`).** A platform fee with included minutes, then overage:
+Trial (free, 60 min), Clinic (₹1,499, 300 min, ₹4.50/min after) and Growth
+(₹3,999, 1,000 min, ₹4.00/min after). A "channel" is one simultaneous call,
+which is also the real engineering limit. Only billable channels count — an
+owner testing their own agent in the portal is never charged. A trial stops at
+its limit; a paying clinic bills overage instead of having its phone line cut
+off mid-day. `python plans.py` shows usage, invoice and margin.
+
+**Caller memory (`memory.py`).** On a call where the number is proven (a call
+Atithi placed: outbound or a missed-call callback), a short factual briefing
+(their name, whether they called recently, any appointment they already have)
+is added to the prompt, so a regular is greeted by name. Inbound calls get no
+memory: caller ID can be faked, and a faked number must not hear someone
+else's name and appointments. A
+summary only, never the old transcript; 120-day window; one business only; and
+any lookup failure returns nothing rather than blocking the call.
 
 ## How it works
 

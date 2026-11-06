@@ -71,7 +71,9 @@ from starlette.websockets import WebSocketState
 
 import billing
 import perf
+import memory
 import storage
+import voices
 from agent import TOOL_SCHEMAS, ReceptionistAgent, TurnRecorder, disclosure
 
 router = APIRouter()
@@ -119,6 +121,20 @@ def call_io_workers() -> int:
 async def _off_loop(fn, *args):
     """Run blocking fn(*args) on the call-I/O pool; the loop keeps serving calls."""
     return await asyncio.wrap_future(call_io_pool().submit(fn, *args))
+
+
+def caller_briefing(agent, client_id: str) -> str:
+    """What we remember about this caller, for the system prompt.
+
+    Only for a number the channel proved (agent.trust == "verified": a call
+    Atithi placed). Caller ID on an inbound call can be faked, and the memory
+    holds a name and upcoming appointments, so a spoofed number must not be
+    able to hear them read back.
+    """
+    if agent.trust != "verified":
+        return ""
+    return memory.brief_for(client_id, agent.verified_phone)
+
 
 def twilio_config() -> dict:
     return {
@@ -724,9 +740,14 @@ async def twilio_stream(ws: WebSocket):
                 "— when taking a booking or lead you may offer to use it, but always "
                 "confirm it with the caller first."
             )
+            # A known caller is greeted by name (memory.py), but only on a
+            # number the channel proved (caller_briefing).
+            agent.system_prompt += await _off_loop(caller_briefing, agent, client_id)
         perf.gauge("calls.active", _active_calls)
         perf.ensure_loop_monitor()
-        live = GeminiLive()
+        # The business picks its own Gemini voice (voices.py); it used to be
+        # one English-first voice for every business and every language.
+        live = GeminiLive(voice=voices.live_voice(agent.config))
         # Bounded: a handshake that hangs used to leave the caller in silence
         # (holding a line) for as long as the network let it.
         try:
