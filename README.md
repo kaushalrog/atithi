@@ -60,7 +60,7 @@ A second piece is now being built on top of it: **voxcheck**, a free offline che
 
 ---
 
-## What it does
+### What it does
 
 - **Answers customers** in the voice and knowledge of one specific business: services, prices, timings, address, FAQ, policies. All of it comes from a per-business YAML file, never from code.
 - **Books real appointments.** It checks live availability first, and the database allows only one confirmed booking per slot, so two simultaneous callers can never both get 10:30.
