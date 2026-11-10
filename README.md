@@ -72,7 +72,7 @@ A second piece is now being built on top of it: **voxcheck**, a free offline che
 
 ---
 
-## Quick start
+### Quick start
 
 You need **Python 3.11+** and a **Gemini API key** (free at [aistudio.google.com](https://aistudio.google.com/apikey)). Step-by-step key setup is in [SETUP.md](SETUP.md).
 
@@ -111,7 +111,7 @@ The demo business is **`demo_clinic`** (a dental clinic). A second sample, `laks
 
 ---
 
-## Configuration (`.env`)
+### Configuration (`.env`)
 
 Copy `.env.example` to `.env`. **Never commit `.env`**; it's gitignored. Only `GEMINI_API_KEY` is needed to start.
 
@@ -170,7 +170,7 @@ Open the portal (`python server.py`) and use **📞 Test your agent**. You can t
 
 ---
 
-## The business portal and admin console
+### The business portal and admin console
 
 ```bash
 python server.py                      # http://127.0.0.1:8765, opens your browser
